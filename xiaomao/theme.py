@@ -1,5 +1,4 @@
 """Native single-window workspace and live reply dashboard."""
-import ctypes
 import hashlib
 import hmac
 import json
@@ -9,7 +8,7 @@ import time
 import tkinter as tk
 from tkinter import ttk
 
-from PIL import Image, ImageOps, ImageTk
+from PIL import Image, ImageDraw, ImageOps, ImageTk
 
 from .workspace_ui import BG, FONT, GREEN, INK, LINE, MUTED, NAVY, PAPER, PEACH, button, card, glyph, label, logo, nav_button, styles
 
@@ -20,17 +19,187 @@ TITLES={**PAGES,'contacts':'选择会话'}
 MODES={'auto':'自动回复中','observe':'只观察','paused':'已暂停','stopped':'已停止','disconnected':'未连接助手'}
 
 
-def titlebar(root):
-    try:
-        root.update_idletasks()
-        user=ctypes.windll.user32
-        user.GetParent.argtypes=[ctypes.c_void_p];user.GetParent.restype=ctypes.c_void_p
-        hwnd=user.GetParent(root.winfo_id())
-        for attribute,color in ((35,0x00EBF2F5),(36,0x0044301B)):
-            value=ctypes.c_int(color)
-            ctypes.windll.dwmapi.DwmSetWindowAttribute(ctypes.c_void_p(hwnd),attribute,ctypes.byref(value),4)
-    except (AttributeError,OSError):
-        pass
+def _install_resize_edges(root, view, hwnd):
+    """Keep the normal system resize loop without painting a native frame at rest."""
+    import ctypes
+    from ctypes import wintypes as W
+    import win32api
+    import win32con as wc
+    import win32gui
+
+    class MinMaxInfo(ctypes.Structure):
+        _fields_=[(name,W.POINT) for name in ('reserved','max_size','max_position','min_track','max_track')]
+
+    proc_type=ctypes.WINFUNCTYPE(ctypes.c_ssize_t,W.HWND,W.UINT,W.WPARAM,W.LPARAM,ctypes.c_size_t,ctypes.c_size_t)
+    common=ctypes.WinDLL('comctl32',use_last_error=True)
+    common.SetWindowSubclass.argtypes=[W.HWND,proc_type,ctypes.c_size_t,ctypes.c_size_t]
+    common.RemoveWindowSubclass.argtypes=[W.HWND,proc_type,ctypes.c_size_t]
+    common.DefSubclassProc.argtypes=[W.HWND,W.UINT,W.WPARAM,W.LPARAM]
+    common.DefSubclassProc.restype=ctypes.c_ssize_t
+
+    @proc_type
+    def frame(window,msg,wparam,lparam,ident,_data):
+        if msg==wc.WM_NCDESTROY:
+            common.RemoveWindowSubclass(window,frame,ident)
+        elif msg==wc.WM_NCACTIVATE:
+            # Let Windows update activation without painting a caption over
+            # the Tk header. -1 is DefWindowProc's no-repaint sentinel.
+            return common.DefSubclassProc(window,msg,wparam,-1)
+        elif msg in (wc.WM_NCPAINT,0x00AE,0x00AF):
+            # WM_NCUAHDRAWCAPTION / WM_NCUAHDRAWFRAME may follow activation.
+            return 0
+        elif msg==wc.WM_GETMINMAXINFO:
+            result=common.DefSubclassProc(window,msg,wparam,lparam)
+            monitor=win32api.GetMonitorInfo(win32api.MonitorFromWindow(window,wc.MONITOR_DEFAULTTONEAREST))
+            left,top,right,bottom=monitor['Work']
+            mx,my,*_=monitor['Monitor']
+            bounds=MinMaxInfo.from_address(lparam)
+            bounds.max_size=W.POINT(right-left,bottom-top)
+            bounds.max_position=W.POINT(left-mx,top-my)
+            return result
+        elif msg==wc.WM_NCCALCSIZE:
+            return 0
+        elif msg==wc.WM_SYSCOMMAND and (wparam & 0xfff0)==wc.SC_SIZE:
+            # DefWindowProc requires WS_THICKFRAME to enter native sizing.
+            style=win32gui.GetWindowLong(window,wc.GWL_STYLE)
+            win32gui.SetWindowLong(window,wc.GWL_STYLE,style | wc.WS_THICKFRAME)
+            try:
+                return common.DefSubclassProc(window,msg,wparam,lparam)
+            finally:
+                if win32gui.IsWindow(window):
+                    current=win32gui.GetWindowLong(window,wc.GWL_STYLE)
+                    win32gui.SetWindowLong(window,wc.GWL_STYLE,current & ~wc.WS_THICKFRAME)
+                    win32gui.SetWindowPos(window,0,0,0,0,0,wc.SWP_FRAMECHANGED|wc.SWP_NOMOVE|
+                                          wc.SWP_NOSIZE|wc.SWP_NOZORDER|wc.SWP_NOACTIVATE)
+        return common.DefSubclassProc(window,msg,wparam,lparam)
+
+    root._frame_proc=frame
+    if not common.SetWindowSubclass(hwnd,frame,1,0):raise ctypes.WinError(ctypes.get_last_error())
+    def resize(event,edge):
+        if root.state()=='zoomed':return 'break'
+        if win32gui.GetCapture():win32gui.ReleaseCapture()
+        point=win32api.MAKELONG(event.x_root & 0xffff,event.y_root & 0xffff)
+        win32gui.PostMessage(hwnd,wc.WM_SYSCOMMAND,wc.SC_SIZE|edge,point)
+        return 'break'
+
+    # The upper and lower grips use the colour of the pane beneath them.
+    # All eight edges are mouse-accessible without reserving a row for them.
+    def grip(parent,edge,cursor,**placement):
+        widget=tk.Frame(parent,bg=parent.cget('bg'),cursor=cursor,takefocus=False)
+        widget.place(**placement)
+        widget.bind('<ButtonPress-1>',lambda e:resize(e,edge))
+        return widget
+
+    for pane in (view.rail,view.main):
+        grip(pane,3,'size_ns',relwidth=1,height=5,x=0,y=0)
+        grip(pane,6,'size_ns',relwidth=1,height=5,x=0,rely=1,anchor='sw')
+    for pane,side,anchor,edge,upper,lower in ((view.rail,0,'w',1,4,7),(view.main,1,'e',2,5,8)):
+        grip(pane,edge,'size_we',relheight=1,width=5,relx=side,rely=.5,anchor=anchor)
+        grip(pane,upper,'size_nw_se' if side==0 else 'size_ne_sw',width=7,height=7,
+             relx=side,y=0,anchor='n'+anchor)
+        grip(pane,lower,'size_ne_sw' if side==0 else 'size_nw_se',width=7,height=7,
+             relx=side,rely=1,anchor='s'+anchor)
+
+
+def titlebar(root, view):
+    """Keep the normal Windows frame and put its controls in the page header."""
+    if root.tk.call('tk', 'windowingsystem') != 'win32':
+        return
+    import win32api
+    import win32con as wc
+    import win32gui
+
+    root.update_idletasks()
+    hwnd = win32gui.GetParent(root.winfo_id())
+    _, _, width, height = win32gui.GetClientRect(hwnd)
+    style = win32gui.GetWindowLong(hwnd, wc.GWL_STYLE)
+    # Keep the resize border, system menu, taskbar identity and window title.
+    win32gui.SetWindowLong(hwnd, wc.GWL_STYLE, (style & ~(wc.WS_CAPTION|wc.WS_THICKFRAME))|wc.WS_POPUP)
+    _install_resize_edges(root, view, hwnd)
+    win32gui.SetWindowPos(hwnd, 0, 0, 0, 0, 0, wc.SWP_FRAMECHANGED | wc.SWP_NOMOVE |
+                         wc.SWP_NOSIZE | wc.SWP_NOZORDER | wc.SWP_NOACTIVATE)
+    left, top, right, bottom = win32gui.GetWindowRect(hwnd)
+    _, _, expanded_width, expanded_height = win32gui.GetClientRect(hwnd)
+    extra_width, extra_height = expanded_width-width, expanded_height-height
+    # Tk calculates its minimum outer size using the original caption metrics.
+    min_width, min_height = root.minsize()
+    root.minsize(max(1, min_width-extra_width), max(1, min_height-extra_height))
+    win32gui.SetWindowPos(hwnd, 0, 0, 0, right-left-extra_width, bottom-top-extra_height,
+                         wc.SWP_NOMOVE | wc.SWP_NOZORDER | wc.SWP_NOACTIVATE)
+
+    def command(action):
+        win32gui.PostMessage(hwnd, wc.WM_SYSCOMMAND, action, 0)
+        return 'break'
+
+    def toggle(_event=None):
+        return command(wc.SC_RESTORE if root.state() == 'zoomed' else wc.SC_MAXIMIZE)
+
+    controls = tk.Frame(view.header, bg=BG)
+    controls.grid(row=0, column=2, padx=(12, 0), sticky='e')
+    icons = {}
+    for name, paths in {
+        'minimize': [[(2, 8), (13, 8)]],
+        'maximize': [[(2, 2), (13, 2), (13, 13), (2, 13), (2, 2)]],
+        'restore': [[(5, 4), (5, 1), (14, 1), (14, 10), (12, 10)],
+                    [(1, 5), (10, 5), (10, 14), (1, 14), (1, 5)]],
+        'close': [[(2, 2), (13, 13)], [(13, 2), (2, 13)]],
+    }.items():
+        icon = Image.new('RGBA', (16, 16))
+        pen = ImageDraw.Draw(icon)
+        for path in paths:
+            pen.line(path, fill=INK)
+        icons[name] = ImageTk.PhotoImage(icon, master=root)
+    for name, caption, handler in (
+        ('minimize', '最小化', lambda: command(wc.SC_MINIMIZE)),
+        ('maximize', '最大化', toggle),
+        ('close', '关闭', lambda: command(wc.SC_CLOSE)),
+    ):
+        control = tk.Button(controls, name=name, text=caption, image=icons[name], command=handler,
+                            width=40, height=28, padx=0, pady=0, bd=0,
+                            relief='flat', bg=BG, fg=INK, takefocus=True, highlightcolor=MUTED,
+                            highlightbackground=BG,
+                            activebackground='#F1B7B2' if name=='close' else '#DCE3E5')
+        control.pack(side='left')
+        control.bind('<Return>', lambda e: e.widget.invoke())
+
+    def update_maximize_icon(event):
+        if event.widget is root:
+            zoomed = root.state() == 'zoomed'
+            controls.children['maximize'].configure(text='还原' if zoomed else '最大化',
+                                                    image=icons['restore' if zoomed else 'maximize'])
+
+    root.bind('<Configure>', update_maximize_icon, add='+')
+    root.bind('<Alt-F4>', lambda _: command(wc.SC_CLOSE), add='+')
+    # Hand dragging to Windows so snapping and dragging from maximized work.
+    # Wait for real movement so a double-click still reaches Tk as a double-click.
+    origin = None
+    def press(event):
+        nonlocal origin
+        origin = (event.x_root, event.y_root)
+
+    def drag(event):
+        nonlocal origin
+        if origin is None:
+            return
+        if (abs(event.x_root - origin[0]) < win32api.GetSystemMetrics(wc.SM_CXDRAG)
+                and abs(event.y_root - origin[1]) < win32api.GetSystemMetrics(wc.SM_CYDRAG)):
+            return
+        origin = None
+        if win32gui.GetCapture():
+            win32gui.ReleaseCapture()
+        point = win32api.MAKELONG(event.x_root & 0xffff, event.y_root & 0xffff)
+        win32gui.PostMessage(hwnd, wc.WM_NCLBUTTONDOWN, wc.HTCAPTION, point)
+
+    def menu(event):
+        win32gui.TrackPopupMenu(win32gui.GetSystemMenu(hwnd, False), wc.TPM_RIGHTBUTTON,
+                                event.x_root, event.y_root, 0, hwnd, None)
+        return 'break'
+
+    for area in view.drag_areas:
+        area.bind('<ButtonPress-1>', press, add='+')
+        area.bind('<B1-Motion>', drag, add='+')
+        area.bind('<Double-Button-1>', toggle, add='+')
+        area.bind('<Button-3>', menu, add='+')
 
 
 def recent_result(data,fallback):
@@ -146,16 +315,17 @@ class GlassView(tk.Frame):
         self._sidebar()
         main=self.main=tk.Frame(self,bg=BG,padx=20,pady=12);main.grid(row=0,column=1,sticky='nsew')
         main.grid_columnconfigure(0,weight=1);main.grid_rowconfigure(1,weight=1)
-        header=tk.Frame(main,bg=BG);header.grid(row=0,column=0,sticky='ew',pady=(0,12))
+        header=self.header=tk.Frame(main,bg=BG);header.grid(row=0,column=0,sticky='ew',pady=(0,10))
         header.grid_columnconfigure(0,weight=1)
         self.heading=tk.StringVar(self)
-        label(header,textvariable=self.heading,size=25,bold=True).grid(row=0,column=0,sticky='w')
+        heading=label(header,textvariable=self.heading,size=25,bold=True)
+        heading.grid(row=0,column=0,sticky='w')
+        self.drag_areas.extend((header,heading))
         self.status_chip=card(header,pad=5,bg='#E8EEE9',radius=9,border='#CADACF')
         self.status_chip.grid(row=0,column=1,sticky='e',padx=(5,0))
         self.header_status=label(self.status_chip,size=10,bold=True,color=GREEN)
         self.header_status.pack(padx=6)
-        self.subtitle=label(header,'小猫助手 · 微信智能陪伴与自动回复',10,color=MUTED)
-        self.subtitle.grid(row=1,column=0,columnspan=2,sticky='w',pady=(1,0))
+        self.drag_areas.extend((self.status_chip,self.header_status))
         self.body=tk.Frame(main,bg=BG);self.body.grid(row=1,column=0,sticky='nsew')
         self.body.grid_rowconfigure(0,weight=1);self.body.grid_columnconfigure(0,weight=1)
         self.footer=tk.StringVar(self)
@@ -174,14 +344,13 @@ class GlassView(tk.Frame):
     def _sidebar(self):
         rail=self.rail=tk.Frame(self,bg=NAVY,width=198);rail.grid(row=0,column=0,sticky='ns')
         rail.pack_propagate(False)
-        brand=tk.Frame(rail,bg=NAVY);brand.pack(fill='x',padx=12,pady=(21,15))
-        self.logo=logo(brand,52);self.small_logo=logo(brand,42)
+        brand=tk.Frame(rail,bg=NAVY);brand.pack(fill='x',padx=12,pady=(10,8))
+        self.logo=logo(brand,36)
         self.brand_logo=tk.Label(brand,image=self.logo,bg=NAVY)
         self.brand_logo.pack(side='left',padx=(0,7))
-        name=tk.Frame(brand,bg=NAVY);name.pack(side='left',fill='x',expand=True)
-        self.brand_title=label(name,'小猫助手',17,bold=True,color=PAPER);self.brand_title.pack(anchor='w')
-        self.brand_tag=label(name,'微信智能陪伴与回复',8,color='#DBE6ED');self.brand_tag.pack(anchor='w')
-        tk.Frame(rail,bg='#3B5265',height=1).pack(fill='x',padx=13,pady=(0,11))
+        self.brand_title=label(brand,'小猫助手',14,bold=True,color=PAPER);self.brand_title.pack(side='left')
+        self.drag_areas=[brand,self.brand_logo,self.brand_title]
+        tk.Frame(rail,bg='#3B5265',height=1).pack(fill='x',padx=13,pady=(0,7))
         self.nav={}
         for key,name in PAGES.items():
             control=nav_button(rail,name,lambda k=key:self.select(k),icon_name=key)
@@ -330,19 +499,14 @@ class GlassView(tk.Frame):
         stacked=(event.width-rail-36)/scale<635
         if (compact,stacked)==(self._compact,self._stacked):return
         self._compact,self._stacked=compact,stacked
-        self.brand_logo.configure(image=self.small_logo if compact else self.logo)
-        self.brand_title.configure(font=(FONT,15 if compact else 17,'bold'))
-        self.brand_tag.configure(font=(FONT,7 if compact else 8))
-        rail=max(rail,(42 if compact else 52)+34+max(self.brand_title.winfo_reqwidth(),self.brand_tag.winfo_reqwidth()))
+        rail=max(rail,36+34+self.brand_title.winfo_reqwidth())
         self.rail.configure(width=rail)
         self.main.configure(padx=13 if compact else 20)
         self.hero.configure(pady=8 if compact else 14)
         self.queue_lists.rowconfigure(3,weight=1 if compact else 2)
         self.hero.columnconfigure(0,minsize=162 if compact else 220)
-        if compact or stacked:self.hero_art.grid_remove();self.subtitle.grid_remove()
-        else:
-            self.hero_art.grid()
-            if self.page not in ('persona','companion','contacts'):self.subtitle.grid()
+        if compact or stacked:self.hero_art.grid_remove()
+        else:self.hero_art.grid()
         if stacked:
             self.hero_actions.grid_configure(row=2,column=0,columnspan=2,rowspan=1,padx=0,pady=(5,0))
             self.queue_card.grid_configure(padx=0)
@@ -455,8 +619,6 @@ class GlassView(tk.Frame):
         self.page=key;page=self.pages[key]
         page.grid(row=0,column=0,sticky='nsew')
         self.heading.set(TITLES[key]);self._paint_nav()
-        if self._compact or self._stacked or key in ('persona','companion','contacts'):self.subtitle.grid_remove()
-        else:self.subtitle.grid()
         if hasattr(page,'on_show'):page.on_show()
         if key=='assistant':self._request_layout()
         self.update_text()

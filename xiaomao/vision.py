@@ -38,7 +38,17 @@ def header_matches(label, binding):
     from .contacts import visual_name_key
     target=binding.target_group or group_name(binding.header_label)
     key=visual_name_key if binding.ocr_title else title_key
-    return bool(re.fullmatch(re.escape(key(target))+(r'\(\d+\)' if binding.target_kind=='group' else ''),key(label)))
+    suffix=r'\(\d+\)' if binding.target_kind=='group' else ''
+    if suffix and getattr(binding,'window_kind','main')=='detached' and binding.ocr_title:
+        suffix=r'(?:\(\d+\))?'  # directory identity and the exact native window caption corroborate this group
+    return bool(re.fullmatch(re.escape(key(target))+suffix,key(label)))
+
+
+def detached_title_matches(title,binding):
+    """Native window text retains characters that visual OCR can lose, including emoji."""
+    target=binding.target_group or group_name(binding.header_label)
+    suffix=r'(?:\(\d+\))?' if binding.target_kind=='group' else ''
+    return bool(target and re.fullmatch(re.escape(title_key(target))+suffix,title_key(title)))
 
 
 def read_header(ocr, image):
@@ -64,6 +74,26 @@ def read_header(ocr, image):
     padded=ImageOps.expand(image.crop((left,top,right,bottom)),border=30,fill=tuple(map(int,background)))
     return sorted([TextLine(line.text,(line.box[0]+left-30,line.box[1]+top-30,
         line.box[2]+left-30,line.box[3]+top-30),line.score) for line in ocr(padded)],key=lambda r:r.box[0])
+
+
+def calibration_send_matches(ocr,image,binding):
+    """Require the complete send label at the actual click point of the reviewed crop."""
+    crop=image.crop(binding.rect('send'))
+    if crop.width<4 or crop.height<4:return False
+    def matches(sample):
+        lines=ocr(sample)
+        if not lines or any(line.score<.9 for line in lines):return False
+        text=title_key(''.join(line.text for line in sorted(lines,key=lambda r:r.box[0]))).casefold()
+        if not re.fullmatch(r'(?:发送|send)(?:\((?:s|enter|ctrl\+enter)\))?',text):return False
+        x1=min(line.box[0] for line in lines);x2=max(line.box[2] for line in lines)
+        y1=min(line.box[1] for line in lines);y2=max(line.box[3] for line in lines)
+        pad=max(1,(y2-y1)*.30)
+        return x1-pad <= sample.width/2 <= x2+pad and y1-pad <= sample.height/2 <= y2+pad
+    if matches(crop):return True
+    # The disabled button is pale; resample its complete crop to retain short labels.
+    from PIL import ImageOps
+    enlarged=ImageOps.autocontrast(crop.convert('L')).convert('RGB').resize((crop.width*3,crop.height*3))
+    return matches(enlarged)
 
 
 def scrollbar_thumb(image,messages=()):
@@ -307,8 +337,12 @@ class Vision:
             return Frame("", safe=False, reason="群标题与已校准目标不一致")
         if any(line.score < .92 for line in header):
             return Frame("", safe=False, reason="群标题识别不确定")
-        message_crop = image.crop(calibration.rect("messages")) if not controls_only else None
-        lines = self.ocr(message_crop) if not controls_only else []
+        detached=getattr(calibration,'window_kind','main')=='detached'
+        if detached and not calibration_send_matches(self.ocr,image,calibration):
+            return Frame("", safe=False, reason="独立聊天窗口发送区域无法确认，请检查校准")
+        check_bottom=detached or not controls_only
+        message_crop = image.crop(calibration.rect("messages")) if check_bottom else None
+        lines = self.ocr(message_crop) if check_bottom else []
         draft_crop = image.crop(calibration.rect("input"))
         draft_lines = self.ocr(draft_crop)
         draft = " ".join(line.text for line in draft_lines)
@@ -332,11 +366,11 @@ class Vision:
         if caret_components==1 and not remaining_ink.any():
             draft = ""
         empty = not draft and not remaining_ink.any()
-        if controls_only:return Frame(expected,(),draft,True,'',True,empty,key,exact_draft_line(draft_lines))
+        if not check_bottom:return Frame(expected,(),draft,True,'',True,empty,key,exact_draft_line(draft_lines))
         messages = tuple(self._messages(message_crop, lines))
         thumb=scrollbar_thumb(message_crop,messages)
         at_bottom = calibration.bottom_confirmed and not navigation_lines(message_crop,lines,messages) and (thumb is None or thumb[3]>=message_crop.height-12)
-        return Frame(expected, messages, draft, True, "", at_bottom, empty, key,exact_draft_line(draft_lines))
+        return Frame(expected, () if controls_only else messages, draft, True, "", at_bottom, empty, key,exact_draft_line(draft_lines))
 
     @staticmethod
     def _messages(image: Image.Image, lines: list[TextLine]) -> list[Message]:

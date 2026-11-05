@@ -91,7 +91,7 @@ class SessionsPage(tk.Frame):
         label(self.saved, '已保存的会话', 16, bold=True).pack(anchor='w', pady=(0, 10))
         self.rows = tk.Frame(self.saved, bg=PAPER)
         self.rows.pack(fill='x', anchor='n')
-        self.add = button(self.saved, '添加会话', panel.choose_contact, primary=True,icon_name='add')
+        self.add = button(self.saved, '批量添加会话', panel.choose_contact, primary=True,icon_name='add')
         self.add.pack(side='bottom', anchor='w', pady=(12, 0))
         label(self.saved, '↑↓ 选行　Enter 设为主要　Delete 移除', 9, color=MUTED).pack(side='bottom', anchor='w', pady=(8, 0))
         label(self.rules, '回复规则', 16, bold=True).pack(anchor='w')
@@ -344,10 +344,15 @@ class SessionsPage(tk.Frame):
             tags=[role]
             if index==0:tags.append('主会话')
             if name not in cfg.saved_groups:tags.append('待保存')
+            elif cfg.binding_for(name):
+                tags.append('独立窗口' if cfg.binding_for(name).window_kind=='detached' else '主窗口')
             meta=label(row,' · '.join(tags),9,color=MUTED)
             meta.grid(row=1,column=1,sticky='w')
             actions=tk.Frame(row,bg=face)
             actions.grid(row=0,column=2,rowspan=2,sticky='e',padx=(5,0))
+            calibrate=button(actions,'校准',lambda n=name:self.panel.calibrate(n),compact=True)
+            calibrate.pack(side='left',padx=(0,4))
+            if self.busy or name not in cfg.saved_groups:calibrate.configure(state='disabled')
             if index:
                 promote=button(actions,'设为主要',lambda n=name:self.promote(n),compact=True)
                 promote.pack(side='left',padx=(0,4))
@@ -410,33 +415,42 @@ class SessionsPage(tk.Frame):
         self._render_rows()
 
     def add_contact(self, contact):
+        return self.add_contacts([contact])
+
+    def add_contacts(self, contacts,*,together=False):
         if self.busy:
-            return
+            return False
         self.refresh_scope()
-        if not contact.selectable or contact.kind not in ('group', 'private'):
-            self.note.set(contact.reason or '该会话不能开启自动回复')
-            return
         cfg = self.panel.settings
         account = cfg.conversation_targets.get(cfg.group, {}).get('account')
-        known = cfg.conversation_targets.get(contact.name)
-        previous = self.picked.get(contact.name)
-        if ((account and account != contact.account) or (known and known != contact.binding) or
-            (previous and previous.binding != contact.binding)):
-            self.note.set('会话身份或登录账号已改变，请刷新目录')
-            return
-        if any(n != contact.name and visual_name_key(n) == visual_name_key(contact.name) for n in self.names):
-            self.note.set('会话标题容易混淆，请先设置唯一备注名')
-            return
-        if contact.name not in self.names:
-            if len(self.names) >= 8:
-                self.note.set('最多保存 8 个会话，请先移除一个')
-                return
-            self.names.append(contact.name)
-        self.picked[contact.name] = contact
-        self.selected_name=contact.name
-        self.note.set('已加入会话草稿，保存后生效')
+        names,picked=list(self.names),dict(self.picked)
+        if not contacts:return False
+        for contact in contacts:
+            if not contact.selectable or contact.kind not in ('group','private'):
+                self.note.set(contact.reason or '该会话不能开启自动回复')
+                return False
+            account=account or contact.account
+            known=cfg.conversation_targets.get(contact.name)
+            previous=picked.get(contact.name)
+            if (account!=contact.account or known and known!=contact.binding or
+                    previous and previous.binding!=contact.binding):
+                self.note.set('会话身份或登录账号已改变，请刷新目录')
+                return False
+            if any(n!=contact.name and visual_name_key(n)==visual_name_key(contact.name) for n in names):
+                self.note.set('会话标题容易混淆，请先设置唯一备注名')
+                return False
+            if contact.name not in names:names.append(contact.name)
+            picked[contact.name]=contact
+        if len(names)>8:
+            self.note.set('最多同时保存 8 个会话，请减少所勾选的会话')
+            return False
+        self.names,self.picked=names,picked
+        self.selected_name=contacts[-1].name
+        if together and len(names)>1:self.monitor_all.set(True)
+        self.note.set(f'已加入草稿，点「保存并应用」后生效 · 共 {len(names)} 个会话')
         self._render_rows()
-        self._pick_row(contact.name)
+        self._pick_row(self.selected_name)
+        return True
 
     def _busy(self, busy):
         self.busy = busy
@@ -505,11 +519,13 @@ class DirectoryPage(tk.Frame):
         self.loading = False
         self.error = ''
         self.selected_key = None
+        self.checked={}
         self.hovered = None
         self.search_job = None
         self.query = tk.StringVar(self)
         self.kind = tk.StringVar(self, '全部')
         self.note = tk.StringVar(self)
+        self.batch_info=tk.StringVar(self)
         button(self, '返回会话', lambda: panel.view.select('sessions'), compact=True,icon_name='back').pack(anchor='w', pady=(0, 8))
         area = card(self, pad=12)
         area.pack(fill='both', expand=True)
@@ -538,12 +554,14 @@ class DirectoryPage(tk.Frame):
         filters.grid(row=0, column=1)
         self.note_label = label(area, textvariable=self.note, size=9, color=MUTED)
         self.note_label.pack(side='bottom', fill='x', pady=(5, 0))
+        self.batch_label=label(area,textvariable=self.batch_info,size=10,bold=True)
+        self.batch_label.pack(fill='x',pady=(0,6))
         self.actions = tk.Frame(area, bg=PAPER)
         self.actions.pack(side='bottom', anchor='e', pady=(7, 0))
         self.refresh_button = button(self.actions, '刷新', self.refresh, compact=True,icon_name='refresh')
         self.current_button = button(self.actions, '使用微信当前会话', self.use_current, compact=True)
-        self.add = button(self.actions, '加入监听列表', self.stage, compact=True,icon_name='add')
-        self.choose = button(self.actions, '设为主要并开启', self.select, primary=True, compact=True)
+        self.add = button(self.actions, '加入监听列表', self.stage, primary=True,compact=True,icon_name='add')
+        self.choose = button(self.actions, '仅开启此会话', self.select, compact=True)
         self.buttons = [self.refresh_button, self.current_button, self.add, self.choose]
         for item in self.buttons:
             item.configure(font=(FONT, 10, 'bold' if item is self.choose else 'normal'), pady=6)
@@ -557,7 +575,7 @@ class DirectoryPage(tk.Frame):
         style.map('Directory.Treeview', background=[('selected', '#E2EDF9')], foreground=[('selected', INK)])
         self.list = ttk.Treeview(frame, columns=('pick', 'kind', 'name', 'nick', 'status'), show='headings',
                                  selectmode='browse', height=3, style='Directory.Treeview')
-        for key, heading, width in (('pick', '', 28), ('kind', '类型', 65), ('name', '名称', 190),
+        for key, heading, width in (('pick', '多选', 48), ('kind', '类型', 65), ('name', '名称', 190),
                                     ('nick', '昵称', 160), ('status', '状态', 110)):
             self.list.heading(key, text=heading)
             self.list.column(key, anchor='center' if key == 'pick' else 'w', width=width, minwidth=24)
@@ -572,6 +590,8 @@ class DirectoryPage(tk.Frame):
         self.kind.trace_add('write', lambda *_: self.render())
         self.list.bind('<<TreeviewSelect>>', lambda _: self._selection())
         self.list.bind('<Return>', self._stage_key)
+        self.list.bind('<Button-1>',self._click_checkbox)
+        self.list.bind('<space>',self._space_checkbox)
         self.list.bind('<Motion>', self._hover_row)
         self.list.bind('<Leave>',lambda _:self._hover_row(None))
         self.bind('<Configure>', self._resize)
@@ -595,6 +615,34 @@ class DirectoryPage(tk.Frame):
     def _stage_key(self,event):
         self.stage()
         return 'break'
+
+    def _click_checkbox(self,event):
+        if self.list.identify_region(event.x,event.y)!='cell':return
+        iid=self.list.identify_row(event.y)
+        if not iid:return
+        if self.search_job:
+            self.render()
+            return 'break'
+        self.list.focus_set()
+        self.list.selection_set(iid);self.list.focus(iid)
+        self.toggle_checked(self.visible[int(iid)])
+        return 'break'
+
+    def _space_checkbox(self,_):
+        row=self._checked()
+        if row:self.toggle_checked(row)
+        return 'break'
+
+    def toggle_checked(self,row):
+        if not self.active or self.loading or not self._eligible(row):return
+        key=(row.account,row.id)
+        if key in self.checked:del self.checked[key]
+        else:
+            if len(self.checked)>=8:
+                self.note.set('最多同时监听 8 个会话')
+                return
+            self.checked[key]=row
+        self._selection()
 
     def _focus_search(self,event):
         self.entry.focus_set()
@@ -655,6 +703,7 @@ class DirectoryPage(tk.Frame):
         for idx, b in enumerate(self.buttons):
             b.grid(row=idx//cols, column=idx%cols, padx=(0, 4), pady=2, sticky='ew')
         self.note_label.configure(wraplength=max(140, available))
+        self.batch_label.configure(wraplength=max(140, available))
         for key, fraction in [('pick', .055), ('kind', .14), ('name', .28), ('nick', .27), ('status', .25)]:
             self.list.column(key, width=max(24, int((available-18)*fraction)))
 
@@ -672,6 +721,7 @@ class DirectoryPage(tk.Frame):
         self.title_counts.clear()
         self.scope = None
         self.selected_key=None
+        self.checked.clear()
         if self.search_job:
             self.after_cancel(self.search_job)
             self.search_job=None
@@ -691,6 +741,7 @@ class DirectoryPage(tk.Frame):
         scope=directory_scope(self.panel.settings)
         if self.scope!=scope:
             self.selected_key=None
+            self.checked.clear()
         self.scope=scope
         self.rows = []
         self.title_counts.clear()
@@ -718,6 +769,10 @@ class DirectoryPage(tk.Frame):
                 self.loading = False
                 self.rows = rows
                 self.title_counts = Counter(visual_name_key(row.name) for row in rows)
+                valid={(r.account,r.id):r for r in rows if self._eligible(r)}
+                if any(valid.get(k)!=r for k,r in self.checked.items()):
+                    self.checked.clear()
+                    self.error='联系人身份已更新，请重新勾选会话'
                 self.render()
 
         def failed(error):
@@ -746,7 +801,8 @@ class DirectoryPage(tk.Frame):
         for idx, row in enumerate(self.visible):
             allowed = self._eligible(row)
             status = '可监听' if allowed else '系统服务' if row.kind == 'service' else '无法选择'
-            self.list.insert('', 'end', iid=str(idx), values=('○', KINDS.get(row.kind, '其他'), row.name,
+            mark='☑' if (row.account,row.id) in self.checked else '☐' if allowed else '—'
+            self.list.insert('', 'end', iid=str(idx), values=(mark, KINDS.get(row.kind, '其他'), row.name,
                             row.nickname, status), tags=() if allowed else ('disabled',))
             if allowed and (row.account,row.id,row.kind,row.name)==self.selected_key:
                 self.list.selection_set(str(idx))
@@ -788,19 +844,20 @@ class DirectoryPage(tk.Frame):
             self.list.selection_remove(iid)
             iid = None
             self.selected_key=None
-        if self.marked != iid:
-            if self.marked and self.list.exists(self.marked):
-                self.list.set(self.marked, 'pick', '○')
-            if iid:
-                self.list.set(iid, 'pick', '◉')
-            self.marked = iid
-        for widget in (self.choose, self.add):
-            widget.configure(state='normal' if enabled else 'disabled')
+        if iid and row:
+            self.list.set(iid,'pick','☑' if (row.account,row.id) in self.checked else '☐')
+        count=len(self.checked)
+        self.batch_info.set('已勾选 '+str(count)+' / 8　'+ '、'.join(r.name for r in self.checked.values()) if count
+                            else '点击会话行可多选群聊和个人，搜索或切换分类会保留勾选')
+        self.add.configure(text=f'加入监听列表（{count}）' if count else '加入监听列表',
+                           state='normal' if self.active and not self.loading and (enabled or count) else 'disabled')
+        self.choose.configure(state='normal' if enabled and (not count or
+                              count==1 and (row.account,row.id) in self.checked) else 'disabled')
         if row and not enabled:
             self.note.set(row.reason or '该联系人身份存在歧义，不能设为回复对象')
         elif row:
             self.selected_key=(row.account,row.id,row.kind,row.name)
-            self.note.set(f'{row.name} · {KINDS[row.kind]}　｜　Enter 加入列表')
+            self.note.set(f'{row.name} · {KINDS[row.kind]}　｜　空格勾选，Enter 加入列表')
 
     def _checked(self):
         if getattr(self.panel, 'switch_busy', False):
@@ -817,14 +874,25 @@ class DirectoryPage(tk.Frame):
         return row
 
     def stage(self):
-        row = self._checked()
-        if row:
+        if not self.active or self.loading or getattr(self.panel,'switch_busy',False):return
+        if self.scope!=directory_scope(self.panel.settings):
+            self.refresh_scope()
+            return
+        row=self._checked()
+        contacts=list(self.checked.values()) or ([row] if row else [])
+        if not contacts:return
+        sessions=self.panel.view.pages.get('sessions')
+        together=bool(self.checked)
+        if sessions is None:
             self.panel.view.select('sessions')
-            self.panel.view.pages['sessions'].add_contact(row)
+            sessions=self.panel.view.pages['sessions']
+        if sessions.add_contacts(contacts,together=together):
+            self.panel.view.select('sessions')
+        else:self.note.set(sessions.note.get())
 
     def select(self):
         row = self._checked()
-        if row and not getattr(self.panel, 'switch_busy', False):
+        if row and (not self.checked or len(self.checked)==1 and (row.account,row.id) in self.checked) and not getattr(self.panel,'switch_busy',False):
             self.panel.select_contact(row)
 
     def use_current(self):

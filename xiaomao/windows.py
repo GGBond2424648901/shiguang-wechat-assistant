@@ -8,6 +8,7 @@ import threading
 import time
 import unicodedata
 import re
+import subprocess
 import weakref
 from .config import Calibration,group_name
 from .capture import capture_window,CaptureError
@@ -65,6 +66,8 @@ if os.name == "nt":
     U.IsWindow.argtypes = [W.HWND]
     U.IsWindowVisible.argtypes = [W.HWND]
     U.IsIconic.argtypes = [W.HWND]
+    U.ShowWindowAsync.argtypes = [W.HWND, ctypes.c_int]
+    U.SetForegroundWindow.argtypes = [W.HWND]
     U.GetWindowThreadProcessId.argtypes = [W.HWND, ctypes.POINTER(W.DWORD)]
     class GUITHREADINFO(ctypes.Structure):
         _fields_=[('size',W.DWORD),('flags',W.DWORD),('active',W.HWND),('focus',W.HWND),('capture',W.HWND),('menu',W.HWND),('move',W.HWND),('caret',W.HWND),('rect',W.RECT)]
@@ -106,7 +109,7 @@ if os.name == "nt":
     U.SendInput.restype = W.UINT
 
 
-def window_details(hwnd: int) -> dict:
+def _process_window_details(hwnd: int) -> dict:
     if os.name != "nt" or not U.IsWindow(hwnd):
         raise DesktopUnavailable("微信窗口不存在")
     pid = W.DWORD()
@@ -135,21 +138,194 @@ def foreground_details() -> dict:
     return window_details(U.GetForegroundWindow())
 
 
+_MAIN_TITLES = {'微信','wechat','weixin'}
+_UTILITY_TITLES = {
+    '登录','微信登录','log in','login','设置','偏好设置','settings','关于微信',
+    '图片','图片查看','图片查看器','图片和视频','视频','文件','文件管理','文件预览',
+    '聊天文件','聊天记录','合并的聊天记录','收藏','朋友圈','通讯录管理','搜索',
+    'image viewer','file preview','chat history','moments','favorites',
+}
+_ATTACHMENT_TITLE = re.compile(
+    r'\.(?:png|jpe?g|webp|bmp|gif|tiff?|heic|svg|mp[34]|mov|avi|mkv|wmv|webm|pdf|'
+    r'docx?|xlsx?|pptx?|wps|txt|csv|rtf|zip|rar|7z|exe)(?:\s*[-–—|].*)?$', re.I)
+
+
+def _calibration_candidate(hwnd,info):
+    """Inspect only public HWND attributes. Qt uses the same native class for both chat shells."""
+    import win32gui
+    cls=win32gui.GetClassName(hwnd)
+    if not re.fullmatch(r'Qt\d+QWindowIcon',cls):
+        return None
+    if win32gui.GetWindow(hwnd,4) or win32gui.GetWindowLong(hwnd,-20)&(0x80|0x08000000):
+        return None  # owned popup, WS_EX_TOOLWINDOW or WS_EX_NOACTIVATE
+    minimized=bool(win32gui.IsIconic(hwnd))
+    if not minimized and not win32gui.IsWindowVisible(hwnd):
+        return None
+    title=win32gui.GetWindowText(hwnd).strip()
+    if not title or title.casefold() in _UTILITY_TITLES or _ATTACHMENT_TITLE.search(title):
+        return None
+    # WeChat's independent, resizable chat frames have a thick frame and a
+    # minimize box. Fixed login dialogs, tooltips and attachment popups do not.
+    style=win32gui.GetWindowLong(hwnd,-16)
+    if style & 0x00060000 != 0x00060000:
+        return None
+    if minimized:
+        l,t,r,b=win32gui.GetWindowPlacement(hwnd)[4]
+        info=dict(info,width=r-l,height=b-t,rect=(l,t,r,b))
+    kind='main' if title.casefold() in _MAIN_TITLES else 'detached'
+    min_width,min_height=(600,450) if kind=='main' else (360,360)
+    if info['width']<min_width or info['height']<min_height:
+        return None
+    dpi=U.GetDpiForWindow(hwnd) if hasattr(U,'GetDpiForWindow') else 96
+    return dict(info,title=title,kind=kind,minimized=minimized,scale=(dpi or 96)/96)
+
+
+def window_details(hwnd: int) -> dict:
+    """Return native window identity, including chat kind when this is an eligible shell."""
+    info=_process_window_details(hwnd)
+    import win32gui
+    try:candidate=_calibration_candidate(hwnd,info)
+    except win32gui.error:raise DesktopUnavailable('微信窗口已关闭，请重新选择') from None
+    return candidate or dict(info,kind=None)
+
+
+def list_calibration_windows():
+    """List eligible windows in z order, without restoring or activating any of them."""
+    if os.name!='nt':raise DesktopUnavailable('仅支持 Windows')
+    import win32gui
+    if not input_desktop_available():raise DesktopUnavailable('桌面已锁定，请解锁后校准')
+    rows=[]
+    def visit(hwnd,_):
+        try:
+            if not re.fullmatch(r'Qt\d+QWindowIcon',win32gui.GetClassName(hwnd)):return
+            candidate=window_details(hwnd)
+        except (win32gui.error,DesktopUnavailable):return
+        if candidate.get('kind'):rows.append(candidate)
+    win32gui.EnumWindows(visit,None)
+    return rows
+
+
+def calibration_window_info(hwnd,pid):
+    """Recheck the specific selected window at each manual operation."""
+    if os.name!='nt':raise DesktopUnavailable('仅支持 Windows')
+    import win32gui
+    if not input_desktop_available():raise DesktopUnavailable('桌面已锁定，请解锁后校准')
+    try:info=window_details(hwnd)
+    except win32gui.error:info=None
+    if not info or not info.get('kind') or info['pid']!=pid:
+        raise DesktopUnavailable('所选微信窗口已关闭或身份改变，请刷新窗口列表')
+    return info
+
+
+def activate_calibration_window(hwnd,pid):
+    """User-requested calibration only. Never synthesize keys to bypass focus policy."""
+    original=calibration_window_info(hwnd,pid)
+    def recheck():
+        info=calibration_window_info(hwnd,pid)
+        if (info['kind'],info['title'])!=(original['kind'],original['title']):
+            raise DesktopUnavailable('所选微信窗口已改变，请重新选择')
+        return info
+    if original['minimized']:
+        if not U.ShowWindowAsync(hwnd,9):  # SW_RESTORE is requested only by this manual API.
+            raise DesktopUnavailable('微信窗口未能恢复，请手动还原后重试')
+        restore_error=None
+        for _ in range(20):
+            try:
+                if not recheck()['minimized']:break
+                restore_error=None
+            except DesktopUnavailable as error:
+                # IsIconic may clear before the normal-sized Qt surface exists.
+                # Do not request foreground until the selected identity matches again.
+                restore_error=error
+            time.sleep(.05)
+        else:
+            if restore_error:raise restore_error
+            raise DesktopUnavailable('微信窗口仍处于最小化状态，请手动还原后重试')
+    if U.GetForegroundWindow()!=hwnd:
+        U.SetForegroundWindow(hwnd)
+    for _ in range(15):
+        info=recheck()
+        if not info['minimized'] and U.GetForegroundWindow()==hwnd:return info
+        time.sleep(.04)
+    raise DesktopUnavailable('Windows 未允许微信切到前台，请手动点选该微信窗口后重试')
+
+
+def capture_calibration_window(hwnd,pid):
+    """Raw window-only snapshot without an existing calibration or a focus change."""
+    info=calibration_window_info(hwnd,pid)
+    if info['minimized']:raise DesktopUnavailable('所选微信窗口已最小化，请先唤起后截图')
+    try:image=capture_window(hwnd,info['width'],info['height'])
+    except (CaptureError,OSError):
+        raise DesktopUnavailable('微信窗口暂未绘制完整画面，请显示聊天后重新截图') from None
+    fresh=calibration_window_info(hwnd,pid)
+    if image.size!=(info['width'],info['height']) or any(
+            fresh[key]!=info[key] for key in ('kind','title','rect','width','height','minimized','scale')):
+        raise DesktopUnavailable('截图期间微信窗口发生变化，请重新截图')
+    return image,fresh
+
+
+def _wechat_executable_paths():
+    import psutil
+    import winreg
+    for process in psutil.process_iter(['name','exe']):
+        if (process.info['name'] or '').casefold()=='weixin.exe' and process.info['exe']:
+            yield Path(process.info['exe'])
+    for hive in (winreg.HKEY_CURRENT_USER,winreg.HKEY_LOCAL_MACHINE):
+        for view in (winreg.KEY_WOW64_64KEY,winreg.KEY_WOW64_32KEY):
+            for key,value in ((r'Software\Tencent\Weixin','InstallPath'),
+                              (r'Software\Microsoft\Windows\CurrentVersion\App Paths\Weixin.exe','')):
+                try:
+                    with winreg.OpenKey(hive,key,0,winreg.KEY_READ|view) as handle:
+                        raw,_=winreg.QueryValueEx(handle,value)
+                    path=Path(os.path.expandvars(raw.strip('"')))
+                except (OSError,AttributeError):continue
+                yield path/'Weixin.exe' if value else path
+
+
+def _signed_wechat_executable(path):
+    # Pass the file path as data. The Windows PowerShell script and executable
+    # are fixed, regardless of registry values or the install location.
+    powershell=Path(os.environ['SystemRoot'])/'System32/WindowsPowerShell/v1.0/powershell.exe'
+    script=(
+        "$sig=Get-AuthenticodeSignature -LiteralPath $env:XIAOMAO_CALIBRATION_EXE; "
+        "if ($sig.Status -ne 'Valid' -or !$sig.SignerCertificate) { exit 1 }; "
+        "$name=$sig.SignerCertificate.GetNameInfo('SimpleName',$false); "
+        "if ($name -ne 'Tencent Technology (Shenzhen) Company Limited') { exit 1 }; exit 0"
+    )
+    try:
+        result=subprocess.run([str(powershell),'-NoProfile','-NonInteractive','-Command',script],
+                              env={**os.environ,'PSMODULEPATH':str(powershell.parent/'Modules'),
+                                   'XIAOMAO_CALIBRATION_EXE':str(path)},
+                              stdin=subprocess.DEVNULL,stdout=subprocess.DEVNULL,stderr=subprocess.DEVNULL,
+                              creationflags=subprocess.CREATE_NO_WINDOW,timeout=8)
+        return result.returncode==0
+    except (OSError,subprocess.TimeoutExpired):return False
+
+
+def open_wechat_for_calibration():
+    """Open the installed signed WeChat client, leaving login to the operator."""
+    if os.name!='nt':raise DesktopUnavailable('仅支持 Windows')
+    seen=set()
+    for candidate in _wechat_executable_paths():
+        if not candidate.is_absolute():continue
+        try:path=candidate.resolve(strict=True)
+        except (OSError,RuntimeError):continue
+        if path in seen or path.name.casefold()!='weixin.exe' or not path.is_file():continue
+        seen.add(path)
+        if not _signed_wechat_executable(path):continue
+        try:subprocess.Popen([str(path)],cwd=str(path.parent),close_fds=True)
+        except OSError:raise DesktopUnavailable('微信客户端未能启动，请从开始菜单打开微信并登录') from None
+        return
+    raise DesktopUnavailable('未找到可核实腾讯签名的微信客户端，请从开始菜单打开微信，登录后刷新')
+
+
 def find_wechat_window(pid):
     """Read-only recovery of one main window in the already-bound process.
 
     Login dialogs, image viewers, other accounts/processes and ambiguous
     candidates are not eligible. Never activate a window during discovery.
     """
-    if os.name!='nt':raise DesktopUnavailable('仅支持 Windows')
-    import win32gui
-    candidates=[]
-    def visit(hwnd,_):
-        if win32gui.GetWindowText(hwnd)!='微信' or win32gui.GetWindow(hwnd,4):return
-        try:info=window_details(hwnd)
-        except DesktopUnavailable:return
-        if info['pid']==pid and info['width']>=600 and info['height']>=450:candidates.append(info)
-    win32gui.EnumWindows(visit,None)
+    candidates=[w for w in list_calibration_windows() if w['kind']=='main' and w['pid']==pid]
     if len(candidates)!=1:raise DesktopUnavailable('未能唯一找到原账号的微信主窗口，请打开已登录的微信后重试')
     return candidates[0]
 
@@ -175,13 +351,27 @@ class WindowsDesktop:
         self._sidebar_ocr=None
         self.navigation=navigation or NavigationActivity()
 
+    def _bound_details(self):
+        binding=self.calibration
+        if getattr(binding,'window_kind','main')!='detached':
+            info=window_details(binding.hwnd)
+            if info.get('kind','main')!='main':
+                raise DesktopUnavailable('绑定的微信主窗口已改变，请重新校准')
+            return info
+        info=calibration_window_info(binding.hwnd,binding.pid)
+        from .vision import detached_title_matches
+        if info['kind']!='detached' or not detached_title_matches(info['title'],binding):
+            raise DesktopUnavailable('绑定的独立聊天窗口标题已改变，请重新校准')
+        return info
+
     def check(self) -> dict:
         binding = self.calibration
         if not binding:
             raise DesktopUnavailable("尚未校准微信窗口")
         if self.cancelled.is_set():
             raise DesktopUnavailable("助手已暂停")
-        info = window_details(binding.hwnd)
+        _check_calibration_lease(binding.hwnd)
+        info = self._bound_details()
         if U.IsIconic(binding.hwnd) or not U.IsWindowVisible(binding.hwnd) or U.GetForegroundWindow() != binding.hwnd:
             raise DesktopTemporarilyHidden("微信目标群需要保持前台可见")
         if info["pid"] != binding.pid or info["width"] != binding.width or info["height"] != binding.height:
@@ -285,11 +475,13 @@ class WindowsDesktop:
         if not binding:raise DesktopUnavailable('尚未校准微信窗口')
         if self.cancelled.is_set():raise DesktopUnavailable('助手已暂停')
         if not input_desktop_available():raise DesktopTemporarilyHidden('桌面已锁定，等待解锁')
-        info=window_details(binding.hwnd)
+        info=self._bound_details()
         if info['pid']!=binding.pid:raise DesktopUnavailable('微信窗口已重建，请重新校准')
         if U.IsIconic(binding.hwnd):
             raise DesktopTemporarilyHidden('微信已最小化，等待微信回到前台')
         if info['width']!=binding.width or info['height']!=binding.height:
+            if getattr(binding,'manual_regions',False):
+                raise DesktopUnavailable('手动校准的微信窗口尺寸已改变，请重新校准')
             self._rebind_size(info)
         return info
 
@@ -305,7 +497,7 @@ class WindowsDesktop:
             try:image=capture_window(original.hwnd,info['width'],info['height'])
             except (CaptureError,OSError):
                 raise DesktopTemporarilyHidden('窗口布局正在变化，等待画面稳定后自动继续') from None
-            current=window_details(original.hwnd)
+            current=self._bound_details()
             if any(current[key]!=info[key] for key in ('pid','width','height','rect')):
                 raise DesktopTemporarilyHidden('窗口仍在调整，等待布局稳定后自动继续')
             detected=adapt_calibration(image,candidate,self._dpi_scale())
@@ -324,6 +516,7 @@ class WindowsDesktop:
         # check()/capture() keep strict geometry and focus guards.
         self._input_cookie=None
         if not self.calibration:raise DesktopUnavailable('尚未校准微信窗口')
+        _check_calibration_lease(self.calibration.hwnd)
         if not self.is_foreground():raise DesktopTemporarilyHidden('等待微信自然回到前台，不切换当前应用')
         self._background_binding()
         generation=self.input_generation()
@@ -355,6 +548,8 @@ class WindowsDesktop:
         return bool(U.SetCursorPos(dest.x,dest.y))
 
     def _find_target(self,image):
+        if getattr(self.calibration,'window_kind','main')=='detached':
+            raise DesktopUnavailable('独立聊天窗口没有会话列表')
         from .vision import LocalOCR,title_key
         from .contacts import visual_name_key
         key=visual_name_key if self.calibration.ocr_title else title_key
@@ -371,11 +566,13 @@ class WindowsDesktop:
         return region,found
 
     def validate_target(self,image):
-        if self.calibration.ocr_title:
+        detached=getattr(self.calibration,'window_kind','main')=='detached'
+        if detached or self.calibration.ocr_title:
             from .vision import LocalOCR,read_header,header_matches
             if self._sidebar_ocr is None:self._sidebar_ocr=LocalOCR()
             lines=read_header(self._sidebar_ocr,image.crop(self.calibration.rect('header')))
             if lines and all(r.score>=.92 for r in lines) and header_matches(''.join(r.text for r in lines),self.calibration):return
+            if detached:raise DesktopTemporarilyHidden('独立聊天窗口标题与所选会话不符，请显示绑定的聊天')
         _,found=self._find_target(image)
         if len(found)>1:raise DesktopUnavailable('最近列表存在同名目标群，无法唯一确认，请调整群名')
         if not found:raise DesktopTemporarilyHidden('微信已连接，但尚未定位所选群；正在等待清晰的群标题')
@@ -441,6 +638,7 @@ class WindowsDesktop:
         return True
 
     def select_target(self,idle_seconds=10):
+        if getattr(self.calibration,'window_kind','main')=='detached':return False
         if self.idle_for()<idle_seconds:return False
         idle_credit=self.idle_for()
         _,found=self._find_target(self.capture())
@@ -506,7 +704,14 @@ class WindowsDesktop:
         x, y = (x1 + x2)//2, (y1 + y2)//2
         if not U.SetCursorPos(info["rect"][0]+x, info["rect"][1]+y):
             raise DesktopUnavailable("无法定位输入位置")
-        self.check()
+        current=self.check()
+        if getattr(self.calibration,'manual_regions',False) or getattr(self.calibration,'window_kind','main')=='detached':
+            point=W.POINT(info['rect'][0]+x,info['rect'][1]+y)
+            if current['rect']!=info['rect'] or U.GetAncestor(U.WindowFromPoint(point),2)!=self.calibration.hwnd:
+                raise DesktopTemporarilyHidden('微信点击位置已移动或被遮挡')
+            cursor=W.POINT()
+            if not U.GetCursorPos(ctypes.byref(cursor)) or (cursor.x,cursor.y)!=(point.x,point.y):
+                raise DesktopTemporarilyHidden('鼠标位置发生变化，等待重新核验')
         events = (INPUT * 2)()
         events[0].type = events[1].type = 0
         events[0].value.mouse.flags = 0x0002
@@ -677,6 +882,31 @@ def _mutex_exists(name):
         return ctypes.get_last_error() == 5  # Exists but belongs to another security context.
     K.CloseHandle(handle)
     return True
+
+
+def _calibration_marker(hwnd):
+    return f'Local\\XiaomaoWechatCalibration-{int(hwnd):x}'
+
+
+def _check_calibration_lease(hwnd):
+    if os.name=='nt' and _mutex_exists(_calibration_marker(hwnd)):
+        raise DesktopTemporarilyHidden('此微信窗口正在手动校准，完成或关闭校准后自动继续')
+
+
+class CalibrationWindowLease:
+    """An HWND-scoped marker shared by panel and worker. Windows cleans it on exit."""
+    def __init__(self,hwnd):
+        if os.name!='nt' or not hwnd:raise DesktopUnavailable('微信窗口无效，无法锁定校准')
+        self.handle=K.CreateMutexW(None,False,_calibration_marker(hwnd))
+        if not self.handle:raise DesktopUnavailable('无法保护正在校准的微信窗口')
+        if ctypes.get_last_error()==183:
+            self.close()
+            raise DesktopUnavailable('此微信窗口已在其他校准界面中打开')
+
+    def close(self):
+        if self.handle:
+            K.CloseHandle(self.handle)
+            self.handle=None
 
 
 def worker_scope(root):

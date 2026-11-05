@@ -1,21 +1,170 @@
 """Native calibration editor. The captured frame stays in this window's memory."""
 from copy import deepcopy
+import threading
 import tkinter as tk
 from tkinter import ttk
 
 from PIL import Image, ImageDraw, ImageTk
 
 from .companion_ui import BG, FONT, INK, LINE, MUTED, PAPER, button, label
-from .config import Settings
-from .vision import Vision
+from .config import TARGET_GROUP
+
+
+def present_calibration(window):
+    """An explicitly opened calibration dialog must stay above the WeChat capture target."""
+    window.deiconify()
+    window.attributes('-topmost',True)
+    window.lift()
+    window.focus_force()
+
+
+class CalibrationFlow:
+    """The picker is visible during discovery and remains usable after a capture error."""
+    AUTO='识别窗口中的会话'
+
+    def __init__(self,panel,target):
+        self.panel=panel
+        self.cancelled=threading.Event()
+        self.lease=None
+        self.editor=None
+        self.windows=[]
+        self.busy=False
+        self.window=tk.Toplevel(panel.root)
+        self.window.title('选择微信校准窗口')
+        self.window.transient(panel.root)
+        self.window.configure(bg=BG)
+        self.window.protocol('WM_DELETE_WINDOW',self.close)
+        self.window.bind('<Escape>',lambda _:self.close())
+        self.window.bind('<Destroy>',self._destroyed,add='+')
+        self.status=tk.StringVar(self.window)
+        box=tk.Frame(self.window,bg=PAPER,padx=18,pady=14)
+        box.pack(fill='both',expand=True,padx=10,pady=10)
+        label(box,'校准微信窗口',size=16,bold=True).pack(fill='x',pady=(0,8))
+        label(box,'回复对象',bold=True).pack(anchor='w')
+        names=list(panel.settings.saved_groups)
+        if names==[TARGET_GROUP] and not panel.settings.conversation_targets:names=[]
+        self.target=ttk.Combobox(box,state='readonly',values=[self.AUTO,*names],width=36)
+        self.target.set(target if target in names else self.AUTO)
+        self.target.pack(fill='x',pady=(3,10))
+        label(box,'已打开的微信窗口',bold=True).pack(anchor='w')
+        self.picker=ttk.Combobox(box,state='readonly',width=45)
+        self.picker.pack(fill='x',pady=(3,8))
+        label(box,textvariable=self.status,color=MUTED,wraplength=420).pack(fill='x',pady=(0,8))
+        bar=tk.Frame(box,bg=PAPER);bar.pack(fill='x')
+        self.reload=button(bar,'刷新',lambda:self.discover(auto=False),compact=True)
+        self.reload.pack(side='left')
+        self.launch=button(bar,'打开微信',self.open_wechat,compact=True)
+        self.launch.pack(side='left',padx=5)
+        self.next=button(bar,'唤起并校准',self.capture,primary=True)
+        self.next.pack(side='right')
+        self.window.update_idletasks()
+        present_calibration(self.window)
+        self.discover(auto=True)
+
+    def _pending(self,busy):
+        self.busy=busy
+        for control in (self.reload,self.launch):
+            control.configure(state='disabled' if busy else 'normal')
+        self.next.configure(state='disabled' if busy or not self.windows else 'normal')
+        self.target.configure(state='disabled' if busy else 'readonly')
+        self.picker.configure(state='disabled' if busy or not self.windows else 'readonly')
+
+    def fail(self,error):
+        if self.cancelled.is_set():return
+        self.release_lease()
+        self._pending(False)
+        self.status.set(error)
+        present_calibration(self.window)
+
+    def discover(self,auto):
+        from .windows import list_calibration_windows
+        self.windows=[]
+        self.picker.set('');self.picker.configure(values=())
+        self._pending(True);self.status.set('正在查找微信主窗口和独立聊天窗口…')
+        def found(windows):
+            if self.cancelled.is_set():return
+            self.windows=windows
+            titles=[('主窗口' if w['kind']=='main' else '独立聊天')+' · '+w['title']+
+                    ('（已最小化）' if w['minimized'] else '') for w in windows]
+            if len(set(titles))!=len(titles):
+                titles=[f'{title} · 窗口 {w["hwnd"]}' for title,w in zip(titles,windows)]
+            self.picker.configure(values=titles)
+            if windows:
+                existing=self.panel.settings.binding_for(self.target.get())
+                index=next((i for i,w in enumerate(windows) if existing and w['hwnd']==existing.hwnd and w['pid']==existing.pid),0)
+                self.picker.current(index)
+            self._pending(False)
+            self.status.set('选择要校准的微信窗口。其他会话保留现有绑定。' if windows else '没有可校准的聊天窗口。可打开微信，进入聊天后刷新。')
+            if auto and len(windows)==1:self.capture()
+        self.panel.work(list_calibration_windows,found,self.fail,mutates=False)
+
+    def open_wechat(self):
+        from .windows import open_wechat_for_calibration
+        self._pending(True);self.status.set('正在打开本机微信…')
+        self.panel.work(open_wechat_for_calibration,lambda _:self.discover(False) if not self.cancelled.is_set() else None,
+                        self.fail,mutates=False)
+
+    def capture(self):
+        from .selection import preview_window
+        from .windows import activate_calibration_window,CalibrationWindowLease,DesktopUnavailable
+        i=self.picker.current()
+        if self.cancelled.is_set() or self.busy or not 0<=i<len(self.windows):return
+        choice=self.windows[i]
+        target=self.target.get()
+        if target==self.AUTO:target=None
+        cfg=self.panel.settings
+        try:self.lease=CalibrationWindowLease(choice['hwnd'])
+        except (OSError,DesktopUnavailable) as error:
+            self.fail(str(error));return
+        self._pending(True);self.status.set('正在唤起所选窗口并读取当前尺寸…')
+        self.window.attributes('-topmost',False)
+        def grab():
+            if self.cancelled.is_set():raise ValueError('校准已取消')
+            activate_calibration_window(choice['hwnd'],choice['pid'])
+            if self.cancelled.is_set():raise ValueError('校准已取消')
+            return preview_window(cfg,choice,target)
+        def ready(value):
+            if self.cancelled.is_set():return
+            self.window.withdraw()
+            self.editor=CalibrationDialog(self.panel,*value,flow=self)
+            present_calibration(self.editor.window)
+        self.panel.work(grab,ready,self.fail,mutates=False)
+
+    def release_lease(self):
+        if self.lease:
+            self.lease.close();self.lease=None
+
+    def pick_again(self):
+        if self.editor and self.editor.validating:return
+        if self.editor:self.editor.window.destroy();self.editor=None
+        self.release_lease()
+        present_calibration(self.window)
+        self.discover(False)
+
+    def present(self):
+        win=self.editor.window if self.editor else self.window
+        present_calibration(win)
+
+    def _destroyed(self,event):
+        if event.widget is self.window:
+            self.cancelled.set()
+            self.release_lease()
+            if getattr(self.panel,'calibration_flow',None) is self:self.panel.calibration_flow=None
+
+    def close(self):
+        self.cancelled.set()
+        if self.editor and self.editor.alive():self.editor.window.destroy()
+        self.window.destroy()
 
 
 class CalibrationDialog:
     NAMES = {'header': '会话标题', 'messages': '消息区域', 'input': '输入区域', 'send': '发送按钮'}
     BLUE = '#246AE0'
 
-    def __init__(self, panel, image, calibration):
+    def __init__(self, panel, image, calibration,*,flow=None):
         self.panel, self.image = panel, image
+        self.flow=flow
+        self.cancelled=flow.cancelled if flow else threading.Event()
         self.calibration = deepcopy(calibration)
         self.scope = panel.settings.memory_scope
         self.open_group = panel.settings.group
@@ -93,6 +242,7 @@ class CalibrationDialog:
         actions.pack(fill='x', padx=8, pady=(1, 6))
         self.undo_button=button(actions,'撤销调整',self.undo,icon_name='back',compact=True)
         self.undo_button.pack(side='left')
+        if flow:button(actions,'重新选窗口',flow.pick_again,compact=True).pack(side='left',padx=6)
         self.undo_button.configure(state='disabled')
         self.save_button = button(actions, '保存校准', self.save, primary=True,icon_name='save')
         self.save_button.pack(side='right')
@@ -235,10 +385,12 @@ class CalibrationDialog:
         return bool(self.window.winfo_exists())
 
     def close(self):
+        self.cancelled.set()
         if self.render_job is not None:
             self.window.after_cancel(self.render_job)
             self.render_job = None
-        self.window.destroy()
+        if self.flow:self.flow.close()
+        else:self.window.destroy()
 
     def save(self):
         if self.validating:
@@ -248,6 +400,7 @@ class CalibrationDialog:
             return
         frozen = deepcopy(self.calibration)
         frozen.bottom_confirmed = True
+        frozen.manual_regions = True
         try:
             frozen.validate()
         except ValueError as error:
@@ -261,30 +414,6 @@ class CalibrationDialog:
             picker.configure(state='disabled')
         self.message.set('正在本机核对目标、聊天底部和草稿…')
 
-        def validate():
-            cfg = Settings.load(self.panel.directory)
-            if (cfg.group, cfg.memory_scope) != (self.open_group, self.scope):
-                raise ValueError('校准期间会话已切换，请重新打开校准')
-            database = cfg.receive_mode == 'database'
-            frame = Vision().read(self.image, frozen, controls_only=database)
-            if not frame.safe or not frame.at_bottom:
-                raise ValueError(frame.reason or '无法确认聊天底部')
-            if not frame.draft_empty:
-                raise ValueError('输入区域非空或选区包含图标，请调整')
-            if not database and not frame.messages:
-                raise ValueError('请选择包含可识别消息气泡的区域')
-            return frozen
-
-        def valid(value):
-            if not self.alive():
-                return
-            if (self.panel.settings.memory_scope != self.scope or
-                self.panel.settings.group != self.open_group or getattr(self.panel, 'switch_busy', False)):
-                failed('校准期间会话已切换，请重新打开校准')
-                return
-            self.close()
-            self.panel.save_calibration(value)
-
         def failed(error):
             if self.alive():
                 self.validating = False
@@ -295,4 +424,4 @@ class CalibrationDialog:
                     picker.configure(state='readonly')
                 self.message.set(error)
 
-        self.panel.work(validate, valid, failed)
+        self.panel.save_calibration(frozen,self.cancelled,self.close,failed)

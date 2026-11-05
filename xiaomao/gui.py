@@ -58,7 +58,7 @@ class Panel:
         from .theme import GlassView,titlebar
         self.view=GlassView(self)
         self.view.pack(fill="both",expand=True)
-        root.after(30,lambda:titlebar(root))
+        titlebar(root,self.view)
         root.after(100,self.drain)
         root.after(120,self.poll)
         self.work(self.client.start,self.show_status)
@@ -251,8 +251,8 @@ class Panel:
                 cfg.natural_pacing=True
                 cfg.context_limit=24
                 if cfg.min_interval<=5:cfg.poll_seconds,cfg.idle_seconds=1,2
-            from .selection import refresh_binding
-            cfg.calibration=asdict(refresh_binding(cfg))
+            # Saving listening rules never requires a visible window. The runtime
+            # validates each recipient's window again before sending any input.
             if cfg.group!=old_group:cfg.self_name_unique_confirmed=False
             cfg.__post_init__()
             from .selection import stop_confirmed
@@ -313,42 +313,47 @@ class Panel:
         if self.switch_busy:return
         self.view.select('companion')
 
-    def calibrate(self):
+    def calibrate(self,target=None):
+        from .calibration_ui import CalibrationFlow
+        flow=getattr(self,'calibration_flow',None)
+        if flow:
+            flow.present()
+            return
         if self.switch_busy:return
-        target=self.target_group.get()
-        self.notice.set(f'正在读取“{target}”的微信窗口并校准…')
-        def action():
-            self.client.pause()
-            return self.capture_calibration(target)
-        self.work(action,self.open_calibration)
+        self.calibration_flow=CalibrationFlow(self,target or self.settings.group)
 
-    def capture_calibration(self,target=None):
-        from .selection import capture_calibration
-        return capture_calibration(self.directory,target or self.settings.group)
-
-    def open_calibration(self,value):
-        from .calibration_ui import CalibrationDialog
-        image,calibration=value
-        CalibrationDialog(self,image,calibration)
-
-    def save_calibration(self,calibration):
+    def save_calibration(self,calibration,cancelled,close,failed):
         def save():
-            from .selection import switch_group,load_directory,directory_for_settings
+            from .selection import bind_reviewed_window,verify_reviewed_window,stop_confirmed
             cfg=Settings.load(self.directory)
-            target=calibration.target_group
-            contact=None
-            if cfg.receive_mode=='database':
-                entries=load_directory(self.directory) if cfg.binding else directory_for_settings(replace(cfg,calibration=asdict(calibration)))
-                rows=[r for r in entries if r.name==target and r.selectable]
-                if len(rows)!=1:raise ValueError('校准对象未能与联系人列表唯一对应')
-                contact=rows[0]
-            return switch_group(self.directory,target,self.client,binding=calibration,contact=contact)
-        def saved(result):
+            checked,contact=verify_reviewed_window(cfg,calibration,cancelled)
+            updated=bind_reviewed_window(cfg,checked,contact)
+            if cancelled.is_set():raise ValueError('校准已取消')
+            if Settings.load(self.directory)!=cfg:raise ValueError('校准期间设置已变化，请重新核对')
+            updated.save()
+            try:previous=self.client.status()
+            except ControlUnavailable:
+                if (self.directory/'runtime/control.json').exists():
+                    raise ValueError('校准已保存，后台暂时无法连接；下次启动将使用新窗口') from None
+                return checked.target_group,self.client.start(initial_mode='observe')
+            try:result=self.client.reload_windows()
+            except ControlUnavailable as error:
+                if '没有这个控制操作' not in str(error):
+                    raise ValueError('校准已保存，后台暂未确认应用。'+str(error)) from None
+                if previous.get('mode')!='paused' or self.client.pending().get('tasks'):
+                    raise ValueError('校准已保存。旧版后台仍在运行，待本轮结束后停止并打开新版即可应用') from None
+                stop_confirmed(self.directory,self.client)
+                result=self.client.start(initial_mode='paused')
+            return checked.target_group,result
+        def saved(value):
+            target,result=value
             self.settings=Settings.load(self.directory);self.target_group.set(self.settings.group)
             self.owner_tone.set(self.settings.owner_confirmed)
             self.at_unique.set(self.settings.self_name_unique_confirmed)
-            self.view.render();self.show_status(result);self.notice.set('校准已保存，后台已重新启动')
-        self.work(save,saved)
+            self.view.render();self.show_status(result)
+            self.notice.set(f'“{target}”窗口校准已保存'+('，当前发送完成后应用' if result.get('window_reload_pending') else '并已应用'))
+            close()
+        self.work(save,saved,failed)
 
     def close(self):
         if self.closing or getattr(self,'exiting',False):return

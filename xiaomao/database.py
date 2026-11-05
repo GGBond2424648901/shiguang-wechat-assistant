@@ -223,16 +223,23 @@ class DatabaseFeed:
 
 class DatabaseHub:
     """One selected logged-in account; credentials imported encrypted from 拾光."""
-    def __init__(self,settings,cancelled):
+    def __init__(self,settings,cancelled,*,process_id=None):
         self.settings=settings;self.cancelled=cancelled;self.account=None
+        self.process_id=process_id
         self.keys={};self.snapshots={};self.last_identity_check=0;self.feeds={}
+
+    @property
+    def pid(self):
+        if self.process_id is not None:return self.process_id
+        if not self.settings.binding:raise DatabaseUnavailable('等待绑定已登录的微信窗口')
+        return self.settings.binding.pid
 
     def _ensure(self,force_identity=False):
         from .dbcodec.discovery import discover_accounts,active_account_ids
         from .dbcodec.windows_reader import find_keys,protect,unprotect
         from .dbcodec.config_scan import verify_enc_key
         from .privacy import private_dir,make_private
-        pid=self.settings.binding.pid
+        pid=self.pid
         if self.account and not force_identity and time.monotonic()-self.last_identity_check<30:return
         candidates=discover_accounts()
         if not candidates:candidates=discover_accounts([Path('D:/xwechat_files')])
@@ -308,12 +315,15 @@ class DatabaseHub:
         try:target=resolve_contact(self.directory(),self.settings,group)
         except ValueError as error:raise DatabaseUnavailable(str(error)) from None
         group_id=target.id
-        if group in self.feeds and self.feeds[group].group_id!=group_id:
+        # Keep the resolved ID pinned even for a legacy title-only target.
+        # A newly confirmed account/ID receives its own independent cursor.
+        key=(target.account,group_id) if group in self.settings.conversation_targets else ('',group)
+        if key in self.feeds and self.feeds[key].group_id!=group_id:
             raise DatabaseUnavailable('同名群的身份发生变化，已阻止跨群回复')
-        if group not in self.feeds:
+        if key not in self.feeds:
             sources=lambda:[self._snapshot(path) for path in sorted((root/'message').glob('message_[0-9]*.db'))]
-            self.feeds[group]=DatabaseFeed(sources,group_id,self.account['wxid'])
-        return self.feeds[group]
+            self.feeds[key]=DatabaseFeed(sources,group_id,self.account['wxid'])
+        return self.feeds[key]
 
     def directory(self):
         self._ensure()
@@ -334,5 +344,5 @@ class LazyDatabaseFeed:
         from .media import LocalMediaResolver
         if not hasattr(self.hub,'media'):
             cancelled=getattr(self.hub.cancelled,'is_set',self.hub.cancelled)
-            self.hub.media=LocalMediaResolver(self.hub.account['path'],process_id=self.hub.settings.binding.pid,account_id=self.hub.account['wxid'],cancelled=cancelled)
+            self.hub.media=LocalMediaResolver(self.hub.account['path'],process_id=self.hub.pid,account_id=self.hub.account['wxid'],cancelled=cancelled)
         return self.hub.media.resolve(message.media_raw,3 if message.kind=='image' else 47,feed.group_id,message.created_at,cache_key=message.media_key)

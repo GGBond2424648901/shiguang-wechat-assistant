@@ -47,6 +47,7 @@ class ControlServer:
                 routes = {"GET": {"/status": engine.status, "/pending": lambda: {"tasks": engine.pending()}},
                           "POST": {"/observe": engine.observe, "/enable": engine.enable, "/pause": engine.pause, "/stop": engine.stop,
                                    "/reply_latest":engine.reply_latest,
+                                   "/reload_windows":lambda:engine.reload_windows(),
                                    "/companion_preview":lambda:engine.companion_preview(),
                                    "/companion_once":lambda:engine.companion_once()}}
                 action = routes[method].get(self.path)

@@ -232,6 +232,29 @@ def test_directory_keyboard_staging_and_filters_keep_exact_selection(monkeypatch
     assert sessions.selected_name==GROUP.name and not panel.chosen
 
 
+def test_batch_checks_survive_filtering_and_apply_atomically_to_draft(monkeypatch,panel):
+    rows=[GROUP,PERSON,THIRD,SYSTEM]
+    monkeypatch.setattr('xiaomao.sessions_ui.load_directory',lambda *args,**kwargs:rows)
+    sessions=SessionsPage(panel.root,panel)
+    sessions.monitor_all.set(False)
+    panel.view.pages['sessions']=sessions
+    picker=DirectoryPage(panel.root,panel);picker.on_show()
+    read,done,_,_=panel.jobs.pop();done(read())
+    picker.query.set(GROUP.name);picker.toggle_checked(picker.visible[0])
+    picker.kind.set('个人');picker.query.set(THIRD.name);picker.toggle_checked(picker.visible[0])
+    picker.query.set('无匹配');assert not picker.visible and len(picker.checked)==2
+    picker.stage()
+    assert sessions.names==[GROUP.name,PERSON.name,THIRD.name] and sessions.monitor_all.get()
+    assert list(sessions.picked)==[GROUP.name,THIRD.name] and not panel.applied and not panel.chosen
+
+
+def test_invalid_batch_cannot_partially_stage_or_enable_listening(panel):
+    sessions=SessionsPage(panel.root,panel);before=list(sessions.names)
+    sessions.monitor_all.set(False)
+    assert not sessions.add_contacts([THIRD,replace(PERSON,id='changed')],together=True)
+    assert sessions.names==before and sessions.picked=={} and not sessions.monitor_all.get()
+
+
 def test_pending_large_directory_search_cannot_select_a_stale_row(monkeypatch,panel):
     rows=[replace(PERSON,id=f'id-{i}',name=f'临时联系人{i}') for i in range(520)]
     monkeypatch.setattr('xiaomao.sessions_ui.load_directory',lambda *args,**kwargs:rows)

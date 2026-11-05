@@ -79,7 +79,8 @@ def test_lazy_media_honors_resident_stop_event(tmp_path,monkeypatch):
         def __init__(self,*args,**kwargs):self.cancelled=kwargs['cancelled']
         def resolve(self,*args,**kwargs):seen.append(self.cancelled());return None
     monkeypatch.setattr('xiaomao.media.LocalMediaResolver',Resolver)
-    hub=SimpleNamespace(feed=lambda group:SimpleNamespace(group_id='g@chatroom'),account={'path':tmp_path,'wxid':'self'},settings=SimpleNamespace(binding=SimpleNamespace(pid=1)),cancelled=stop)
+    hub=SimpleNamespace(feed=lambda group:SimpleNamespace(group_id='g@chatroom'),
+                        account={'path':tmp_path,'wxid':'self'},pid=1,cancelled=stop)
     feed=LazyDatabaseFeed(hub,'group')
     feed.resolve_media(Message('[图片]',kind='image'))
     stop.set();feed.resolve_media(Message('[图片]',kind='image'))
@@ -281,6 +282,32 @@ def test_group_rename_cannot_redirect_replies_to_a_different_chat(tmp_path):
         c.execute("INSERT INTO contact VALUES('b@chatroom','甲群','')")
     with pytest.raises(DatabaseUnavailable):hub.feed('甲群')
     hub.close()
+
+
+def test_explicitly_replaced_contact_gets_its_own_feed_after_window_reload(tmp_path):
+    from dataclasses import replace
+    import threading
+    from xiaomao.database import DatabaseHub
+    from xiaomao.config import Settings
+    from xiaomao.contacts import Contact
+    path=tmp_path/'db_storage/contact/contact.db';path.parent.mkdir(parents=True)
+    old=Contact('old@chatroom','acct','群友','group')
+    replacement=replace(old,id='new@chatroom')
+    with sqlite3.connect(path) as conn:
+        conn.execute('CREATE TABLE contact(username TEXT,nick_name TEXT,remark TEXT)')
+        conn.execute('INSERT INTO contact VALUES(?,?,?)',(old.id,old.name,''))
+    cfg=Settings(tmp_path,group=old.name,conversation_targets={old.name:old.binding})
+    hub=DatabaseHub(cfg,threading.Event(),process_id=71)
+    hub.account={'id':'acct','path':str(tmp_path),'wxid':'self'}
+    hub._ensure=lambda *args:None
+    try:
+        original=hub.feed(old.name)
+        with sqlite3.connect(path) as conn:
+            conn.execute('UPDATE contact SET username=?',(replacement.id,))
+        hub.settings=replace(cfg,conversation_targets={replacement.name:replacement.binding})
+        current=hub.feed(replacement.name)
+        assert original is not current and current.group_id==replacement.id
+    finally:hub.close()
 
 
 def test_new_encrypted_shard_and_rotated_key_do_not_cache_missing_key(tmp_path):

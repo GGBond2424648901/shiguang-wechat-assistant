@@ -29,7 +29,7 @@ class ControlClient:
             raise ControlUnavailable("助手尚未运行，或本机控制信息无效") from None
 
     def request(self, operation: str) -> dict:
-        if operation not in ("status", "pending", "observe", "enable", "pause", "stop", "reply_latest", "companion_preview", "companion_once"):
+        if operation not in ("status", "pending", "observe", "enable", "pause", "stop", "reply_latest", "companion_preview", "companion_once","reload_windows"):
             raise ControlUnavailable("不支持这个控制操作")
         url, token = self._endpoint()
         try:
@@ -52,6 +52,7 @@ class ControlClient:
     def reply_latest(self):return self.request('reply_latest')
     def companion_preview(self):return self.request('companion_preview')
     def companion_once(self):return self.request('companion_once')
+    def reload_windows(self):return self.request('reload_windows')
 
     def start(self,initial_mode=None) -> dict:
         if initial_mode not in (None,'auto','observe','paused'):raise ValueError('启动模式无效')

@@ -4,11 +4,10 @@ from pathlib import Path
 import json
 import hashlib
 import math
-import os
 import re
 import unicodedata
 from urllib.parse import urlsplit
-from .privacy import private_dir, make_private
+from .privacy import atomic_private_write, private_dir
 
 TARGET_GROUP = "示例会话"
 
@@ -40,13 +39,18 @@ class Calibration:
     target_group: str = ''
     target_kind: str = 'group'
     ocr_title: str = ''
+    window_kind: str = 'main'
+    manual_regions: bool = False
 
     def validate(self) -> None:
         from .contacts import visual_name_key
         if self.ocr_title and self.ocr_title!=visual_name_key(self.target_group):
             raise ValueError('会话识别标题与目标不一致')
         if self.target_kind not in ('group','private'):raise ValueError('会话类型无效')
-        if self.hwnd <= 0 or self.pid <= 0 or self.width < 600 or self.height < 450:
+        if self.window_kind not in ('main', 'detached') or type(self.manual_regions) is not bool:
+            raise ValueError('校准窗口类型或区域标记无效')
+        min_width, min_height = (360, 360) if self.window_kind == 'detached' else (600, 450)
+        if self.hwnd <= 0 or self.pid <= 0 or self.width < min_width or self.height < min_height:
             raise ValueError("校准窗口无效")
         if not self.header_label:
             raise ValueError("校准缺少群标题")
@@ -95,7 +99,11 @@ class Settings:
     split_replies: bool = True
     owner_private_token: str = ''
     receive_mode: str = 'database'
+    # The legacy field is the shared main-window template. Detached windows
+    # only belong to their verified account/recipient entry.
     calibration: dict | None = None
+    calibration_account: str = ''
+    window_bindings: dict = field(default_factory=dict)
 
     def __post_init__(self):
         self.root = Path(self.root).resolve()
@@ -120,6 +128,9 @@ class Settings:
             if target['id'].endswith('@chatroom')!=(target['kind']=='group'):raise ValueError('会话类型与身份不符')
             if '/' in target['account'] or any(ord(c)<32 for c in target['account']+target['id']):
                 raise ValueError('会话身份配置无效')
+        saved_ids=[(target['account'],target['id']) for name,target in self.conversation_targets.items() if name in names]
+        if len(saved_ids)!=len(set(saved_ids)):
+            raise ValueError('两个回复对象使用了同一会话身份，请仅保留当前备注名')
         if self.assistant_name!='小猫' or self.reply_mode not in ('natural','mentions','all'):
             raise ValueError('助手或回复模式无效')
         if not self.wake_aliases or len(self.wake_aliases)>4 or any(not isinstance(name,str) or not name.strip() or len(name)>16 for name in self.wake_aliases):
@@ -138,7 +149,26 @@ class Settings:
             if not url.hostname or (url.scheme != "https" and not (url.scheme == "http" and url.hostname in ("localhost", "127.0.0.1", "::1"))):
                 raise ValueError("模型须使用 HTTPS，本机服务可使用 HTTP")
         if self.calibration:
-            self.binding.validate()
+            template = Calibration(**self.calibration)
+            template.validate()
+            if template.window_kind == 'main' and not self.calibration_account:
+                original = self.conversation_targets.get(template.target_group or self.group, {})
+                self.calibration_account = original.get('account', '')
+        if not isinstance(self.window_bindings, dict):
+            raise ValueError('会话窗口绑定无效')
+        occupied = {}
+        for key, raw in self.window_bindings.items():
+            if not isinstance(key, str) or '/' not in key or not isinstance(raw, dict):
+                raise ValueError('会话窗口绑定无效')
+            bound = Calibration(**raw)
+            bound.validate()
+            handle = bound.pid, bound.hwnd
+            previous = occupied.get(handle)
+            if previous and 'detached' in (previous, bound.window_kind):
+                raise ValueError('独立窗口已绑定到其他会话，请重新选择窗口')
+            occupied[handle] = bound.window_kind
+        if self.calibration and occupied.get((template.pid, template.hwnd)) == 'detached' and template.window_kind == 'main':
+            raise ValueError('独立窗口不能作为共享主窗口')
 
     @property
     def runtime(self) -> Path:
@@ -153,14 +183,8 @@ class Settings:
         return self.group_names or (self.group,)
 
     def select_group(self,name: str):
-        from .contacts import visual_name_key
         names=(name,*(saved for saved in self.saved_groups if saved!=name))[:8]
-        kind=self.conversation_targets.get(name,{}).get('kind','group')
-        binding=asdict(replace(self.binding,header_label=name,target_group=name,target_kind=kind,
-                              ocr_title=visual_name_key(name) if name in self.conversation_targets else '')) if self.binding else None
-        return replace(self,group=name,group_names=names,monitor_all_groups=False,auto_on_launch=True,
-                       conversation_targets={n:t for n,t in self.conversation_targets.items() if n in names},
-                       self_name_unique_confirmed=self.self_name_unique_confirmed if name==self.group else False,calibration=binding)
+        return replace(self.with_saved_conversations(names), monitor_all_groups=False, auto_on_launch=True)
 
     def select_conversation(self,contact):
         if not contact.selectable:raise ValueError(contact.reason)
@@ -171,16 +195,58 @@ class Settings:
         return replace(self,conversation_targets=targets).select_group(contact.name)
 
     def with_saved_conversations(self,names):
-        from .contacts import visual_name_key
         names=tuple(names)
         if not names:raise ValueError('请至少保留一个回复对象')
         targets={n:t for n,t in self.conversation_targets.items() if n in names}
         current=names[0]
-        binding=asdict(replace(self.binding,header_label=current,target_group=current,
-                               target_kind=targets.get(current,{}).get('kind','group'),
-                               ocr_title=visual_name_key(current) if current in targets else '')) if self.binding else None
-        return replace(self,group=current,group_names=names,conversation_targets=targets,calibration=binding,
+        keys = {target['account'] + '/' + target['id'] for target in targets.values()}
+        bindings = {key: raw for key, raw in self.window_bindings.items() if key in keys}
+        return replace(self,group=current,group_names=names,conversation_targets=targets,window_bindings=bindings,
                        self_name_unique_confirmed=self.self_name_unique_confirmed if current==self.group else False)
+
+    def with_window_binding(self, name: str, calibration: Calibration):
+        """Save calibration evidence without changing the selected listeners."""
+        from .contacts import visual_name_key
+        if name not in self.saved_groups:
+            raise ValueError('请先将会话加入回复对象')
+        calibration.validate()
+        target = self.conversation_targets.get(name)
+        if calibration.window_kind == 'detached':
+            if not target:
+                raise ValueError('独立窗口须先确认登录账号和会话身份')
+            if calibration.target_group != name or calibration.target_kind != target['kind']:
+                raise ValueError('独立窗口已识别的会话与所选对象不符')
+        raw = asdict(replace(calibration, target_group=name, target_kind=target['kind'] if target else 'group',
+                             ocr_title=visual_name_key(name) if target else ''))
+        bindings = dict(self.window_bindings)
+        if target:
+            bindings[target['account'] + '/' + target['id']] = raw
+        if calibration.window_kind == 'main':
+            return replace(self, window_bindings=bindings, calibration=raw,
+                           calibration_account=target['account'] if target else '')
+        return replace(self, window_bindings=bindings)
+
+    def binding_for(self, name: str) -> Calibration | None:
+        from .contacts import visual_name_key
+        target = self.conversation_targets.get(name)
+        if target:
+            raw = self.window_bindings.get(target['account'] + '/' + target['id'])
+            if raw:
+                bound = Calibration(**raw)
+                if bound.window_kind == 'detached' and (bound.target_group != name or bound.target_kind != target['kind']):
+                    return None
+                if bound.target_group == name and bound.target_kind == target['kind']:
+                    return bound
+            if self.calibration_account and self.calibration_account != target['account']:
+                return None
+        if not self.calibration:
+            return None
+        template = Calibration(**self.calibration)
+        if template.window_kind != 'main':
+            return None
+        return replace(template, header_label=name, target_group=name,
+                       target_kind=target['kind'] if target else 'group',
+                       ocr_title=visual_name_key(name) if target else '')
 
     @property
     def memory_scope(self):
@@ -208,17 +274,13 @@ class Settings:
         elif self.owner_confirmed:self.owner_private_token=''
 
     def for_group(self,name: str):
-        from .contacts import visual_name_key
         if name not in self.allowed_groups:raise ValueError('该群未被选定')
-        kind=self.conversation_targets.get(name,{}).get('kind','group')
-        binding=asdict(replace(self.binding,header_label=name,target_group=name,target_kind=kind,
-                              ocr_title=visual_name_key(name) if name in self.conversation_targets else '')) if self.binding else None
-        return replace(self,group=name,group_names=(),calibration=binding,
+        return replace(self,group=name,group_names=(),
                        self_name_unique_confirmed=self.self_name_unique_confirmed if name==self.group else False)
 
     @property
     def binding(self) -> Calibration | None:
-        return Calibration(**self.calibration) if self.calibration else None
+        return self.binding_for(self.group)
 
     @property
     def model_ready(self) -> bool:
@@ -249,7 +311,4 @@ class Settings:
         private_dir(self.runtime)
         data = asdict(self)
         data.pop("root")
-        temporary = self.runtime / "config.json.tmp"
-        temporary.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
-        make_private(temporary)
-        os.replace(temporary, self.runtime / "config.json")
+        atomic_private_write(self.runtime / "config.json", json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8"))

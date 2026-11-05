@@ -11,6 +11,7 @@ design/qa/v3-native/05-memory.png
 design/qa/v3-native/06-settings.png
 design/qa/v3-native/07-contacts.png
 design/qa/v3-native/08-calibration.png
+design/qa/v3-native/09-window-picker.png
 design/v3/01-dashboard.png
 design/v3/02-sessions.png
 design/v3/03-persona.png
@@ -43,6 +44,9 @@ pyproject.toml
 README.md
 requirements.lock
 tests/test_account_handles.py
+tests/test_calibration_windows.py
+tests/test_manual_window_flow.py
+tests/test_window_routing.py
 tests/conftest.py
 tests/test_cli.py
 tests/test_pacing.py

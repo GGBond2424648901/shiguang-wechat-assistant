@@ -53,7 +53,7 @@ _SEND_WAITS = {
 
 
 class Engine:
-    def __init__(self, settings: Settings, store: StateStore, desktop, vision, model, *, clock=time.time, settle_seconds=5,message_source=None):
+    def __init__(self, settings: Settings, store: StateStore, desktop, vision, model, *, clock=time.time, settle_seconds=5,message_source=None,recovered_unknown=None):
         self.settings, self.store = settings, store
         self.desktop, self.vision, self.model = desktop, vision, model
         self.message_source=message_source
@@ -109,7 +109,7 @@ class Engine:
         self.latest_candidate=None
         self.bottom_recovery_attempts=0
         self.baseline_position_checked=False
-        if store.recover():
+        if (store.recover() if recovered_unknown is None else recovered_unknown):
             self.mode, self.reason = "paused", "存在发送结果未知的记录，请核实微信后重新观察"
             self.cancelled.set()
         elif settings.auto_on_launch and settings.model_ready and settings.binding and settings.binding.bottom_confirmed:
@@ -297,6 +297,8 @@ class Engine:
                     # visible desktop. Only the editor has two witnesses.
                     frame=replace(frame,draft_empty=True)
         if observation and not frame.safe and frame.reason=='群标题与已校准目标不一致':
+            if binding.window_kind=='detached':
+                raise DesktopTemporarilyHidden('独立窗口标题与已绑定会话不符，等待重新核对')
             selected=self.desktop.select_target(self.settings.idle_seconds)
             raise DesktopTemporarilyHidden('已自动选择目标群，等待稳定画面' if selected else '微信已连接，等待空闲后定位所选群；当前聊天标题尚未匹配')
         if observation and frame.safe and frame.group==self.settings.group and not frame.draft_empty and self.message_source:

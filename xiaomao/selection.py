@@ -21,12 +21,26 @@ def load_directory(root,cancelled=None):
     return directory_for_settings(Settings.load(root),cancelled)
 
 
-def directory_for_settings(cfg,cancelled=None):
+def directory_for_settings(cfg,cancelled=None,*,process_id=None):
     """Read an account directory using an existing or uncommitted window binding."""
     from .database import DatabaseHub,DatabaseUnavailable
-    if not cfg.binding:raise ValueError('请先校准一次已登录的微信窗口')
-    hub=DatabaseHub(cfg,cancelled or threading.Event())
-    try:return hub.directory()
+    expected_account=None
+    if not cfg.binding and process_id is None:
+        expected_account=cfg.conversation_targets.get(cfg.group,{}).get('account')
+        if expected_account:
+            for name in cfg.saved_groups:
+                if cfg.conversation_targets.get(name,{}).get('account')==expected_account:
+                    binding=cfg.binding_for(name)
+                    if binding:
+                        process_id=binding.pid
+                        break
+        if process_id is None:raise ValueError('请先校准一次已登录的微信窗口')
+    hub=DatabaseHub(cfg,cancelled or threading.Event(),process_id=process_id) if process_id else DatabaseHub(cfg,cancelled or threading.Event())
+    try:
+        rows=hub.directory()
+        if expected_account and any(row.account!=expected_account for row in rows):
+            raise ValueError('该窗口对应的微信账号已改变，请重新校准')
+        return rows
     except DatabaseUnavailable as error:raise ValueError(str(error)) from None
     finally:hub.close()
 
@@ -110,9 +124,14 @@ def refresh_binding(settings,*,details=window_details,recover=find_wechat_window
     if not binding:raise ValueError('请先校准一次微信窗口，再使用选群功能')
     try:info=details(binding.hwnd)
     except DesktopUnavailable:
+        if binding.window_kind=='detached':raise ValueError('原独立聊天窗口已关闭，请从会话列表重新校准该窗口') from None
         try:info=recover(binding.pid)
         except DesktopUnavailable as error:raise ValueError(str(error)) from None
     if info['pid']!=binding.pid:raise ValueError('微信窗口身份已变，请重新校准')
+    if info.get('kind',binding.window_kind)!=binding.window_kind:
+        raise ValueError('微信窗口类型已变化，请重新校准')
+    if binding.manual_regions and (info['width'],info['height'])!=(binding.width,binding.height):
+        raise ValueError('人工校准后的窗口尺寸已改变，请重新校准')
     sx,sy=info['width']/binding.width,info['height']/binding.height
     result=replace(binding,hwnd=info.get('hwnd',binding.hwnd),width=info['width'],height=info['height'])
     result.validate()
@@ -211,10 +230,96 @@ def capture_calibration(root,target,*,desktop_factory=WindowsDesktop,recognizer=
     return image,binding
 
 
+def preview_window(cfg,candidate,expected):
+    """Open the geometry editor from fresh pixels, even if automatic detection fails."""
+    from .layout import adapt_calibration,default_calibration_regions
+    from .windows import capture_calibration_window
+    image,info=capture_calibration_window(candidate['hwnd'],candidate['pid'])
+    if (candidate['kind'],candidate['title'])!=(info['kind'],info['title']):
+        raise ValueError('所选微信窗口已改变，请重新选择')
+    kind=info['kind']
+    existing=cfg.binding_for(expected) if expected else None
+    draft=Calibration(info['hwnd'],info['pid'],info['width'],info['height'],
+                      expected or '待识别的会话',default_calibration_regions(kind),
+                      target_group=expected or '',target_kind=cfg.conversation_targets.get(expected,{}).get('kind','group'),
+                      window_kind=kind)
+    if existing and (existing.hwnd,existing.pid,existing.width,existing.height,existing.window_kind)==(
+            draft.hwnd,draft.pid,draft.width,draft.height,kind):
+        draft=replace(draft,regions=existing.regions.copy(),manual_regions=existing.manual_regions)
+    draft=adapt_calibration(image,draft,info.get('scale',1))
+    return image,draft
+
+
+def bind_reviewed_window(cfg,binding,contact):
+    """Keep subscription order and mode while installing one verified calibration."""
+    name=binding.target_group
+    if not name or not binding.bottom_confirmed:raise ValueError('请先核对会话与校准区域')
+    if contact:
+        if not contact.selectable or (contact.name,contact.kind)!=(name,binding.target_kind):
+            raise ValueError('校准窗口与所选会话身份不一致')
+        old=cfg.conversation_targets.get(name)
+        if old and old!=contact.binding:raise ValueError('同名会话身份已改变，请重新选择')
+        accounts={v['account'] for v in cfg.conversation_targets.values()}
+        if accounts and accounts!={contact.account}:raise ValueError('校准对象须属于当前监听的登录账号')
+        cfg=replace(cfg,conversation_targets={**cfg.conversation_targets,name:contact.binding})
+    elif cfg.receive_mode=='database':
+        raise ValueError('未核实当前会话身份')
+    names=cfg.saved_groups
+    if names==(TARGET_GROUP,) and not cfg.calibration and not cfg.window_bindings:
+        names=(name,)
+    elif name not in names:names=(*names,name)
+    return cfg.with_saved_conversations(names).with_window_binding(name,binding)
+
+
+def verify_reviewed_window(cfg,draft,cancelled):
+    """Match the user's four regions twice before persisting any window or recipient."""
+    from .vision import Vision,calibration_send_matches,detached_title_matches
+    from .windows import capture_calibration_window
+    draft.validate()
+    rows=directory_for_settings(cfg,cancelled,process_id=draft.pid) if cfg.receive_mode=='database' else None
+    vision=Vision()
+    checked=None
+    for _ in range(2):
+        if cancelled.is_set():raise ValueError('校准已取消')
+        image,info=capture_calibration_window(draft.hwnd,draft.pid)
+        if (info['kind'],info['width'],info['height'])!=(draft.window_kind,draft.width,draft.height):
+            raise ValueError('微信窗口尺寸或类型已变化，请重新截图')
+        lines=read_header(vision.ocr,image.crop(draft.rect('header')))
+        if not lines or any(line.score<.92 for line in lines):
+            raise ValueError('未读到完整会话标题，请调整“会话标题”选区')
+        title=''.join(line.text for line in lines)
+        contact=None
+        if rows is not None:
+            matches=[row for row in rows if row.kind in ('private','group') and header_matches(
+                title,replace(draft,target_group=row.name,target_kind=row.kind,ocr_title=visual_name_key(row.name)))]
+            if len(matches)!=1:raise ValueError('选区中的标题未能与微信目录唯一对应，请重新框选完整标题')
+            contact=matches[0]
+            name,kind=contact.name,contact.kind
+        else:
+            name,kind=group_name(title),'group'
+        if draft.target_group and name!=draft.target_group:
+            raise ValueError(f'读到“{name}”，当前要校准的是“{draft.target_group}”。请选择对应窗口或重新框选标题')
+        binding=replace(draft,header_label=title,target_group=name,target_kind=kind,bottom_confirmed=True,
+                        ocr_title=visual_name_key(name) if contact else '')
+        if binding.window_kind=='detached' and not detached_title_matches(info['title'],binding):
+            raise ValueError('独立窗口标题与已识别聊天对象不一致')
+        updated=bind_reviewed_window(cfg,binding,contact)
+        if contact:resolve_contact(rows,updated,name)
+        if checked and (checked.target_group,checked.target_kind)!=(name,kind):
+            raise ValueError('两次截图的会话不同，请重新校准')
+        frame=vision.read(image,binding)
+        if not frame.safe or not frame.at_bottom:raise ValueError(frame.reason or '请确认聊天位于底部，并调整消息区域')
+        if not frame.draft_empty:raise ValueError('输入区域含有草稿或图标，请调整选区')
+        if not calibration_send_matches(vision.ocr,image,binding):raise ValueError('发送按钮选区未匹配“发送”，请框选按钮')
+        if cfg.receive_mode=='screen' and not frame.messages:raise ValueError('消息区域中未识别到聊天气泡')
+        checked=binding
+    return checked,contact
+
+
 def switch_group(root:Path,name:str,client,*,binding=None,cancelled=None,contact=None):
     cancelled=cancelled or threading.Event()
     previous=Settings.load(root)
-    first=previous.binding is None
+    first=not previous.calibration and not previous.window_bindings
     evidence=getattr(binding,'_capture_contact',None)
     if evidence and (not contact or contact.name!=evidence.name or contact.binding!=evidence.binding):
         raise ValueError('校准后微信账号或会话身份已改变，请重新校准')
@@ -239,9 +344,8 @@ def switch_group(root:Path,name:str,client,*,binding=None,cancelled=None,contact
         resolve_contact(rows,cfg,name)
     binding=binding or refresh_binding(cfg)
     kind=cfg.conversation_targets.get(name,{}).get('kind','group')
-    cfg.calibration=asdict(replace(binding,header_label=name,target_group=name,target_kind=kind,
-                                 ocr_title=visual_name_key(name) if name in cfg.conversation_targets else ''))
-    cfg.__post_init__()
+    cfg=cfg.with_window_binding(name,replace(binding,header_label=name,target_group=name,target_kind=kind,
+                                            ocr_title=visual_name_key(name) if name in cfg.conversation_targets else ''))
     def stopped():
         stop_confirmed(root,client)
         return {'running':False,'mode':'stopped','group':Settings.load(root).group,'reason':'群切换已取消，自动回复保持停止'}
