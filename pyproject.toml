@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=75"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "xiaomao-wechat-assistant"
+version = "0.2.0"
+description = "Visible Windows WeChat group assistant with local OCR and MCP controls"
+requires-python = ">=3.13"
+dependencies = [
+    "mcp==2.3.0",
+    "rapidocr==3.10.0",
+    "onnxruntime==1.31.1",
+    "pillow==13.0.0",
+    "httpx==0.28.1",
+    "pyyaml==6.0.3",
+    "pywin32==312; sys_platform == 'win32'",
+    "cryptography>=44",
+    "psutil==7.2.2",
+    "zstandard==0.25.0",
+    "imageio-ffmpeg>=0.8.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest==9.2.0"]
+
+[project.scripts]
+xiaomao = "xiaomao.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["xiaomao*"]
+
+[tool.setuptools.package-data]
+"xiaomao._vendor.dafeiyu" = ["*.md", "LICENSE"]
+"xiaomao" = ["ui_assets/*.png", "ui_assets/*.ico"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]

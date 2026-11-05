@@ -1,0 +1,112 @@
+"""带私有令牌的回环控制端口，不接受浏览器跨站调用。"""
+import hmac
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import json
+import os
+from pathlib import Path
+import secrets
+import threading
+from .privacy import private_dir, make_private
+
+
+class ControlServer:
+    def __init__(self, root: Path, engine):
+        self.root, self.engine = Path(root), engine
+        self.token = secrets.token_urlsafe(32)
+        owner = self
+
+        class Handler(BaseHTTPRequestHandler):
+            protocol_version = "HTTP/1.1"
+
+            def log_message(self, format, *args):
+                pass  # 不记录请求头、正文或控制令牌。
+
+            def answer(self, status, result):
+                data = json.dumps(result, ensure_ascii=False).encode("utf-8")
+                self.close_connection = True
+                try:
+                    self.send_response(status)
+                    self.send_header("Content-Type", "application/json; charset=utf-8")
+                    self.send_header("Content-Length", str(len(data)))
+                    self.send_header("Cache-Control", "no-store")
+                    self.send_header("Connection", "close")
+                    self.end_headers()
+                    self.wfile.write(data)
+                except ConnectionError:
+                    pass
+
+            def route(self, method):
+                if self.headers.get("Origin") is not None or self.headers.get("Sec-Fetch-Site") is not None:
+                    return self.answer(403, {"error": "不接受浏览器跨站控制"})
+                if self.headers.get("Host") != f"127.0.0.1:{owner.server.server_port}":
+                    return self.answer(403, {"error": "Host 无效"})
+                received = self.headers.get("Authorization", "").encode("utf-8")
+                expected = ("Bearer " + owner.token).encode("ascii")
+                if not hmac.compare_digest(received, expected):
+                    return self.answer(401, {"error": "控制凭据无效"})
+                routes = {"GET": {"/status": engine.status, "/pending": lambda: {"tasks": engine.pending()}},
+                          "POST": {"/observe": engine.observe, "/enable": engine.enable, "/pause": engine.pause, "/stop": engine.stop,
+                                   "/reply_latest":engine.reply_latest,
+                                   "/companion_preview":lambda:engine.companion_preview(),
+                                   "/companion_once":lambda:engine.companion_once()}}
+                action = routes[method].get(self.path)
+                if action is None:
+                    return self.answer(404, {"error": "没有这个控制操作"})
+                if self.headers.get("Transfer-Encoding"):
+                    return self.answer(400, {"error": "不接受分块请求"})
+                try:
+                    length = int(self.headers.get("Content-Length", "0"))
+                except ValueError:
+                    return self.answer(400, {"error": "请求长度无效"})
+                if length > 4096:
+                    return self.answer(413, {"error": "请求过大"})
+                if length < 0:
+                    return self.answer(400, {"error": "请求长度无效"})
+                if method == "POST":
+                    if self.headers.get("Content-Type", "").split(";", 1)[0] != "application/json":
+                        return self.answer(400, {"error": "需要 JSON 请求"})
+                    try:
+                        if json.loads(self.rfile.read(length) or b"{}") != {}:
+                            return self.answer(400, {"error": "操作不接受附加参数"})
+                    except (ValueError, UnicodeError):
+                        return self.answer(400, {"error": "JSON 无效"})
+                try:
+                    return self.answer(200, action())
+                except ValueError as error:
+                    return self.answer(409, {"error": str(error)})
+                except Exception:
+                    return self.answer(500, {"error": "控制请求未能完成"})
+
+            def do_GET(self):
+                self.route("GET")
+
+            def do_POST(self):
+                self.route("POST")
+
+        self.server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+        self.server.daemon_threads = True
+        self.url = f"http://127.0.0.1:{self.server.server_port}"
+        self.thread = None
+
+    def __enter__(self):
+        directory = private_dir(self.root / "runtime")
+        temporary = directory / "control.json.tmp"
+        temporary.write_text(json.dumps({"host": "127.0.0.1", "port": self.server.server_port,
+                                         "token": self.token, "pid": os.getpid()}), encoding="utf-8")
+        make_private(temporary)
+        os.replace(temporary, directory / "control.json")
+        self.thread = threading.Thread(target=self.server.serve_forever, daemon=True, name="xiaomao-control")
+        self.thread.start()
+        return self
+
+    def __exit__(self, *args):
+        self.server.shutdown()
+        self.server.server_close()
+        if self.thread:
+            self.thread.join(2)
+        endpoint = self.root / "runtime" / "control.json"
+        try:
+            if json.loads(endpoint.read_text(encoding="utf-8")).get("token") == self.token:
+                endpoint.unlink()
+        except (FileNotFoundError, ValueError):
+            pass

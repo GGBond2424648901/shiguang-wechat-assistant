@@ -1,0 +1,12 @@
+.venv/
+runtime/
+*.dpapi
+*.sqlite*
+*.log
+assets/sticker_library/
+build/
+dist/
+.pytest_cache/
+__pycache__/
+*.pyc
+*.egg-info/

@@ -1,0 +1,5 @@
+keywords: [小玲, 小猫, 大肥鱼]
+prompts:
+  - role: system
+    content: "{persona}"
+format_user_prompt: "{prompt}"
