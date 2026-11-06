@@ -3,9 +3,19 @@ import argparse
 import shutil
 from zipfile import ZIP_DEFLATED, ZipFile
 from pathlib import Path
+from brand_assets import create_assets, NAMES
 
 ROOT = Path(__file__).resolve().parent.parent
 MANIFEST = ROOT / "packaging" / "public-files.txt"
+
+
+def review_names(files):
+    forbidden={'.git','.codex','runtime','config','build','dist','design','assets','node_modules','.venv'}
+    for name in files:
+        if (name.is_absolute() or '..' in name.parts or any(part.lower() in forbidden for part in name.parts)
+                or name.suffix.lower() in ('.dpapi','.sqlite','.db','.log','.env')
+                or name.name.lower().endswith(('.sqlite3','-wal','-shm'))):
+            raise ValueError(f'Private or development-only path is not publishable: {name}')
 
 
 def export(destination: Path, archive: Path | None = None):
@@ -14,6 +24,7 @@ def export(destination: Path, archive: Path | None = None):
         raise ValueError("Use a new output directory for every export")
     names = MANIFEST.read_text(encoding="utf-8").splitlines()
     files = [Path(name.strip()) for name in names if name.strip() and not name.startswith("#")]
+    review_names(files)
     runtime_modules = {path.relative_to(ROOT) for path in (ROOT / "xiaomao").rglob("*.py")}
     missing_modules = runtime_modules.difference(files)
     if missing_modules:
@@ -28,6 +39,8 @@ def export(destination: Path, archive: Path | None = None):
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / name, target)
     shutil.copyfile(destination / "packaging/public.gitignore", destination / ".gitignore")
+    # Public builds use neutral artwork, never the owner's local icon/avatar.
+    create_assets(destination/'xiaomao/ui_assets')
     # Supply an upstream-derived factory persona, never a user's edited persona.
     config = destination / "config"
     (config / "presets").mkdir(parents=True, exist_ok=True)
@@ -38,7 +51,8 @@ def export(destination: Path, archive: Path | None = None):
     )
     if archive:
         with ZipFile(archive, "w", ZIP_DEFLATED) as package:
-            for name in sorted([*files, Path(".gitignore"), Path("config/persona.md"), Path("config/presets/xiaoling.yml")]):
+            generated=[Path('xiaomao/ui_assets')/name for name in NAMES]
+            for name in sorted(set([*files,*generated,Path(".gitignore"),Path("config/persona.md"),Path("config/presets/xiaoling.yml")])):
                 package.write(destination / name, name)
     print(destination)
 

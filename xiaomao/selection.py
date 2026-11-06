@@ -157,7 +157,7 @@ def _read_chat_frames(cfg,binding,desktop_factory,recognizer,entries,expected=No
         for _ in range(2):
             image=desktop.capture()
             binding=getattr(desktop,'calibration',None) or binding
-            lines=read_header(ocr,image.crop(binding.rect('header')))
+            lines=read_header(ocr,image.crop(binding.rect('header')),binding)
             label=''.join(line.text for line in lines)
             if not lines or any(line.score<.92 for line in lines):
                 raise ValueError('当前会话标题不清晰')
@@ -243,6 +243,13 @@ def preview_window(cfg,candidate,expected):
                       expected or '待识别的会话',default_calibration_regions(kind),
                       target_group=expected or '',target_kind=cfg.conversation_targets.get(expected,{}).get('kind','group'),
                       window_kind=kind)
+    if kind=='detached':
+        # Qt keeps this title row at the same DPI-scaled height when the
+        # chat is resized. A percentage cut through titles in short windows.
+        header=draft.regions['header']
+        header[1]=18*info.get('scale',1)/draft.height
+        header[3]=96*info.get('scale',1)/draft.height
+        draft.regions['messages'][1]=max(draft.regions['messages'][1],header[3]+2/draft.height)
     if existing and (existing.hwnd,existing.pid,existing.width,existing.height,existing.window_kind)==(
             draft.hwnd,draft.pid,draft.width,draft.height,kind):
         draft=replace(draft,regions=existing.regions.copy(),manual_regions=existing.manual_regions)
@@ -271,6 +278,25 @@ def bind_reviewed_window(cfg,binding,contact):
     return cfg.with_saved_conversations(names).with_window_binding(name,binding)
 
 
+def rediscover_detached(cfg,names,cancelled):
+    """Rebind reopened chat windows by account/recipient, never a recycled HWND."""
+    from .windows import list_calibration_windows
+    from .vision import detached_title_matches
+    candidates=list_calibration_windows()
+    for name in names:
+        old=cfg.binding_for(name)
+        if not old or old.window_kind!='detached' or name not in cfg.conversation_targets:continue
+        matches=[w for w in candidates if w['kind']=='detached' and detached_title_matches(w['title'],old)]
+        if len(matches)!=1 or matches[0]['minimized'] or cancelled.is_set():continue
+        try:
+            _,draft=preview_window(cfg,matches[0],name)
+            checked,contact=verify_reviewed_window(cfg,draft,cancelled)
+            if contact and contact.binding==cfg.conversation_targets[name]:
+                cfg=bind_reviewed_window(cfg,checked,contact)
+        except (ValueError,RuntimeError,OSError):continue
+    return cfg
+
+
 def verify_reviewed_window(cfg,draft,cancelled):
     """Match the user's four regions twice before persisting any window or recipient."""
     from .vision import Vision,calibration_send_matches,detached_title_matches
@@ -284,7 +310,7 @@ def verify_reviewed_window(cfg,draft,cancelled):
         image,info=capture_calibration_window(draft.hwnd,draft.pid)
         if (info['kind'],info['width'],info['height'])!=(draft.window_kind,draft.width,draft.height):
             raise ValueError('微信窗口尺寸或类型已变化，请重新截图')
-        lines=read_header(vision.ocr,image.crop(draft.rect('header')))
+        lines=read_header(vision.ocr,image.crop(draft.rect('header')),draft)
         if not lines or any(line.score<.92 for line in lines):
             raise ValueError('未读到完整会话标题，请调整“会话标题”选区')
         title=''.join(line.text for line in lines)

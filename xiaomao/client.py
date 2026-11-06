@@ -28,14 +28,14 @@ class ControlClient:
         except (OSError, ValueError, KeyError, TypeError):
             raise ControlUnavailable("助手尚未运行，或本机控制信息无效") from None
 
-    def request(self, operation: str) -> dict:
-        if operation not in ("status", "pending", "observe", "enable", "pause", "stop", "reply_latest", "companion_preview", "companion_once","reload_windows"):
+    def request(self, operation: str, payload=None) -> dict:
+        if operation not in ("status", "pending", "observe", "enable", "pause", "stop", "reply_latest", "companion_preview", "companion_once","reload_windows","stop_if_idle","queue_text","companion_configure","enable_selected"):
             raise ControlUnavailable("不支持这个控制操作")
         url, token = self._endpoint()
         try:
             with httpx.Client(timeout=3, follow_redirects=False, trust_env=False) as client:
                 headers = {"Authorization": "Bearer " + token}
-                response = client.get(url+"/"+operation, headers=headers) if operation in ("status", "pending") else client.post(url+"/"+operation, headers=headers, json={})
+                response = client.get(url+"/"+operation, headers=headers) if operation in ("status", "pending") else client.post(url+"/"+operation, headers=headers, json=payload or {})
                 data = response.json()
         except (httpx.HTTPError, ValueError):
             raise ControlUnavailable("无法连接本机助手") from None
@@ -49,10 +49,17 @@ class ControlClient:
     def enable(self): return self.request("enable")
     def pending(self): return self.request("pending")
     def stop(self): return self.request("stop")
+    def stop_if_idle(self):return self.request('stop_if_idle')
     def reply_latest(self):return self.request('reply_latest')
-    def companion_preview(self):return self.request('companion_preview')
-    def companion_once(self):return self.request('companion_once')
+    def companion_preview(self,**target):return self.request('companion_preview',target)
+    def companion_once(self,**target):return self.request('companion_once',target)
+    def companion_configure(self,group,scope,preferences):
+        return self.request('companion_configure',dict(group=group,scope=scope,preferences=preferences))
+    def enable_selected(self,group,scope):
+        return self.request('enable_selected',dict(group=group,scope=scope))
     def reload_windows(self):return self.request('reload_windows')
+    def queue_text(self, group, text, request_id):
+        return self.request('queue_text',dict(group=group,text=text,request_id=request_id))
 
     def start(self,initial_mode=None) -> dict:
         if initial_mode not in (None,'auto','observe','paused'):raise ValueError('启动模式无效')

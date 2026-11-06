@@ -79,7 +79,11 @@ class SessionsPage(tk.Frame):
         self.selected_name = None
         self.row_widgets = {}
         self.canvas = tk.Canvas(self, bg=BG, highlightthickness=0, bd=0)
-        self.bar = ttk.Scrollbar(self, command=self.canvas.yview)
+        lane=tk.Frame(self,bg=BG)
+        lane.pack(side='right',fill='y')
+        lane.pack_propagate(False)
+        self.bar = ttk.Scrollbar(lane, command=self.canvas.yview)
+        lane.configure(width=self.bar.winfo_reqwidth())
         self.canvas.configure(yscrollcommand=self._scroll_changed)
         self.canvas.pack(side='left', fill='both', expand=True)
         self.body = tk.Frame(self.canvas, bg=BG)
@@ -155,7 +159,7 @@ class SessionsPage(tk.Frame):
         self.bar.set(first, last)
         if float(first) > .001 or float(last) < .999:
             if not self.bar.winfo_manager():
-                self.bar.pack(side='right', fill='y')
+                self.bar.pack(fill='both',expand=True)
         else:
             self.bar.pack_forget()
 
@@ -197,7 +201,9 @@ class SessionsPage(tk.Frame):
     def _resize(self, event):
         width = max(1, event.width)
         self.canvas.itemconfigure(self.item, width=width)
-        wide = width >= 645
+        previous=getattr(self,'_wide',None)
+        wide = width >= (645 if previous is None else 630 if previous else 660)
+        self._wide=wide
         self.body.columnconfigure(0, weight=7 if wide else 1, uniform='cards' if wide else '')
         self.body.columnconfigure(1, weight=6 if wide else 0, uniform='cards' if wide else '')
         self.body.rowconfigure(0, minsize=max(0, event.height-3) if wide else 0)

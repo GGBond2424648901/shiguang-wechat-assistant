@@ -60,6 +60,8 @@ if os.name == "nt":
     U.GetForegroundWindow.restype = W.HWND
     U.GetAncestor.argtypes = [W.HWND, W.UINT]
     U.GetAncestor.restype = W.HWND
+    U.GetLastActivePopup.argtypes=[W.HWND]
+    U.GetLastActivePopup.restype=W.HWND
     U.WindowFromPoint.argtypes = [W.POINT]
     U.WindowFromPoint.restype = W.HWND
     U.GetWindowRect.argtypes = [W.HWND, ctypes.POINTER(W.RECT)]
@@ -349,6 +351,10 @@ class WindowsDesktop:
         self.last_editor_proof = ''
         self._sticker_snapshot_blocked = False
         self._sidebar_ocr=None
+        self._last_wake=-float('inf')
+        self._return_window=None
+        self._wake_generation=None
+        self._sent_generation=None
         self.navigation=navigation or NavigationActivity()
 
     def _bound_details(self):
@@ -510,6 +516,31 @@ class WindowsDesktop:
     def finish_input(self):
         """Release geometry only after the engine verifies a send receipt."""
         self._input_cookie=None
+        returning,self._return_window=self._return_window,None
+        self._wake_generation=None
+        generation,self._sent_generation=self._sent_generation,None
+        if not returning or generation is None:return
+        original,original_pid,minimized=returning
+        try:
+            import win32process
+            if (self.input_generation()!=generation or not self.is_foreground() or
+                    not input_desktop_available() or self.cancelled.is_set()):return
+            if (not U.IsWindow(original) or not U.IsWindowVisible(original)
+                    or win32process.GetWindowThreadProcessId(original)[1]!=original_pid):return
+            U.SetForegroundWindow(original)
+            if minimized:
+                for _ in range(10):
+                    if self.input_generation()!=generation or self.cancelled.is_set():break
+                    front=U.GetForegroundWindow()
+                    if front==original:
+                        U.ShowWindowAsync(self.calibration.hwnd,7)  # SW_SHOWMINNOACTIVE
+                        break
+                    if front!=self.calibration.hwnd:break
+                    self.cancelled.wait(.025)
+        except Exception:
+            # Window restoration is optional. A vanished foreground process
+            # cannot invalidate an already confirmed WeChat receipt.
+            pass
 
     def prepare_send(self,idle_seconds=10):
         # Only called before a new editor transaction. Once input starts,
@@ -520,6 +551,9 @@ class WindowsDesktop:
         if not self.is_foreground():raise DesktopTemporarilyHidden('等待微信自然回到前台，不切换当前应用')
         self._background_binding()
         generation=self.input_generation()
+        if self._return_window and generation!=self._wake_generation:
+            self._return_window=None
+            self._wake_generation=None
         if self.idle_for()<idle_seconds:raise DesktopTemporarilyHidden('正在操作电脑，等待空闲后发送')
         if self.input_generation()!=generation:raise DesktopTemporarilyHidden('检测到人工输入，等待空闲后发送')
         self.check()
@@ -528,6 +562,79 @@ class WindowsDesktop:
 
     def is_foreground(self):
         return bool(self.calibration and U.GetForegroundWindow()==self.calibration.hwnd)
+
+    def route_state(self):
+        """Metadata only: no capture, restore, navigation or clipboard read."""
+        b=self.calibration
+        if not b:return '待校准'
+        try:
+            info=self._bound_details()
+            if info['pid']!=b.pid:return '需重新绑定'
+            if U.IsIconic(b.hwnd):return '已最小化'
+            if not U.IsWindowVisible(b.hwnd):return '窗口不可见'
+            return '在前台' if self.is_foreground() else '在后台'
+        except (DesktopUnavailable,OSError):return '需重新绑定'
+
+    def try_idle_wake(self,idle_seconds):
+        """Opt-in only. Restore the verified window during idle time."""
+        b=self.calibration
+        now=time.monotonic()
+        if not b or now-self._last_wake<20 or not input_desktop_available():return False
+        original=U.GetForegroundWindow()
+        generation=self.input_generation()
+        self._return_window=None
+        self._wake_generation=None
+        def valid():
+            if (self.cancelled.is_set() or not input_desktop_available() or
+                    self.input_generation()!=generation or self.idle_for()<idle_seconds or
+                    U.GetForegroundWindow() not in (original,b.hwnd)):return False
+            _check_calibration_lease(b.hwnd)
+            return self._bound_details()['pid']==b.pid
+        if not valid():return False
+        self._last_wake=now
+        was_minimized=bool(U.IsIconic(b.hwnd))
+        if was_minimized:
+            U.ShowWindowAsync(b.hwnd,4)  # SW_SHOWNOACTIVATE: restore before requesting focus.
+            for _ in range(10):
+                if not valid():return False
+                if not U.IsIconic(b.hwnd):break
+                if self.cancelled.wait(.05):return False
+            if U.IsIconic(b.hwnd):return False
+        if not valid() or not U.IsWindowVisible(b.hwnd):return False
+        if not self.is_foreground():U.SetForegroundWindow(b.hwnd)
+        if not self.is_foreground() and b.window_kind=='detached' and valid():
+            self._activate_idle_editor(valid)
+        acquired=self.is_foreground() and valid()
+        if acquired and original and original!=b.hwnd:
+            import win32process
+            try:
+                self._return_window=(original,win32process.GetWindowThreadProcessId(original)[1],was_minimized)
+                self._wake_generation=generation
+            except OSError:self._return_window=None
+        return acquired
+
+    def _activate_idle_editor(self,valid):
+        """A normal click in this chat may activate Qt. Never enter text here."""
+        import win32gui
+        from .vision import Vision
+        if not hasattr(self,'_wake_vision'):self._wake_vision=Vision()
+        b=self.calibration
+        if U.GetLastActivePopup(b.hwnd)!=b.hwnd or not win32gui.IsWindowEnabled(b.hwnd):return
+        for _ in range(2):
+            if not valid():return
+            image=self.capture();b=self.calibration
+            frame=self._wake_vision.read_controls(image,b)
+            if not frame.safe or frame.group!=b.target_group or not frame.at_bottom or not frame.draft_empty:return
+        info=self._bound_details()
+        left,top=info['rect'][:2]
+        x1,y1,x2,y2=b.rect('input')
+        x,y=win32gui.ScreenToClient(b.hwnd,(left+(x1+x2)//2,top+(y1+y2)//2))
+        point=(y<<16)|(x&0xffff)
+        if (not valid() or self._bound_details()['rect']!=info['rect']
+                or U.GetLastActivePopup(b.hwnd)!=b.hwnd or not win32gui.IsWindowEnabled(b.hwnd)):return
+        win32gui.SendMessageTimeout(b.hwnd,0x201,1,point,2,500)
+        # Release the same window's button even if focus changed on button-down.
+        win32gui.SendMessageTimeout(b.hwnd,0x202,0,point,2,500)
 
     def park_editor_pointer(self,idle_seconds):
         """Move an idle pointer halo away; the caller must take a fresh draft reading."""
@@ -570,7 +677,7 @@ class WindowsDesktop:
         if detached or self.calibration.ocr_title:
             from .vision import LocalOCR,read_header,header_matches
             if self._sidebar_ocr is None:self._sidebar_ocr=LocalOCR()
-            lines=read_header(self._sidebar_ocr,image.crop(self.calibration.rect('header')))
+            lines=read_header(self._sidebar_ocr,image.crop(self.calibration.rect('header')),self.calibration)
             if lines and all(r.score>=.92 for r in lines) and header_matches(''.join(r.text for r in lines),self.calibration):return
             if detached:raise DesktopTemporarilyHidden('独立聊天窗口标题与所选会话不符，请显示绑定的聊天')
         _,found=self._find_target(image)
@@ -602,7 +709,7 @@ class WindowsDesktop:
         idle_credit=self.idle_for()
         generation=self.prepare_send(idle_seconds)
         image=self.capture();self.validate_target(image)
-        lines=read_header(self._sidebar_ocr,image.crop(self.calibration.rect('header')))
+        lines=read_header(self._sidebar_ocr,image.crop(self.calibration.rect('header')),self.calibration)
         if not lines or any(r.score<.92 for r in lines) or not header_matches(''.join(r.text for r in lines),self.calibration):return False
         region=self.calibration.rect('messages');crop=image.crop(region)
         lines=self._sidebar_ocr(crop);messages=Vision._messages(crop,lines)
@@ -866,6 +973,7 @@ class WindowsDesktop:
     def click_send(self) -> None:
         self.assert_input_focus()
         self._click("send")
+        self._sent_generation=self.input_generation()
 
 
 _WORKER_MUTEX = "Local\\XiaomaoWechatVisibleWorker"

@@ -49,6 +49,7 @@ class CalibrationFlow:
         label(box,'已打开的微信窗口',bold=True).pack(anchor='w')
         self.picker=ttk.Combobox(box,state='readonly',width=45)
         self.picker.pack(fill='x',pady=(3,8))
+        self.target.bind('<<ComboboxSelected>>',lambda _:self.preselect())
         label(box,textvariable=self.status,color=MUTED,wraplength=420).pack(fill='x',pady=(0,8))
         bar=tk.Frame(box,bg=PAPER);bar.pack(fill='x')
         self.reload=button(bar,'刷新',lambda:self.discover(auto=False),compact=True)
@@ -90,13 +91,31 @@ class CalibrationFlow:
                 titles=[f'{title} · 窗口 {w["hwnd"]}' for title,w in zip(titles,windows)]
             self.picker.configure(values=titles)
             if windows:
-                existing=self.panel.settings.binding_for(self.target.get())
-                index=next((i for i,w in enumerate(windows) if existing and w['hwnd']==existing.hwnd and w['pid']==existing.pid),0)
-                self.picker.current(index)
+                self.preselect()
             self._pending(False)
             self.status.set('选择要校准的微信窗口。其他会话保留现有绑定。' if windows else '没有可校准的聊天窗口。可打开微信，进入聊天后刷新。')
             if auto and len(windows)==1:self.capture()
         self.panel.work(list_calibration_windows,found,self.fail,mutates=False)
+
+    def preselect(self):
+        from .config import Calibration
+        from .vision import detached_title_matches
+        if not self.windows:return
+        name=self.target.get()
+        existing=self.panel.settings.binding_for(name)
+        target=self.panel.settings.conversation_targets.get(name)
+        matches=[]
+        if target:
+            probe=Calibration(1,1,1,1,name,{},target_group=name,target_kind=target['kind'])
+            matches=[i for i,w in enumerate(self.windows) if w['kind']=='detached' and
+                     (not existing or existing.pid==w['pid']) and detached_title_matches(w['title'],probe)]
+        # This is only a suggestion; saving still checks the account, title
+        # and regions twice. Ambiguous names require an explicit window choice.
+        exact=next((i for i,w in enumerate(self.windows) if existing and
+                    (w['hwnd'],w['pid'])==(existing.hwnd,existing.pid)),None)
+        if len(matches)==1:self.picker.current(matches[0])
+        elif len(matches)>1 and exact not in matches:self.picker.set('')
+        else:self.picker.current(exact if exact is not None else 0)
 
     def open_wechat(self):
         from .windows import open_wechat_for_calibration

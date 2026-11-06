@@ -1,6 +1,6 @@
 """Runtime preferences and masked credential entry for the native workspace."""
 import tkinter as tk
-from tkinter import ttk
+from tkinter import ttk, messagebox
 
 from .credentials import CredentialError, CredentialStore
 from .persona_ui import BG, FONT, INK, LINE, MUTED, PAPER, PEACH, SELECTED, _action, _card
@@ -21,6 +21,8 @@ class SettingsPage(tk.Frame):
         self.calibration_text=tk.StringVar(self)
         self.rate_text=tk.StringVar(self)
         self.receive_text=tk.StringVar(self)
+        self.route_note=tk.StringVar(self)
+        self._wide=None
         self._build()
         self.on_show()
 
@@ -44,15 +46,26 @@ class SettingsPage(tk.Frame):
             self.panel.at_unique.set(cfg.self_name_unique_confirmed)
         self.scope=(cfg.memory_scope,cfg.private_tone_key)
         self.scope_text.set(cfg.group)
+        self.route_picker.configure(values=cfg.allowed_groups)
+        if self.route_picker.get() not in cfg.allowed_groups:self.route_picker.set(cfg.group)
+        self.refresh_route()
         self.rate_text.set(f'{cfg.minute_limit} 条 / 分钟  ·  {cfg.hourly_limit} 条 / 小时')
-        calibrated=cfg.binding and cfg.binding.bottom_confirmed
-        self.calibration_text.set('●  已校准' if calibrated else '○  待校准')
-        self.calibration_badge.configure(bg='#E2F3E1' if calibrated else '#F8EBD9',fg='#31663E' if calibrated else '#865E37')
         self.owner_check.configure(state='normal' if cfg.private_tone_key else 'disabled')
         screen=cfg.receive_mode=='screen'
         self.receive_text.set('屏幕读取 · 等待微信可见' if screen else '数据库监听 · 微信最小化时也可接收')
         self.split_check.configure(state='disabled' if screen else 'normal',
                                   text='屏幕读取仅发单条回复' if screen else '分气泡发送')
+
+    def refresh_route(self,*_):
+        name=self.route_picker.get()
+        binding=self.panel.settings.binding_for(name)
+        calibrated=bool(binding and binding.bottom_confirmed)
+        self.calibration_text.set('●  已校准' if calibrated else '○  待校准')
+        self.calibration_badge.configure(bg='#E2F3E1' if calibrated else '#F8EBD9',fg='#31663E' if calibrated else '#865E37')
+        kind='独立聊天窗口' if binding and binding.window_kind=='detached' else '共享微信主窗口' if binding else '尚未绑定发送窗口'
+        live=getattr(getattr(self.panel,'view',None),'status',{})
+        row=next((r for r in live.get('groups',[]) if r['name']==name),{})
+        self.route_note.set(' · '.join(s for s in (kind,row.get('window_state','')) if s))
 
     def _add_entry(self):
         if len(self.key_entries)>=CredentialStore.MAX_KEYS:return
@@ -94,6 +107,11 @@ class SettingsPage(tk.Frame):
                 self.panel.notice.set('请输入要保存的新密钥。')
             return
         mode=self.key_mode.get()
+        if mode=='replace' and self.key_count and not messagebox.askokcancel(
+                '替换已保存的密钥？','原密钥将被本次输入替换。取消会保留当前密钥与输入内容。',
+                parent=self.winfo_toplevel(),icon='warning'):
+            self.panel.notice.set('已取消替换，原密钥保持不变')
+            return
         runtime=self.panel.settings.runtime
         self.key_busy=True;self.key_save.configure(state='disabled');self._entry_state()
         def save():
@@ -116,7 +134,7 @@ class SettingsPage(tk.Frame):
             if after:after()
         def failed(error):
             self.key_busy=False;self.key_save.configure(state='normal');self._entry_state();self.panel.notice.set(error)
-        self.panel.work(save,done,failed)
+        self.panel.work(save,done,failed,label='保存加密密钥')
 
     def save(self):
         self.save_keys(after=self.panel.save_settings)
@@ -141,6 +159,9 @@ class SettingsPage(tk.Frame):
         self.grid_rowconfigure(0,weight=1)
         self.grid_columnconfigure(0,weight=1)
         self.bar=ttk.Scrollbar(self)
+        # Reserve the scrollbar lane even when the bar is hidden. Appearing
+        # and disappearing must not change the card breakpoint under the cursor.
+        self.columnconfigure(1,minsize=self.bar.winfo_reqwidth())
         self.canvas=tk.Canvas(self,bg=BG,bd=0,highlightthickness=0,width=1,height=1,
                               yscrollcommand=self._scroll_changed)
         self.canvas.grid(row=0,column=0,sticky='nsew')
@@ -210,7 +231,15 @@ class SettingsPage(tk.Frame):
         label(right,'微信窗口',0)
         self.calibration_badge=tk.Label(right,textvariable=self.calibration_text,font=(FONT,10),padx=6,pady=2)
         self.calibration_badge.grid(row=0,column=1,sticky='w')
-        _action(right,'重新校准',self.panel.calibrate).grid(row=0,column=2,sticky='e')
+        _action(right,'管理监听',lambda:self.panel.view.select('sessions')).grid(row=0,column=2,sticky='e')
+        label(right,'监听对象',1)
+        self.route_picker=ttk.Combobox(right,state='readonly',width=12)
+        self.route_picker.grid(row=1,column=1,columnspan=2,sticky='ew',pady=(8,3))
+        self.route_picker.bind('<<ComboboxSelected>>',self.refresh_route)
+        tk.Label(right,textvariable=self.route_note,fg=MUTED,bg=PAPER,anchor='w',font=(FONT,9)
+                 ).grid(row=2,column=0,columnspan=2,sticky='w')
+        self.route_calibrate=_action(right,'校准该窗口',lambda:self.panel.calibrate(self.route_picker.get()))
+        self.route_calibrate.grid(row=2,column=2,sticky='e')
         tk.Frame(wechat,bg=LINE,height=1).pack(fill='x',padx=16,pady=(12,5))
         def check(parent,text,var):
             return tk.Checkbutton(parent,text=text,variable=var,fg=INK,bg=PAPER,activebackground=PAPER,
@@ -219,6 +248,8 @@ class SettingsPage(tk.Frame):
         check(wechat,'启动时自动回复',self.panel.auto_on_launch).pack(fill='x',padx=16,pady=(4,0))
         self.split_check=check(wechat,'分气泡发送',self.panel.split_replies)
         self.split_check.pack(fill='x',padx=16)
+        if hasattr(self.panel,'idle_wake'):
+            check(wechat,'允许空闲时唤起微信发送（会切换前台）',self.panel.idle_wake).pack(fill='x',padx=16)
         tk.Frame(wechat,bg=LINE,height=1).pack(fill='x',padx=16,pady=(12,8))
         fields=tk.Frame(wechat,bg=PAPER);fields.pack(fill='x',padx=16,pady=(3,12))
         fields.grid_columnconfigure(1,weight=1)
@@ -243,11 +274,12 @@ class SettingsPage(tk.Frame):
         inner=tk.Frame(flow,bg=PAPER);inner.pack(fill='x',padx=14,pady=9)
         _action(inner,'查看队列',lambda:self.panel.view.select('pending'),icon_name='list').pack(side='right',padx=3)
         tk.Label(inner,textvariable=self.receive_text,bg=PAPER,fg=INK,font=(FONT,11,'bold'),anchor='w').pack(fill='x')
-        self.transport_hint=tk.Label(inner,text='回复准备好后，会等微信自然回到前台、键鼠空闲再发送。关闭面板可保留后台。',
+        self.transport_hint=tk.Label(inner,text='默认不抢焦点，微信在前台且空闲时发送。需要空闲时自动还原微信，可勾选上方唤起选项。独立聊天窗口逐个校准，多个对象也可以共用主窗口。',
                                      bg=PAPER,fg=MUTED,font=(FONT,9),anchor='w',justify='left')
         self.transport_hint.pack(fill='x',pady=(3,0))
         footer=tk.Frame(self,bg=BG);footer.grid(row=1,column=0,columnspan=2,sticky='ew',pady=(10,0))
-        _action(footer,'保存设置',self.save,True,'save').pack(side='right')
+        self.save_button=_action(footer,'保存设置',self.save,True,'save')
+        self.save_button.pack(side='right')
         _action(footer,'停止并退出',self.panel.stop_and_exit).pack(side='right',padx=10)
         self.canvas.bind('<Configure>',self._arrange)
         self._wheel_tag=f'SettingsScroll{self.winfo_id()}'
@@ -258,19 +290,22 @@ class SettingsPage(tk.Frame):
     def _arrange(self,event):
         width=max(1,event.width)
         self.canvas.itemconfigure(self.body_window,width=width)
-        wide=width>=720
+        wide=width >= (720 if self._wide is None else 704 if self._wide else 736)
+        self.transport_hint.configure(wraplength=max(150,width-180))
+        if wide==self._wide:return
+        self._wide=wide
         self.body.columnconfigure(0,weight=1,uniform='cards' if wide else '')
         self.body.columnconfigure(1,weight=1 if wide else 0,uniform='cards' if wide else '')
         self.model_card.grid(row=0,column=0,sticky='new',padx=(0,6 if wide else 0))
         self.wechat_card.grid(row=0 if wide else 1,column=1 if wide else 0,sticky='new',
                               padx=(6 if wide else 0,0),pady=(0 if wide else 9,0))
         self.flow.grid(row=1 if wide else 2,column=0,columnspan=2 if wide else 1,sticky='ew',pady=(10,3))
-        self.transport_hint.configure(wraplength=max(150,width-180))
 
     def _scroll_changed(self,first,last):
         self.bar.set(first,last)
-        if float(last)-float(first)<.999:self.bar.grid(row=0,column=1,sticky='ns')
-        else:self.bar.grid_remove()
+        needed=float(last)-float(first)<.999
+        if needed and not self.bar.winfo_manager():self.bar.grid(row=0,column=1,sticky='ns')
+        elif not needed and self.bar.winfo_manager():self.bar.grid_remove()
 
     def _tag_controls(self,widget):
         widget.bindtags((*widget.bindtags(),self._wheel_tag))

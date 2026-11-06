@@ -281,7 +281,7 @@ def test_custom_entries_reach_the_real_panel_apply_and_reload_without_resuming(p
     started=[]
     panel.client=SimpleNamespace(status=lambda:{'mode':'paused'},start=lambda **kw:started.append(kw) or {})
     panel.apply_group_settings=MethodType(Panel.apply_group_settings,panel)
-    panel.work=lambda action,done,failed:done(action())
+    panel.work=lambda action,done,failed,**kw:done(action())
     panel.view.render=lambda:None
     panel.show_status=lambda state:None
     panel.target_group=tk.StringVar(panel.root)

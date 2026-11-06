@@ -134,7 +134,7 @@ def test_applying_advertised_preset_enables_its_minute_cap_and_randomness(system
     started=[]
     panel=SimpleNamespace(directory=e.settings.root,
                           client=SimpleNamespace(status=lambda:{'mode':'auto'},start=lambda **kw:started.append(kw) or {}),
-                          work=lambda action,*a:action())
+                          work=lambda action,*a,**kw:action())
     Panel.apply_group_settings(panel,[e.settings.group],'all',(4,180,10,4),lambda:None)
     result=Settings.load(e.settings.root)
     assert result.natural_pacing
@@ -182,7 +182,7 @@ def test_saving_other_rules_preserves_legacy_runtime_pacing(system,monkeypatch):
     cfg.save()
     monkeypatch.setattr(selection,'refresh_binding',lambda settings:settings.binding)
     monkeypatch.setattr(selection,'stop_confirmed',lambda *args:None)
-    panel=SimpleNamespace(directory=cfg.root,work=lambda action,*args:action(),
+    panel=SimpleNamespace(directory=cfg.root,work=lambda action,*args,**kw:action(),
                           client=SimpleNamespace(status=lambda:{'mode':'paused'},start=lambda **kw:{}))
     Panel.apply_group_settings(panel,[cfg.group],'all',(4,180,10,4),lambda:None,keep_pacing=True)
     saved=Settings.load(cfg.root)

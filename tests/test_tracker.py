@@ -91,7 +91,7 @@ def test_top_image_clipped_by_reply_scroll_does_not_break_text_anchors():
     from xiaomao.tracker import SequenceTracker
     tracker=SequenceTracker()
     image=msg('[image]',kind='image')
-    a,b,q=msg('小玲在不在'),msg('@小凶许'),msg('@小玲你好')
+    a,b,q=msg('小玲在不在'),msg('@小明白'),msg('@小玲你好')
     tracker.update([image,a,b,q])
     own=msg('你好喵',direction='out')
     after=[msg('[partial]',kind='partial'),a,b,q,own]

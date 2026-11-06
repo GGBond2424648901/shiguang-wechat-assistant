@@ -48,6 +48,7 @@ _SEND_WAITS = {
     'hourly_limit':'等待小时发送额度恢复',
     'draft':'等待确认微信输入框为空，保留现有内容',
     'window':'等待目标微信窗口可安全输入',
+    'window_turn':'等待共用微信窗口完成上一会话的发送',
     'clipboard':'等待剪贴板可用，尚未输入',
 }
 
@@ -67,6 +68,7 @@ class Engine:
         self.clock, self.settle_seconds = clock, settle_seconds
         self.lock = threading.RLock()
         self.work_lock = threading.Lock()
+        self.window_turn=None
         self.cancelled = threading.Event()
         self.stop_event = threading.Event()
         if hasattr(desktop, "cancelled"):
@@ -244,7 +246,7 @@ class Engine:
                     "reply_mode":self.settings.reply_mode,
                     "split_replies":self.settings.split_replies,
                     "split_replies_effective":self.settings.split_replies and self.message_source is not None,
-                    "stickers_enabled":self.settings.stickers_enabled,"sticker_count":len(self.stickers.items),"sticker_preference":"菲比",
+                    "stickers_enabled":self.settings.stickers_enabled,"sticker_count":len(self.stickers.items),"sticker_preference":getattr(self.stickers,'preference_label',''),
                     "context_count":len(self.context),
                     "memory_count":len(self.memory.messages) if self.memory else len(self.context),
                     "memory_summary_chars":len(self.memory.summary) if self.memory else 0,
@@ -300,6 +302,8 @@ class Engine:
             if binding.window_kind=='detached':
                 raise DesktopTemporarilyHidden('独立窗口标题与已绑定会话不符，等待重新核对')
             selected=self.desktop.select_target(self.settings.idle_seconds)
+            if selected and self.window_turn and self.message_source:
+                self.window_turn(self,claim=True)
             raise DesktopTemporarilyHidden('已自动选择目标群，等待稳定画面' if selected else '微信已连接，等待空闲后定位所选群；当前聊天标题尚未匹配')
         if observation and frame.safe and frame.group==self.settings.group and not frame.draft_empty and self.message_source:
             raise DesktopTemporarilyHidden('微信输入框有草稿，等待处理后自动继续；仍在接收消息')
@@ -1000,7 +1004,8 @@ class Engine:
             if task.state=='candidate' and not task.sticker:
                 # OCR receipts have no stable message IDs. Keep a single paste
                 # in screen mode; database deliveries can attest each bubble.
-                enabled=self.settings.split_replies and self.message_source is not None
+                enabled=(self.settings.split_replies and self.message_source is not None
+                         and not (task.proactive and task.proactive.kind in ('checkin','signoff')))
                 split=getattr(self.model,'split_wechat_bubbles',None)
                 parts=split(reply,task.messages,enabled=enabled) if split else split_reply(reply,enabled=enabled)
                 reply, task.remaining_text=parts[0],tuple(parts[1:])
@@ -1030,6 +1035,9 @@ class Engine:
                     return
             task.reply, task.state = reply, "generated"
             self.store.update(task.id, "generated")
+        if task.sticker and hasattr(self.stickers,'collection_enabled') and not self.stickers.collection_enabled(task.sticker.item.character):
+            self._sticker_unavailable(task,'该表情分类已停用，改用文字回复')
+            return
         if task.sticker and not task.sticker_requested and not self.store.sticker_ready(self.settings.memory_scope,self.clock()):
             self._sticker_unavailable(task,'刚刚已发表情，这条改用文字接话')
             return
@@ -1042,10 +1050,23 @@ class Engine:
         if not allowed:
             self._waiting(task,limit_reason)
             return
+        if self.window_turn and not self.window_turn(self):
+            self._waiting(task,'window_turn')
+            return
         foreground=getattr(self.desktop,'is_foreground',None)
         if foreground is not None and not foreground():
-            self._waiting(task,'foreground')
-            return
+            wake=getattr(self.desktop,'try_idle_wake',None)
+            if not (self.settings.idle_wake and wake and self.message_source and
+                    hasattr(self.message_source,'assert_identity') and self.desktop.idle_for()>=self.settings.idle_seconds):
+                self._waiting(task,'foreground')
+                return
+            # No restore or focus request before account, freshness and quota checks.
+            if not self._ready_for_input(task):return
+            self.message_source.assert_identity()
+            if not wake(self.settings.idle_seconds) or not foreground():
+                self._waiting(task,'foreground')
+                self.reason='空闲唤起未获前台，保留待发回复；不模拟按键强抢焦点'
+                return
         if self.desktop.idle_for()<self.settings.idle_seconds:
             self._waiting(task,'desktop_busy')
             return

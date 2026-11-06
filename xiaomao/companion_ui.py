@@ -72,9 +72,12 @@ class CompanionPage(tk.Frame):
         self.preview_text = tk.StringVar(self, '尚未生成预览')
         self.queue_size = tk.StringVar(self, '—')
         self.scope_name = tk.StringVar(self)
+        self.scope_choice=tk.StringVar(self)
+        self.selected_name=''
         self.enabled = tk.BooleanVar(self)
         self.followup = tk.BooleanVar(self)
         self.idle = tk.BooleanVar(self)
+        self.gentle=tk.BooleanVar(self)
         self.limit = tk.StringVar(self)
         self.start = tk.StringVar(self)
         self.end = tk.StringVar(self)
@@ -87,11 +90,9 @@ class CompanionPage(tk.Frame):
         label(banner, '当前会话', color=PAPER, bold=True).pack(side='left', padx=(18, 12), pady=10)
         self.scope_label = label(banner, textvariable=self.scope_name, size=14, bold=True, color=PAPER)
         self.scope_label.pack(side='left', fill='x', expand=True, pady=10)
-        wave = tk.Canvas(banner, bg=INK, width=130, height=35, highlightthickness=0)
-        wave.pack(side='right', padx=(2, 12))
-        for shift, color in ((0, '#52718A'), (5, '#7896A7'), (9, '#426078')):
-            wave.create_line(1, 28+shift, 23, 20+shift, 50, 30+shift, 79, 20+shift,
-                             103, 3+shift, 130, 4+shift, smooth=True, fill=color)
+        self.scope_picker=ttk.Combobox(banner,textvariable=self.scope_choice,state='readonly',width=20)
+        self.scope_picker.pack(side='right',padx=12)
+        self.scope_picker.bind('<<ComboboxSelected>>',self._choose_scope)
         top = tk.Frame(self, bg=BG)
         top.pack(fill='x', pady=(11, 11))
         self.tabs = {}
@@ -237,7 +238,8 @@ class CompanionPage(tk.Frame):
         self.advanced_button.pack(fill='x', pady=8)
         self.advanced = tk.Frame(main, bg=PAPER)
         self._check(self.advanced, '聊完 2–5 分钟后，合适时补一句', self.followup)
-        self._check(self.advanced, '安静至少 3 小时后，偶尔自然搭话', self.idle)
+        self._check(self.advanced, '安静约一小时后，偶尔聊个新话题', self.idle)
+        self._check(self.advanced, '没人接话时，轻问一次，再自然收尾', self.gentle)
         label(self.advanced, '人格补充', color=MUTED).pack(anchor='w', pady=(7, 2))
         self.style = textbox(self.advanced, 3)
         self.style.pack(fill='x')
@@ -355,9 +357,22 @@ class CompanionPage(tk.Frame):
             var.set('—')
         self._notes_text('')
 
+    def _choose_scope(self,event=None):
+        self.selected_name=self.scope_choice.get()
+        self.refresh_scope()
+
+    def _view_config(self,settings):
+        if self.selected_name and self.selected_name in settings.allowed_groups:
+            return settings.for_group(self.selected_name)
+        return settings
+
     def refresh_scope(self, *, feedback=''):
         """Immediately invalidate old callbacks and clear their visible content."""
-        cfg = self.panel.settings
+        settings=self.panel.settings
+        if self.selected_name not in settings.allowed_groups:self.selected_name=''
+        cfg=self._view_config(settings)
+        self.scope_picker.configure(values=settings.allowed_groups)
+        self.scope_choice.set(cfg.group)
         if self.cfg and (self.cfg.group, self.cfg.memory_scope) == (cfg.group, cfg.memory_scope):
             if self.ready or not self.active or self.pending_load:
                 return
@@ -408,6 +423,7 @@ class CompanionPage(tk.Frame):
         self.enabled.set(bool(self.cfg.group in self.cfg.conversation_targets and prefs.enabled))
         self.followup.set(prefs.followup)
         self.idle.set(prefs.idle)
+        self.gentle.set(prefs.gentle_followups)
         self.limit.set(str(prefs.daily_max))
         self.start.set(f'{prefs.quiet_start//60:02}:{prefs.quiet_start%60:02}')
         self.end.set(f'{prefs.quiet_end//60:02}:{prefs.quiet_end%60:02}')
@@ -421,12 +437,20 @@ class CompanionPage(tk.Frame):
         self.poll_job = None
         if not self.active:
             return
-        if (self.cfg.group, self.cfg.memory_scope) != (self.panel.settings.group, self.panel.settings.memory_scope):
+        chosen=self._view_config(self.panel.settings)
+        if (self.cfg.group, self.cfg.memory_scope) != (chosen.group,chosen.memory_scope) or tuple(self.scope_picker.cget('values'))!=tuple(self.panel.settings.allowed_groups):
             self.refresh_scope()
         state = getattr(self.panel.view, 'status', {}) or {}
-        if state is not self.baseline_state and state.get('group') == self.cfg.group:
-            companion = state.get('companion') or {}
+        room=next((g for g in state.get('groups',[]) if g['name']==self.cfg.group),None)
+        if state is not self.baseline_state and (room or state.get('group') == self.cfg.group):
+            companion = (room or state).get('companion') or {}
             lines = [companion.get('reason') or '当前没有陪伴状态']
+            if room and room['mode']=='paused':lines=[room.get('reason') or '该会话已暂停']
+            elif companion.get('next_stage') and companion.get('next_candidate_at'):
+                from datetime import datetime
+                from .companion import LOCAL
+                due=datetime.fromtimestamp(companion['next_candidate_at'],LOCAL).strftime('%H:%M')
+                lines.append(f"{due} 左右 · {companion['next_stage']}")
             pending = next((g.get('pending_count') for g in state.get('groups', [])
                             if g.get('name') == self.cfg.group), state.get('pending_count'))
             self.queue_size.set('—' if pending is None else f'{pending} 条')
@@ -443,7 +467,7 @@ class CompanionPage(tk.Frame):
         self.poll_job = self.after(1200, self._status_tick)
 
     def _current(self, cfg, ticket):
-        current = Settings.load(self.panel.directory)
+        current = self._view_config(Settings.load(self.panel.directory))
         if ticket.is_set() or (current.group, current.memory_scope) != (cfg.group, cfg.memory_scope):
             raise ValueError('会话或页面已切换，本次操作已取消')
         return current
@@ -451,7 +475,7 @@ class CompanionPage(tk.Frame):
     def _display_current(self, cfg, ticket):
         if ticket is not self.cancel or ticket.is_set() or not self.active:
             return False
-        current = self.panel.settings
+        current = self._view_config(self.panel.settings)
         if (current.group, current.memory_scope) != (cfg.group, cfg.memory_scope):
             self.refresh_scope()
             return False
@@ -524,7 +548,7 @@ class CompanionPage(tk.Frame):
         except ValueError:
             raise ValueError('每日上限请填 1 至 3') from None
         return CompanionPreferences(enabled=self.enabled.get(), followup=self.followup.get(),
-                                    idle=self.idle.get(), daily_max=limit,
+                                    idle=self.idle.get(), gentle_followups=self.gentle.get(), daily_max=limit,
                                     quiet_start=minutes(self.start.get()), quiet_end=minutes(self.end.get()),
                                     style=self.style.get('1.0', 'end-1c').strip(),
                                     interests=self.interests.get().strip(), dates=dates)
@@ -536,22 +560,20 @@ class CompanionPage(tk.Frame):
             self.feedback.set(str(error))
             return
 
-        def write(cfg):
-            if prefs.enabled and cfg.group not in cfg.conversation_targets:
-                raise ValueError('请先绑定当前会话')
-            notes = CompanionStore(cfg.runtime, cfg.memory_scope)
-            notes.data['preferences'] = asdict(prefs)
-            notes.save()
-
-        self._write(write, '本会话策略已保存')
+        def write(cfg,ticket):
+            return self.panel.client.companion_configure(cfg.group,cfg.memory_scope,asdict(prefs))
+        def saved(state):
+            self.panel.show_status(state)
+            self.feedback.set('本会话策略已保存')
+        self._run(write,saved,message='正在应用本会话策略…')
 
     def _command(self, operation, message):
         def work(cfg, ticket):
             state = self.panel.client.status()
-            if state.get('group') != cfg.group:
+            if cfg.group not in state.get('group_names',[state.get('group')]):
                 raise ValueError('后台回复对象尚未同步，请稍后重试')
             self._current(cfg, ticket)
-            return operation()
+            return operation(group=cfg.group,scope=cfg.memory_scope)
 
         def done(state):
             self.panel.show_status(state)

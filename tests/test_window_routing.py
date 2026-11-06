@@ -91,6 +91,22 @@ def test_saved_aliases_cannot_create_two_engines_for_one_recipient(tmp_path):
         selected(tmp_path, ROOM, replace(ROOM, name='旧读书群备注'))
 
 
+def test_reopened_window_requires_unique_title_and_original_contact(tmp_path,monkeypatch):
+    import threading
+    from xiaomao import windows,selection
+    cfg=selected(tmp_path,ROOM).with_window_binding(ROOM.name,window(ROOM,11))
+    choice=dict(kind='detached',title=ROOM.name,minimized=False,hwnd=84)
+    new=window(ROOM,84)
+    monkeypatch.setattr(windows,'list_calibration_windows',lambda:[choice,dict(choice,hwnd=85)])
+    monkeypatch.setattr(selection,'preview_window',lambda *_:(None,new))
+    monkeypatch.setattr(selection,'verify_reviewed_window',lambda *_:(new,ROOM))
+    assert selection.rediscover_detached(cfg,[ROOM.name],threading.Event())==cfg
+    monkeypatch.setattr(windows,'list_calibration_windows',lambda:[choice])
+    assert selection.rediscover_detached(cfg,[ROOM.name],threading.Event()).binding.hwnd==84
+    monkeypatch.setattr(selection,'verify_reviewed_window',lambda *_:(new,replace(ROOM,account='different')))
+    assert selection.rediscover_detached(cfg,[ROOM.name],threading.Event())==cfg
+
+
 def test_binding_save_retries_a_transient_windows_reader_without_losing_old_file(tmp_path, monkeypatch):
     import os
     cfg=selected(tmp_path,ROOM)
@@ -127,6 +143,43 @@ def screen_resident(cfg, store):
                     clock=clock, settle_seconds=0)
 
 
+def test_shared_main_keeps_selected_chat_until_header_and_send_receipt(tmp_path):
+    from test_bubble_delivery import Feed
+    from xiaomao.domain import Frame, Message
+    from xiaomao.store import StateStore
+    cfg=replace(selected(tmp_path,ROOM,PEER,OTHER),min_interval=3)
+    cfg=cfg.with_window_binding(ROOM.name,window(ROOM,11,'main'))
+    store=StateStore(cfg.runtime)
+    resident=screen_resident(cfg,store)
+    current=['未选择']; switches=[]; sent=[]
+    try:
+        for engine in resident.engines:
+            desk=engine.desktop;name=engine.settings.group
+            desk.capture=lambda d=desk,n=name: d.frame if current[0]==n else Frame('',safe=False,reason='群标题与已校准目标不一致')
+            def select(_,n=name):
+                current[0]=n;switches.append(n);return True
+            desk.select_target=select
+            feed=engine.message_source=Feed(desk,resident.clock)
+            original=desk.click_send
+            def send(n=name,d=desk,f=original):
+                assert current[0]==n
+                sent.append((n,d.frame.draft));f()
+            desk.click_send=send
+            engine.model.reply=lambda _,n=name:'回复'+n
+        resident.enable();resident.observe_once()
+        for e in resident.engines:
+            msg=Message('你好',speaker_id='p_'+'a'*16,message_id=e.settings.group+'-new',created_at=resident.clock())
+            e.message_source.pending.append(msg);e.message_source.history.append(msg)
+        resident.clock.advance(3);resident.observe_once()
+        assert len(switches)==1, '同一轮不能将刚选中的会话切走'
+        for _ in range(24):
+            resident.clock.advance(2);resident.observe_once()
+            if len(sent)==3:break
+        assert sorted(sent)==sorted((c.name,'回复'+c.name) for c in (ROOM,PEER,OTHER))
+        assert store.counts()=={'verified':3}
+    finally:store.close()
+
+
 def test_missing_first_window_does_not_disable_ready_rooms_or_peer(tmp_path):
     from xiaomao.store import StateStore
     from xiaomao.domain import Message
@@ -151,6 +204,22 @@ def test_missing_first_window_does_not_disable_ready_rooms_or_peer(tmp_path):
         assert not room.pending() and not room.desktop.events
     finally:
         store.close()
+
+
+def test_local_text_is_one_per_request_and_only_for_selected_recipient(tmp_path):
+    from xiaomao.store import StateStore
+    cfg=selected(tmp_path,ROOM,PEER).with_window_binding(ROOM.name,window(ROOM,11)).with_window_binding(PEER.name,window(PEER,22))
+    store=StateStore(cfg.runtime)
+    try:
+        resident=screen_resident(cfg,store);resident.enable()
+        for e in resident.engines:e.message_source=object()
+        key='night-test-0001'
+        assert resident.queue_text(PEER.name,'晚安',key)['queued']
+        assert resident.queue_text(PEER.name,'晚安',key)['duplicate']
+        with pytest.raises(ValueError):resident.queue_text(OTHER.name,'晚安',key)
+        assert [(t['group'],t['reply']) for t in resident.pending()]==[(PEER.name,'晚安')]
+        assert resident.queue_text(ROOM.name,'晚上好',key)['queued']
+    finally:store.close()
 
 
 def test_hot_reload_retains_pending_work_and_respects_service_mode(tmp_path):
@@ -196,6 +265,34 @@ def test_reordering_window_targets_does_not_transfer_the_primary_groups_mention_
         cfg.with_saved_conversations((PEER.name,ROOM.name)).save()
         resident.reload_windows()
         assert all(not e.settings.at_display_name and not e.policy.matches(mention) for e in resident.engines)
+    finally:store.close()
+
+
+def test_panel_saves_listeners_online_with_existing_queued_reply(tmp_path):
+    from types import SimpleNamespace
+    from xiaomao.gui import Panel
+    from xiaomao.domain import Message
+    from xiaomao.store import StateStore
+    cfg=replace(selected(tmp_path,ROOM,PEER),receive_mode='screen')
+    cfg=cfg.with_window_binding(ROOM.name,window(ROOM,11))
+    cfg.save()
+    store=StateStore(cfg.runtime)
+    try:
+        resident=screen_resident(cfg,store)
+        resident.enable()
+        room=resident.engines[0]
+        room._record([Message('在队列里等发送',message_id='queued/room')])
+        task=room.tasks[0]
+        panel=SimpleNamespace(directory=tmp_path,client=resident,work=lambda action,*args,**kw:action())
+        Panel.apply_group_settings(panel,[PEER.name,ROOM.name],cfg.reply_mode,(0,0,0,0),lambda:None,keep_pacing=True)
+        assert resident.engines[1] is room and room.tasks[0] is task
+        assert resident.settings.group==PEER.name and resident.pending()[0]['group']==ROOM.name
+        replace(Settings.load(tmp_path),idle_wake=True).save()
+        resident.reload_windows()
+        assert resident.status()['idle_wake'] and room.settings.idle_wake
+        with pytest.raises(ValueError,match='待发'):
+            resident.stop_if_idle()
+        assert not resident.stop_event.is_set() and room.tasks[0] is task
     finally:store.close()
 
 

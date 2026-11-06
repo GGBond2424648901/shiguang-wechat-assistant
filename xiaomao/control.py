@@ -47,9 +47,13 @@ class ControlServer:
                 routes = {"GET": {"/status": engine.status, "/pending": lambda: {"tasks": engine.pending()}},
                           "POST": {"/observe": engine.observe, "/enable": engine.enable, "/pause": engine.pause, "/stop": engine.stop,
                                    "/reply_latest":engine.reply_latest,
+                                   "/stop_if_idle":lambda:engine.stop_if_idle(),
                                    "/reload_windows":lambda:engine.reload_windows(),
-                                   "/companion_preview":lambda:engine.companion_preview(),
-                                   "/companion_once":lambda:engine.companion_once()}}
+                                   "/queue_text":lambda:engine.queue_text(**payload),
+                                   "/enable_selected":lambda:engine.enable_selected(**payload),
+                                   "/companion_configure":lambda:engine.companion_configure(**payload),
+                                   "/companion_preview":lambda:engine.companion_preview(**payload),
+                                   "/companion_once":lambda:engine.companion_once(**payload)}}
                 action = routes[method].get(self.path)
                 if action is None:
                     return self.answer(404, {"error": "没有这个控制操作"})
@@ -67,7 +71,16 @@ class ControlServer:
                     if self.headers.get("Content-Type", "").split(";", 1)[0] != "application/json":
                         return self.answer(400, {"error": "需要 JSON 请求"})
                     try:
-                        if json.loads(self.rfile.read(length) or b"{}") != {}:
+                        payload=json.loads(self.rfile.read(length) or b"{}")
+                        if self.path=='/queue_text':
+                            if not isinstance(payload,dict) or set(payload)!={'group','text','request_id'} or not all(isinstance(v,str) for v in payload.values()):
+                                return self.answer(400, {"error": "需要指定会话、文字和请求编号"})
+                        elif (self.path in ('/enable_selected','/companion_configure') or
+                                self.path in ('/companion_preview','/companion_once') and payload!={}):
+                            keys={'group','scope','preferences'} if self.path=='/companion_configure' else {'group','scope'}
+                            if not isinstance(payload,dict) or set(payload)!=keys or not all(isinstance(payload[k],str) and payload[k] for k in ('group','scope')):
+                                return self.answer(400, {"error": "请指定监听会话及身份"})
+                        elif payload != {}:
                             return self.answer(400, {"error": "操作不接受附加参数"})
                     except (ValueError, UnicodeError):
                         return self.answer(400, {"error": "JSON 无效"})

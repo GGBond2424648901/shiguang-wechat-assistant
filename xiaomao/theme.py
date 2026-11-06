@@ -14,7 +14,7 @@ from .workspace_ui import BG, FONT, GREEN, INK, LINE, MUTED, NAVY, PAPER, PEACH,
 
 # The calibration dialog and older external callers still import these names.
 TEXT, PANEL, GOLD, FIELD, AMBER = INK, BG, '#854E34', PAPER, PEACH
-PAGES={'assistant':'工作台','sessions':'会话','persona':'人格','companion':'记忆与陪伴','settings':'运行设置'}
+PAGES={'assistant':'工作台','sessions':'会话','persona':'人格','companion':'记忆与陪伴','stickers':'表情包','settings':'运行设置'}
 TITLES={**PAGES,'contacts':'选择会话'}
 MODES={'auto':'自动回复中','observe':'只观察','paused':'已暂停','stopped':'已停止','disconnected':'未连接助手'}
 
@@ -86,7 +86,9 @@ def _install_resize_edges(root, view, hwnd):
     # All eight edges are mouse-accessible without reserving a row for them.
     def grip(parent,edge,cursor,**placement):
         widget=tk.Frame(parent,bg=parent.cget('bg'),cursor=cursor,takefocus=False)
-        widget.place(**placement)
+        # Tk's default "inside" anchors grips to the *padded content*,
+        # covering the last pixels of buttons rather than the window edge.
+        widget.place(bordermode='outside',**placement)
         widget.bind('<ButtonPress-1>',lambda e:resize(e,edge))
         return widget
 
@@ -162,9 +164,13 @@ def titlebar(root, view):
         control.pack(side='left')
         control.bind('<Return>', lambda e: e.widget.invoke())
 
+    last_zoomed=None
     def update_maximize_icon(event):
+        nonlocal last_zoomed
         if event.widget is root:
             zoomed = root.state() == 'zoomed'
+            if last_zoomed==zoomed:return
+            last_zoomed=zoomed
             controls.children['maximize'].configure(text='还原' if zoomed else '最大化',
                                                     image=icons['restore' if zoomed else 'maximize'])
 
@@ -222,12 +228,20 @@ def _queue_scope(panel):
                                     cfg.conversation_targets.get(name,{}).get('id')) for name in cfg.allowed_groups))
 
 
-def _scroll_when_needed(parent,widget):
-    bar=ttk.Scrollbar(parent,command=widget.yview)
+def _scroll_when_needed(parent,widget,*,stable_width=False):
+    holder=parent
+    if stable_width:
+        holder=tk.Frame(parent,bg=parent.cget('bg'))
+        holder.pack(side='right',fill='y',before=widget)
+        holder.pack_propagate(False)
+    bar=ttk.Scrollbar(holder,command=widget.yview)
+    if stable_width:holder.configure(width=bar.winfo_reqwidth())
     def position(first,last):
         bar.set(first,last)
         needed=float(first)>0.0001 or float(last)<0.9999
-        if needed and not bar.winfo_manager():bar.pack(side='right',fill='y',before=widget)
+        if needed and not bar.winfo_manager():
+            if stable_width:bar.pack(fill='both',expand=True)
+            else:bar.pack(side='right',fill='y',before=widget)
         elif not needed and bar.winfo_manager():bar.pack_forget()
     widget.configure(yscrollcommand=position)
 
@@ -305,6 +319,7 @@ class GlassView(tk.Frame):
         self._recent_display=None
         self._styled_queue=None
         self._watch_rows=None
+        self.queue_group=None
         self._traces=[]
         self._shortcuts=[]
         self._compact=None
@@ -360,7 +375,7 @@ class GlassView(tk.Frame):
         tk.Frame(bottom,bg='#465B6A',height=1).pack(fill='x',pady=(0,8))
         self.local_status=label(bottom,'本地助手',10,bold=True,color=PAPER);self.local_status.pack(anchor='w')
         self.side_note=label(bottom,'读取连接状态…',8,color='#D5E1E8');self.side_note.pack(anchor='w',pady=(2,0))
-        label(bottom,'Alt + 1–5 切换页面',8,color='#ACC0CD').pack(anchor='w',pady=(8,0))
+        label(bottom,'Alt + 1–6 切换页面',8,color='#ACC0CD').pack(anchor='w',pady=(8,0))
 
     def _paint_nav(self):
         active='sessions' if self.page=='contacts' else self.page
@@ -370,7 +385,7 @@ class GlassView(tk.Frame):
         viewport=tk.Frame(self.body,bg=BG)
         self.dashboard_canvas=tk.Canvas(viewport,bg=BG,bd=0,highlightthickness=0,takefocus=False)
         self.dashboard_canvas.pack(side='left',fill='both',expand=True)
-        _scroll_when_needed(viewport,self.dashboard_canvas)
+        _scroll_when_needed(viewport,self.dashboard_canvas,stable_width=True)
         page=tk.Frame(self.dashboard_canvas,bg=BG)
         self.dashboard_window=self.dashboard_canvas.create_window(0,0,anchor='nw',window=page)
         self.dashboard_canvas.bind('<Configure>',self._request_layout)
@@ -419,9 +434,14 @@ class GlassView(tk.Frame):
         watch=self.watch_card=card(detail,pad=12);watch.grid(row=0,column=1,sticky='nsew',padx=(6,0))
         qhead=tk.Frame(queue,bg=PAPER);qhead.pack(fill='x')
         tk.Label(qhead,image=glyph(qhead,'send',INK,20),bg=PAPER).pack(side='left',padx=(0,7))
-        label(qhead,'发送队列',14,bold=True).pack(side='left')
+        self.queue_title=label(qhead,'发送队列',14,bold=True)
+        self.queue_title.pack(side='left')
         self.queue_refresh=button(qhead,'刷新',self.refresh_pending,compact=True,icon_name='refresh')
         self.queue_refresh.pack(side='right')
+        self.all_queues=button(qhead,'全部会话',lambda:self._choose_queue(None),compact=True)
+        self.all_queues.pack(side='right',padx=(3,4))
+        self.queue_filter=label(queue,'全部监听会话',9,color=MUTED)
+        self.queue_filter.pack(fill='x',pady=(3,0))
         qbottom=tk.Frame(queue,bg=PAPER);qbottom.pack(side='bottom',fill='x',pady=(6,0))
         self.actions['recover']=button(qbottom,'处理主会话最新消息',self._recover,compact=True,icon_name='clock')
         self.actions['recover'].pack(side='left')
@@ -468,9 +488,10 @@ class GlassView(tk.Frame):
         table_style.configure('Watch.Treeview',background=PAPER,fieldbackground=PAPER,borderwidth=0,
                               relief='flat',rowheight=32,font=(FONT,10))
         table_style.layout('Watch.Treeview',[('Treeview.treearea',{'sticky':'nsew'})])
-        self.watch_table=ttk.Treeview(watch_area,columns=('kind','state'),show='tree',height=2,style='Watch.Treeview')
+        self.watch_table=ttk.Treeview(watch_area,columns=('kind','state'),show='tree',height=2,selectmode='browse',style='Watch.Treeview')
+        self.watch_table.bind('<<TreeviewSelect>>',self._watch_selected)
         self.watch_table.tag_configure('even',background='#F4F7F6')
-        for key,width in [('#0',118),('kind',42),('state',57)]:
+        for key,width in [('#0',118),('kind',42),('state',76)]:
             self.watch_table.column(key,width=width,minwidth=32,stretch=key=='#0')
         self.watch_table.pack(side='left',fill='both',expand=True)
         _scroll_when_needed(watch_area,self.watch_table)
@@ -490,13 +511,25 @@ class GlassView(tk.Frame):
             canvas.create_line(0,34+y,19,25+y,50,39+y,82,9+y,113,7+y,smooth=True,fill=color,width=1)
 
     def _recover(self):
+        if self.queue_group and self.queue_group!=self.panel.settings.group:return
         self.panel.work(self.panel.client.reply_latest,self.panel.show_status)
 
+    def _watch_selected(self,_event):
+        selected=self.watch_table.selection()
+        if selected and selected[0]!=self.queue_group:self._choose_queue(selected[0])
+
+    def _choose_queue(self,name):
+        if name is not None and name not in self.panel.settings.allowed_groups:return
+        self.queue_group=name
+        if name is None:self.watch_table.selection_remove(*self.watch_table.selection())
+        self.update_text()
+        self.refresh_pending()
+
     def _resize_shell(self,event):
-        compact=event.width<1040
+        compact=event.width<(1040 if self._compact is None else 1052 if self._compact else 1028)
         scale=float(self.tk.call('tk','scaling'))/(96/72)
         rail=max(174 if compact else 198,max(b.winfo_reqwidth() for b in self.nav.values())+20)
-        stacked=(event.width-rail-36)/scale<635
+        stacked=(event.width-rail-36)/scale<(635 if self._stacked is None else 649 if self._stacked else 621)
         if (compact,stacked)==(self._compact,self._stacked):return
         self._compact,self._stacked=compact,stacked
         rail=max(rail,36+34+self.brand_title.winfo_reqwidth())
@@ -523,7 +556,7 @@ class GlassView(tk.Frame):
         self.update_text()
 
     def _request_layout(self,_event=None):
-        if self._layout_job is None:self._layout_job=self.after_idle(self._fit_dashboard)
+        if self._layout_job is None:self._layout_job=self.after(16,self._fit_dashboard)
 
     def _fit_dashboard(self):
         self._layout_job=None
@@ -534,6 +567,8 @@ class GlassView(tk.Frame):
         detail=(queue+watch+9) if self._stacked else max(queue,watch)
         height=max(canvas.winfo_height(),self.hero.winfo_reqheight()+self.stats.winfo_reqheight()+24+detail)
         width=canvas.winfo_width()
+        if getattr(self,'_dashboard_fit',None)==(width,height):return
+        self._dashboard_fit=(width,height)
         canvas.itemconfigure(self.dashboard_window,width=width,height=height)
         canvas.configure(scrollregion=(0,0,width,height))
 
@@ -596,7 +631,7 @@ class GlassView(tk.Frame):
 
     def _save_page(self):
         page=self.pages[self.page]
-        if self.page not in ('sessions','settings','persona','companion'):return None
+        if self.page not in ('sessions','settings','persona','companion','stickers'):return None
         if self.page=='companion' and page.tab!='policy':return None
         page.save()
         return 'break'
@@ -632,13 +667,22 @@ class GlassView(tk.Frame):
         elif key=='companion':
             from .companion_ui import CompanionPage
             cls=CompanionPage
+        elif key=='stickers':
+            from .sticker_ui import StickerPage
+            cls=StickerPage
         elif key=='settings':
             from .settings_ui import SettingsPage
             cls=SettingsPage
         else:
             from .persona_ui import PersonaPage
             cls=PersonaPage
-        return cls(self.body,self.panel)
+        page=cls(self.body,self.panel)
+        feedback=getattr(self.panel,'feedback',None)
+        if feedback:
+            for name in ('notice','feedback'):
+                var=getattr(page,name,None)
+                if isinstance(var,tk.StringVar):feedback.watch(var)
+        return page
 
     def render(self):
         if self._queue_scope is not None and self._queue_scope!=self._current_scope():
@@ -657,7 +701,9 @@ class GlassView(tk.Frame):
         self.update_text()
 
     def _current_scope(self):
-        return _queue_scope(self.panel),tuple(self.status.get('group_names') or ())
+        names=tuple(self.status.get('group_names') or self.panel.settings.allowed_groups)
+        chosen=getattr(self,'queue_group',None)
+        return _queue_scope(self.panel),(chosen,) if chosen in names else names
 
     def _show_recent(self,rows,note):
         display=(tuple(rows),note)
@@ -691,9 +737,12 @@ class GlassView(tk.Frame):
         self._queue_scope=scope
         def current():return self.page=='assistant' and self._queue_request is request and self._current_scope()==scope
         cfg=p.settings
+        chosen=getattr(self,'queue_group',None)
         previous=self._receipt_cache if same_scope else {}
         def read():
             data=p.client.pending()
+            if len(scope[1])==1 and chosen:
+                data={**data,'tasks':[row for row in data.get('tasks',[]) if row.get('group',cfg.group)==scope[1][0]]}
             recent=receipt_previews(cfg,scope[1],previous,cancelled=lambda:not current())
             return data,recent
         def done(result):
@@ -704,12 +753,14 @@ class GlassView(tk.Frame):
                 self._decorate_queue()
                 self._show_recent(rows,note)
                 self.queue_refresh.configure(text='刷新',state='normal')
+                if not background:p.notice.set('队列已刷新，共 '+str(len(data.get('tasks',[])))+' 条待发送')
         def failed(error):
             if current():
                 self._queue_request=None
                 p.set_preview('暂时无法读取队列：'+error)
                 self._show_recent([],'暂时无法读取当前监听范围')
                 self.queue_refresh.configure(text='刷新',state='normal')
+                if not background:p.show_error(error)
         if not same_scope:
             p.set_preview('正在读取当前队列…')
             self._show_recent([],'正在读取当前会话回执…')
@@ -748,16 +799,34 @@ class GlassView(tk.Frame):
         self.metrics['verified'].set(str(counts.get('verified',0)) if online else '—')
         self.unknown_note.set(f"{counts['unknown']} 条待核对" if online and counts.get('unknown') else '')
         modes={row['name']:row.get('mode') for row in data.get('groups',[]) if row.get('name')}
+        live={row['name']:row for row in data.get('groups',[]) if row.get('name')}
+        def watch_state(n):
+            mode_for_room=modes.get(n,mode)
+            if not online:return '已选择'
+            if mode_for_room=='auto':
+                window=live.get(n,{}).get('window_state')
+                if window in ('已最小化','在后台','窗口不可见','需重新绑定','待校准'):return window
+            return {'auto':'回复中','observe':'观察中','paused':'暂停'}.get(mode_for_room,'已选择')
         rows=tuple((n,{'group':'群聊','private':'个人'}.get(cfg.conversation_targets.get(n,{}).get('kind'),'会话'),
-                    {'auto':'回复中','observe':'观察中','paused':'暂停'}.get(modes.get(n,mode),'已选择') if online else '已选择') for n in names)
+                    watch_state(n)) for n in names)
         if rows!=self._watch_rows:
             self._watch_rows=rows
-            self.watch_table.delete(*self.watch_table.get_children())
+            wanted={r[0] for r in rows}
+            for old in self.watch_table.get_children():
+                if old not in wanted:self.watch_table.delete(old)
+            if self.queue_group not in wanted:self.queue_group=None
             for index,(title,kind,status) in enumerate(rows):
                 pic=glyph(self,'persona' if kind=='个人' else 'people','#496D7D',18)
-                self.watch_table.insert('','end',text=' '+title,image=pic,values=(kind,status),
-                                        tags=('even',) if index%2==0 else ())
-        title,detail=recent_result(data,p.reason.get())
+                options=dict(text=' '+title,image=pic,values=(kind,status),tags=('even',) if index%2==0 else ())
+                if self.watch_table.exists(title):
+                    self.watch_table.item(title,**options);self.watch_table.move(title,'',index)
+                else:self.watch_table.insert('','end',iid=title,**options)
+        self.queue_filter.configure(text=self.queue_group or '全部监听会话 · 点击监听对象查看对应队列')
+        if self.page=='settings':self.pages['settings'].refresh_route()
+        self.all_queues.configure(state='normal' if self.queue_group else 'disabled')
+        self.actions['recover'].configure(state='disabled' if self.busy or self.queue_group not in (None,cfg.group) else 'normal')
+        selected=live.get(self.queue_group)
+        title,detail=recent_result({**data,**selected,'last_result':selected.get('last_result')} if selected else data,p.reason.get())
         self.outcome_title.set(title);self.outcome_detail.set(detail)
         observed=data.get('last_observed')
         moment=time.strftime('%H:%M:%S',time.localtime(observed)) if observed else ''

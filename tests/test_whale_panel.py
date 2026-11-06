@@ -13,6 +13,29 @@ def test_new_preference_defaults_on_and_roundtrips_for_existing_settings(tmp_pat
     with pytest.raises(ValueError):Settings(tmp_path,split_replies='false')
 
 
+def test_companion_picker_applies_commands_only_to_selected_conversation(native_root,tmp_path):
+    from xiaomao.companion_ui import CompanionPage
+    cfg=Settings(tmp_path,group='摄影群',group_names=('摄影群','小夏'),
+                 conversation_targets={'摄影群':dict(id='g@chatroom',kind='group',account='a'),
+                                       '小夏':dict(id='peer',kind='private',account='a')})
+    cfg.save()
+    status={'group':cfg.group,'group_names':list(cfg.allowed_groups),
+            'groups':[{'name':n,'mode':'auto','pending_count':0,'companion':{'reason':n+'状态'}} for n in cfg.allowed_groups]}
+    calls=[]
+    client=SimpleNamespace(status=lambda:status,companion_configure=lambda g,s,p:calls.append((g,s,p['gentle_followups'])) or status,
+                           companion_preview=lambda **kw:calls.append(kw) or status)
+    p=SimpleNamespace(settings=cfg,directory=tmp_path,client=client,view=SimpleNamespace(status=status),
+                      work=lambda action,success,*a,**kw:success(action()),show_status=lambda s:None)
+    page=CompanionPage(native_root,p)
+    try:
+        page.on_show()
+        page.scope_choice.set('小夏');page._choose_scope()
+        page.enabled.set(True);page.save();page.preview()
+        assert p.settings.group=='摄影群' and page.cfg.group=='小夏'
+        assert calls==[('小夏','a/peer',True),{'group':'小夏','scope':'a/peer'}]
+    finally:page.on_hide();page.destroy()
+
+
 def test_workspace_button_preserves_native_state_and_customized_filter_color(native_root):
     from xiaomao.workspace_ui import button,PEACH
     from tkinter import ttk
@@ -147,7 +170,7 @@ def test_editing_persona_does_not_interrupt_pending_conversations(tmp_path,nativ
     root=tk.Frame(native_root)
     try:
         save_persona(tmp_path,'原来的草稿')
-        p=SimpleNamespace(directory=tmp_path,notice=tk.StringVar(root),work=lambda action,done,failed:done(action()))
+        p=SimpleNamespace(directory=tmp_path,notice=tk.StringVar(root),work=lambda action,done,failed,**kw:done(action()))
         editor=PersonaPage(root,p);editor.select_category('custom')
         editor.editor.delete('1.0','end');editor.editor.insert('1.0','大肥鱼，聊天时用自己的话。')
         editor.save()
@@ -196,7 +219,7 @@ def test_memory_summary_uses_the_same_member_labels_as_facts():
 def test_poll_refresh_keeps_queue_visible_and_shares_one_pending_read(tmp_path):
     from xiaomao.theme import GlassView
     events=[];requests=[]
-    p=SimpleNamespace(settings=Settings(tmp_path),set_preview=events.append,show_pending=lambda data:events.append('result'),
+    p=SimpleNamespace(settings=Settings(tmp_path),notice=SimpleNamespace(set=lambda v:None),set_preview=events.append,show_pending=lambda data:events.append('result'),
                       client=SimpleNamespace(pending=lambda:{}),work=lambda call,ok,fail,**kw:requests.append(ok))
     view=SimpleNamespace(panel=p,page='assistant',status={},_receipt_cache={},_show_recent=lambda *args:None,
                          _decorate_queue=lambda:None,queue_refresh=SimpleNamespace(configure=lambda **kw:None))
@@ -205,6 +228,19 @@ def test_poll_refresh_keeps_queue_visible_and_shares_one_pending_read(tmp_path):
     GlassView.refresh_pending(view,background=True)
     GlassView.refresh_pending(view,background=True)
     assert events==['正在读取当前队列…','result'] and len(requests)==1
+
+
+def test_first_live_poll_fetches_empty_queue_even_if_start_already_returned_status():
+    from xiaomao.gui import Panel
+    state={'group':'甲','mode':'auto','pending_count':0}
+    requests=[]
+    panel=SimpleNamespace(closing=False,poll_busy=False,poll=lambda:None,client=SimpleNamespace(status=lambda:state),
+                          root=SimpleNamespace(after=lambda *args:None),show_status=lambda _:None)
+    panel.view=SimpleNamespace(page='assistant',status=state,_queue_scope=None,
+        refresh_pending=lambda **kwargs:requests.append('read'),_current_scope=lambda:('account',('甲',)))
+    panel.work=lambda fn,ok,*args,**kwargs:ok(fn())
+    Panel.poll(panel)
+    assert requests==['read']
 
 
 def test_queue_callbacks_discard_old_recipient_and_other_pages(tmp_path):
@@ -224,6 +260,35 @@ def test_queue_callbacks_discard_old_recipient_and_other_pages(tmp_path):
     GlassView.refresh_pending(view);view.page='settings'
     requests[2](({'tasks':['隐藏后的队列']},([], '', {})))
     assert shown==[{'tasks':['新账号']}]
+
+
+def test_click_scope_reads_only_its_own_queue_and_receipts(tmp_path,native_root):
+    from xiaomao.theme import GlassView
+    from xiaomao.gui import Panel
+    cfg=Settings(tmp_path,group='甲群',group_names=('甲群','朋友'),conversation_targets={
+        '甲群':{'account':'a','id':'a@chatroom','kind':'group'},
+        '朋友':{'account':'a','id':'p','kind':'private'}})
+    window=tk.Toplevel(native_root);window.geometry('1200x800+3400+2000')
+    try:
+        panel=Panel.__new__(Panel);panel.root=window;panel.settings=cfg;panel.directory=tmp_path
+        panel.reason=tk.StringVar(window);panel.notice=tk.StringVar(window);panel.switch_busy=False
+        def pending():
+            return {'tasks':[dict(group=g,sender='',messages=[g+'的问题'],reply='',state='generated') for g in cfg.allowed_groups]}
+        panel.client=SimpleNamespace(pending=pending)
+        panel.work=lambda fn,ok,*args,**kw:ok(fn())
+        view=panel.view=GlassView(panel);view.pack(fill='both',expand=True)
+        view.status={'mode':'auto','group_names':list(cfg.allowed_groups)}
+        view.update_text();window.update()
+        second=view.watch_table.get_children()[1]
+        view.watch_table.selection_set(second)
+        window.update()
+        text=panel.preview.get('1.0','end')
+        assert '朋友的问题' in text and '甲群的问题' not in text
+        assert panel.settings.group=='甲群' and cfg.allowed_groups==('甲群','朋友')
+        assert view.actions['recover'].instate(('disabled',))
+        view.all_queues.invoke()
+        assert all(g+'的问题' in panel.preview.get('1.0','end') for g in cfg.allowed_groups)
+    finally:window.destroy()
 
 
 def test_receipt_preview_reads_only_current_account_watched_bound_peers(tmp_path):

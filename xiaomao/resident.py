@@ -23,6 +23,9 @@ class Resident:
         self.reload_request=None
         self.index=self.turns=0
         self.navigation=NavigationActivity()
+        self.window_turns={}
+        self._next_discovery=0
+        self._discovering=False
         self.use_database=desktop_factory is None and settings.receive_mode=='database'
         self.hubs={}
         self.vision=vision or Vision()
@@ -31,6 +34,16 @@ class Resident:
         unknown=store.recover()
         self.requested_mode='paused' if unknown else 'auto' if settings.auto_on_launch else 'observe'
         self.engines=[self._new_engine(settings,settings.for_group(name),unknown) for name in settings.allowed_groups]
+        self._set_companion_budgets()
+
+    def _set_companion_budgets(self):
+        accounts={}
+        for e in self.engines:
+            if e.companion and e.companion.planner.preferences.enabled:
+                account=e.settings.memory_scope.split('/')[0]
+                accounts[account]=accounts.get(account,0)+e.companion.planner.preferences.daily_max
+        for e in self.engines:
+            if e.companion:e.companion.account_daily_max=max(3,accounts.get(e.settings.memory_scope.split('/')[0],0))
 
     def _source_for(self, settings, cfg):
         if not self.use_database:return None
@@ -52,13 +65,44 @@ class Resident:
         return LazyDatabaseFeed(hub,cfg.group)
 
     def _new_engine(self, settings, cfg, unknown):
-        return Engine(cfg,self.store,self.desktop_factory(cfg.binding),self.vision,self.model_factory(cfg),
+        engine=Engine(cfg,self.store,self.desktop_factory(cfg.binding),self.vision,self.model_factory(cfg),
                       clock=self.clock,settle_seconds=self.settle_seconds,
                       message_source=self._source_for(settings,cfg),recovered_unknown=unknown)
+        engine.window_turn=self._window_turn
+        return engine
+
+    def _window_turn(self,engine,claim=False):
+        # A sidebar click needs another observation to verify the new header.
+        # Keep accepting traffic for every room; reserve only this native HWND.
+        binding=engine.settings.binding
+        if not binding or binding.window_kind!='main' or not engine.message_source:return True
+        key=(binding.pid,binding.hwnd)
+        now=time.monotonic()
+        owner=self.window_turns.get(key)
+        if owner:
+            previous,task_id,until=owner
+            if (now<until and previous in self.engines and previous.mode=='auto'
+                    and any(t.id==task_id and t.state=='generated' for t in previous.tasks)):
+                return previous is engine
+            self.window_turns.pop(key,None)
+        if claim:
+            task=engine._next_task()
+            if task:self.window_turns[key]=(engine,task.id,now+max(12,2*self.settings.poll_seconds+5))
+        return True
 
     def status(self):
         with self.lock:
             states=[engine.status() for engine in self.engines]
+            windows={}
+            for engine,state in zip(self.engines,states):
+                b=engine.settings.binding
+                state['window_kind']=b.window_kind if b else None
+                key=(b.pid,b.hwnd,b.target_group if b.window_kind=='detached' else '') if b else None
+                if key not in windows:
+                    probe=getattr(engine.desktop,'route_state',None)
+                    try:windows[key]=probe() if probe else ('已绑定' if b else '待校准')
+                    except Exception:windows[key]='窗口状态暂不可读'
+                state['window_state']=windows[key]
             current=states[self.index]
             settings=self.settings
             reload_pending=self.reload_request is not None
@@ -69,14 +113,17 @@ class Resident:
                 'last_result':last_result,
                 'saved_groups':list(settings.saved_groups),'monitor_all_groups':settings.monitor_all_groups,
                 'group_names':list(settings.allowed_groups),'pending_count':sum(s['pending_count'] for s in states),
-                'window_reload_pending':reload_pending,
+                'window_reload_pending':reload_pending,'idle_wake':settings.idle_wake,'can_stop_if_idle':True,
                 'last_observed':max((s['last_observed'] for s in states if s['last_observed'] is not None),default=None),
                 'groups':[{'name':s['group'],'mode':s['mode'],'reason':s['reason'],'calibrated':s['calibrated'],
-                           'pending_count':s['pending_count']} for s in states]}
+                           'window_kind':s['window_kind'],'window_state':s['window_state'],'last_result':s.get('last_result'),
+                           'pending_count':s['pending_count'],'companion':s.get('companion')} for s in states]}
 
     def pending(self):
         with self.lock:
-            return [{**task,'group':engine.settings.group} for engine in self.engines for task in engine.pending()][:20]
+            # Each engine already bounds its own queue. A busy first group
+            # must not hide a later group's work from its dashboard filter.
+            return [{**task,'group':engine.settings.group} for engine in self.engines for task in engine.pending()]
 
     def _control(self,operation,*args):
         for engine in self.engines:getattr(engine,operation)(*args)
@@ -113,7 +160,7 @@ class Resident:
             # reconfigured halfway through a generated turn.
             self.reload_request=replace(self.settings,group=saved.group,group_names=saved.group_names,
                 monitor_all_groups=saved.monitor_all_groups,conversation_targets=saved.conversation_targets,
-                calibration=saved.calibration,calibration_account=saved.calibration_account,
+                calibration=saved.calibration,calibration_account=saved.calibration_account,idle_wake=saved.idle_wake,
                 window_bindings=saved.window_bindings,self_name_unique_confirmed=(
                     self.settings.self_name_unique_confirmed and self.settings.memory_scope==saved.memory_scope))
         if self.cycle_lock.acquire(blocking=False):
@@ -187,14 +234,52 @@ class Resident:
                         engine.enable()
             for removed in existing.values():removed.stop()
             self.engines,self.settings=[route[0] for route in routes],fresh
+            self._set_companion_budgets()
             self.index=self.turns=0
             self.reload_request=None
+
+    def _check_reopened_windows(self):
+        now=time.monotonic()
+        with self.lock:
+            if (not self.use_database or self.requested_mode!='auto' or self._discovering
+                    or self.reload_request or now<self._next_discovery):return
+            self._next_discovery=now+20
+            previous=self.settings
+            missing=[e.settings.group for e in self.engines if e.settings.binding
+                     and e.settings.binding.window_kind=='detached' and hasattr(e.desktop,'route_state')
+                     and e.desktop.route_state()=='需重新绑定']
+            if not missing:return
+            self._discovering=True
+        def discover():
+            from .selection import rediscover_detached
+            try:
+                updated=rediscover_detached(previous,missing,self.stop_event)
+                with self.lock:
+                    if (updated!=previous and self.settings is previous and self.reload_request is None
+                            and not self.stop_event.is_set()):
+                        self.reload_request=updated
+            except Exception as error:
+                logging.getLogger(__name__).info('Detached discovery deferred: %s',type(error).__name__)
+            finally:
+                with self.lock:self._discovering=False
+        threading.Thread(target=discover,name='wechat-window-discovery',daemon=True).start()
 
     def stop(self):
         with self.lock:
             result=self._control('stop')
             self.stop_event.set()
             return result
+
+    def stop_if_idle(self):
+        # Guard against a new arrival between the panel's status read and stop.
+        if not self.cycle_lock.acquire(timeout=0.5):
+            raise ValueError('正在处理消息，未修改设置，请稍后保存')
+        try:
+            with self.lock:
+                if any(e.tasks for e in self.engines):
+                    raise ValueError('仍有待发或待确认回复，已保留队列，请稍后保存')
+                return self.stop()
+        finally:self.cycle_lock.release()
 
     def reply_latest(self):
         # 本机恢复入口只指向群列表第一项，绝不把所有群历史一起排队。
@@ -203,14 +288,57 @@ class Resident:
             self.engines[0].reply_latest()
             return self.status()
 
-    def companion_preview(self):
+    def queue_text(self, group, text, request_id):
+        import re
+        from .domain import ReplyTask
+        if not re.fullmatch(r'[A-Za-z0-9_-]{8,96}',request_id) or not text.strip() or len(text)>400 or not text.isprintable():
+            raise ValueError('请输入单行聊天文字及唯一请求编号')
         with self.lock:
-            self.engines[0].companion_preview()
+            engine=next((e for e in self.engines if e.settings.group==group),None)
+            if engine is None:raise ValueError('该会话不在监听范围')
+            with engine.lock:
+                if engine.mode!='auto' or not engine.settings.binding or not engine.message_source:
+                    raise ValueError('该监听对象尚不能自动发送')
+                scope=engine.settings.memory_scope
+                now=self.clock()
+                task_id=self.store.create_unique(self.store.fingerprint(f'local-text:{scope}:{request_id}'),now)
+                if task_id is None:return {'queued':False,'duplicate':True}
+                engine.tasks.append(ReplyTask(task_id,now,now,'',reply=text,state='generated'))
+                self.store.update(task_id,'generated')
+                return {'queued':True,'id':task_id}
+
+    def _selected_engine(self,group=None,scope=None):
+        if group is None and scope is None:return self.engines[0]
+        for e in self.engines:
+            if e.settings.group==group and e.settings.memory_scope==scope:return e
+        raise ValueError('该会话身份或监听范围已改变，请重新选择')
+
+    def enable_selected(self,group,scope):
+        with self.lock:
+            self._selected_engine(group,scope).enable()
+            self.requested_mode='auto'
             return self.status()
 
-    def companion_once(self):
+    def companion_configure(self,group,scope,preferences):
+        from .companion import CompanionPreferences
         with self.lock:
-            self.engines[0].companion_once()
+            e=self._selected_engine(group,scope)
+            if not e.companion or group not in e.settings.conversation_targets:raise ValueError('请先绑定准确的回复对象')
+            if not isinstance(preferences,dict):raise ValueError('陪伴策略格式无效')
+            try:prefs=CompanionPreferences(**preferences)
+            except TypeError:raise ValueError('陪伴策略字段无效') from None
+            with e.lock:e.companion.configure(prefs)
+            self._set_companion_budgets()
+            return self.status()
+
+    def companion_preview(self,group=None,scope=None):
+        with self.lock:
+            self._selected_engine(group,scope).companion_preview()
+            return self.status()
+
+    def companion_once(self,group=None,scope=None):
+        with self.lock:
+            self._selected_engine(group,scope).companion_once()
             return self.status()
 
     def _observe_engine(self,engine):
@@ -238,6 +366,7 @@ class Resident:
         try:
             if self.stop_event.is_set():return
             self._apply_window_reload()
+            self._check_reopened_windows()
             start=self.index
             ordered=self.engines[start:]+self.engines[:start]
             shared=None

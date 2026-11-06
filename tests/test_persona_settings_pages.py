@@ -41,7 +41,8 @@ def test_persona_page_keeps_unsaved_sections_preview_and_default_reversible(pane
     assert page.editor.get('1.0','end-1c')==saved
 
 
-def test_masked_backup_editor_never_reads_back_saved_keys(panel):
+def test_masked_backup_editor_never_reads_back_saved_keys(panel,monkeypatch):
+    monkeypatch.setattr('xiaomao.settings_ui.messagebox.askokcancel',lambda *a,**k:True)
     from xiaomao.credentials import CredentialStore
     from xiaomao.settings_ui import SettingsPage
     store=CredentialStore(panel.settings.runtime)
@@ -56,6 +57,41 @@ def test_masked_backup_editor_never_reads_back_saved_keys(panel):
     page.save_keys()
     assert store.get_keys()==('sk-test-only-replacement',)
     assert 'sk-' not in panel.notice.get()+panel.secret_state.get()
+
+
+def test_cancel_key_replacement_preserves_saved_keys_and_typed_draft(panel,monkeypatch):
+    from xiaomao.credentials import CredentialStore
+    from xiaomao.settings_ui import SettingsPage
+    monkeypatch.setattr('xiaomao.settings_ui.messagebox.askokcancel',lambda *a,**k:False)
+    store=CredentialStore(panel.settings.runtime);store.set_key('sk-test-original')
+    page=SettingsPage(panel.root,panel)
+    page.key_entries[0].insert(0,'sk-test-replacement');page.key_mode.set('replace')
+    page.save_keys()
+    assert store.get_keys()==('sk-test-original',)
+    assert page.key_entries[0].get()=='sk-test-replacement'
+    assert '已取消' in panel.notice.get()
+
+
+def test_settings_calibrates_the_selected_listener_without_switching_primary(panel):
+    from dataclasses import replace
+    from xiaomao.settings_ui import SettingsPage
+    panel.settings=replace(panel.settings,group='甲',group_names=('甲','乙'))
+    calls=[];panel.calibrate=calls.append
+    page=SettingsPage(panel.root,panel)
+    assert tuple(page.route_picker['values'])==('甲','乙')
+    page.route_picker.set('乙')
+    page.route_calibrate.invoke()
+    assert calls==['乙'] and panel.settings.group=='甲'
+
+
+def test_settings_resizing_near_breakpoint_keeps_card_in_the_same_column(panel):
+    from xiaomao.settings_ui import SettingsPage
+    page=SettingsPage(panel.root,panel)
+    for width in (770,722,718,724):
+        page._arrange(SimpleNamespace(width=width))
+        assert int(page.wechat_card.grid_info()['column'])==1
+    page._arrange(SimpleNamespace(width=650))
+    assert int(page.wechat_card.grid_info()['column'])==0
 
 
 def test_invalid_persona_can_recover_only_after_restore_and_save(panel):

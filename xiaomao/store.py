@@ -42,9 +42,9 @@ class StateStore:
     def fingerprint(self, value: str) -> str:
         return hmac.new(self.salt, value.encode("utf-8"), hashlib.sha256).hexdigest()
 
-    def reserve_proactive(self,task_id,scope,day,now,per_day_max):
+    def reserve_proactive(self,task_id,scope,day,now,per_day_max,*,account_max=3):
         from .companion import local_day
-        if day!=local_day(now) or not 1<=per_day_max<=3:return False
+        if day!=local_day(now) or not 1<=per_day_max<=3 or not 1<=account_max<=24:return False
         scoped=self.fingerprint(scope)
         account=self.fingerprint(scope.split('/')[0] if '/' in scope else 'legacy-account')
         with self.lock,self.db:
@@ -53,7 +53,7 @@ class StateStore:
             latest=self.db.execute('SELECT max(at) FROM proactive WHERE account=?',(account,)).fetchone()[0]
             if latest is not None and now<latest:return False
             used="state IN ('reserved','sending','verified','unknown')"
-            if self.db.execute(f'SELECT count(*) FROM proactive WHERE account=? AND day=? AND {used}',(account,day)).fetchone()[0]>=3:return False
+            if self.db.execute(f'SELECT count(*) FROM proactive WHERE account=? AND day=? AND {used}',(account,day)).fetchone()[0]>=account_max:return False
             if self.db.execute(f'SELECT count(*) FROM proactive WHERE scope=? AND day=? AND {used}',(scoped,day)).fetchone()[0]>=per_day_max:return False
             self.db.execute('INSERT INTO proactive VALUES(?,?,?,?,?,?)',(task_id,scoped,account,day,now,'reserved'))
             return True

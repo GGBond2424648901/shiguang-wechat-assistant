@@ -15,6 +15,31 @@ def default_regions():
             "input": [.288,.817,.98,.932], "send": [.90,.944,.984,.985]}
 
 
+def apply_saved_settings(client,original,updated,key=''):
+    from .selection import stop_confirmed
+    try:status=client.status()
+    except ControlUnavailable:status={}
+    mode=status.get('mode')
+    if Settings.load(original.root)!=original:raise ValueError('设置已在其他窗口修改，请重新打开设置')
+    route_fields=('group','group_names','monitor_all_groups','conversation_targets','calibration',
+                  'calibration_account','window_bindings')
+    if 'idle_wake' in status:route_fields+=('idle_wake',)
+    if original.group!=updated.group and not updated.self_name_unique_confirmed:route_fields+=('self_name_unique_confirmed',)
+    route_only=replace(original,**{k:getattr(updated,k) for k in route_fields})==updated
+    if not key.strip() and route_only and 'window_reload_pending' in status:
+        updated.save()
+        return client.reload_windows()
+    if status.get('pending_count'):
+        raise ValueError('仍有待发回复，已保留队列；监听范围可在线修改，其他设置请等本轮结束后保存')
+    if status.get('can_stop_if_idle'):
+        client.stop_if_idle()
+        client.wait_stopped()
+    else:stop_confirmed(original.root,client)
+    if key.strip():CredentialStore(updated.runtime).set_key(key)
+    updated.save()
+    return client.start(initial_mode=mode) if mode in ('paused','observe','auto') else client.start()
+
+
 class Panel:
     def __init__(self, root: tk.Tk, directory: Path):
         self.root, self.directory = root, directory
@@ -51,6 +76,7 @@ class Panel:
         self.at_unique=tk.BooleanVar(value=self.settings.self_name_unique_confirmed)
         self.auto_on_launch=tk.BooleanVar(value=self.settings.auto_on_launch)
         self.split_replies=tk.BooleanVar(value=self.settings.split_replies)
+        self.idle_wake=tk.BooleanVar(value=self.settings.idle_wake)
         self.owner_tone=tk.BooleanVar(value=self.settings.owner_confirmed)
         self.model_name=tk.StringVar(value=self.settings.model_name)
         self.secret=tk.StringVar(value="")
@@ -58,12 +84,40 @@ class Panel:
         from .theme import GlassView,titlebar
         self.view=GlassView(self)
         self.view.pack(fill="both",expand=True)
+        from .feedback_ui import FeedbackBar
+        self.feedback=FeedbackBar(self.view)
+        self.feedback.watch(self.notice)
         titlebar(root,self.view)
         root.after(100,self.drain)
         root.after(120,self.poll)
         self.work(self.client.start,self.show_status)
 
-    def work(self, action, success=None, failure=None,*,mutates=True,allow_exit=False):
+    def work(self, action, success=None, failure=None,*,mutates=True,allow_exit=False,label=None,controls=()):
+        # Only user actions have labels. Polling never creates a toast or steals focus.
+        if not hasattr(self,'active_actions'):self.active_actions=set()
+        if label and label in self.active_actions:return
+        previous_controls=[]
+        if label:
+            self.active_actions.add(label)
+            self.notice.set('正在'+label+'…')
+            for control in controls:
+                if control.winfo_exists():
+                    previous_controls.append((control,control.cget('text'),control.cget('state')))
+                    control.configure(text='处理中…',state='disabled')
+        def finish(ok,value):
+            try:
+                callback=success if ok else failure or self.show_error
+                before=self.notice.get() if label else None
+                if callback:callback(value)
+                if label:
+                    if not ok:self.show_error(value)
+                    elif self.notice.get()==before:self.notice.set(label+'已完成')
+            except Exception as error:
+                self.show_error(str(error) if isinstance(error,ValueError) else '界面未能显示操作结果，请刷新状态后核对')
+            finally:
+                if label:self.active_actions.discard(label)
+                for control,text,state in previous_controls:
+                    if control.winfo_exists():control.configure(text=text,state=state)
         if mutates:self.pending_mutations+=1
         def run():
             try:
@@ -72,10 +126,10 @@ class Panel:
                         if self.exiting and not allow_exit:raise ValueError('助手正在退出，本次操作已取消')
                         result=action()
                 else:result=action()
-                self.results.put((success,result))
+                self.results.put((lambda value:finish(True,value),result))
             except Exception as error:
                 safe=str(error) if isinstance(error,(ControlUnavailable,ValueError,DesktopUnavailable)) else "操作未完成，请检查设置或运行环境"
-                self.results.put((failure or self.show_error,safe))
+                self.results.put((lambda value:finish(False,value),safe))
             finally:
                 if mutates:self.pending_mutations-=1
         threading.Thread(target=run,daemon=True).start()
@@ -89,11 +143,14 @@ class Panel:
             except queue.Empty:
                 break
             if callback:
-                callback(value)
+                try:callback(value)
+                except Exception as error:
+                    self.show_error(str(error) if isinstance(error,ValueError) else '界面未能显示操作结果，请刷新状态后核对')
         self.root.after(100,self.drain)
 
     def show_error(self,error):
         self.notice.set(error)
+        if hasattr(self,'feedback'):self.feedback.show(error,'error')
 
     def show_status(self,data):
         if self.connection_error and self.notice.get()==self.connection_error:
@@ -130,7 +187,8 @@ class Panel:
                 self.poll_busy=False
                 previous=self.view.status
                 self.show_status(data)
-                if self.view.page in ('assistant','pending') and (data.get('pending_count') or any(previous.get(k)!=data.get(k) for k in ('group','mode','reason','pending_count','counts'))):
+                if self.view.page in ('assistant','pending') and (self.view._queue_scope!=self.view._current_scope()
+                        or data.get('pending_count') or any(previous.get(k)!=data.get(k) for k in ('group','mode','reason','pending_count','counts'))):
                     self.view.refresh_pending(background=True)
             def failed(error):
                 self.poll_busy=False
@@ -150,34 +208,32 @@ class Panel:
         unique=self.at_unique.get()
         auto_on_launch=self.auto_on_launch.get()
         split_replies=self.split_replies.get()
+        idle_wake=self.idle_wake.get() if hasattr(self,'idle_wake') else self.settings.idle_wake
         private_key,owner_tone=self.settings.private_tone_key,self.owner_tone.get()
         self.secret.set("")
         def save():
-            from .selection import stop_confirmed
-            try:previous_mode=self.client.status().get('mode')
-            except ControlUnavailable:previous_mode=None
-            cfg=Settings.load(self.directory)
+            original=Settings.load(self.directory)
+            cfg=replace(original)
             if cfg.private_tone_key!=private_key:raise ValueError('回复对象已变化，请在当前会话重新保存设置')
             cfg.self_display_name=display
             cfg.self_name_unique_confirmed=unique
             cfg.auto_on_launch=auto_on_launch
             cfg.split_replies=split_replies
+            cfg.idle_wake=idle_wake
             cfg.set_owner_tone(owner_tone)
             if unique:
                 cfg.at_note=""
             cfg.model_base_url="https://api.deepseek.com"
             cfg.model_name=model
             cfg.__post_init__()
-            stop_confirmed(self.directory,self.client)
-            if key.strip():
-                CredentialStore(cfg.runtime).set_key(key)
-            cfg.save()
-            return self.client.start(initial_mode=previous_mode) if previous_mode in ('paused','observe','auto') else self.client.start()
+            return apply_saved_settings(self.client,original,cfg,key)
         def saved(result):
             self.settings=Settings.load(self.directory)
             self.secret_state.set("已使用 Windows DPAPI 加密保存；留空保留" if CredentialStore(self.settings.runtime).available else "尚未设置 DeepSeek 加密凭据")
             self.show_status(result)
-        self.work(save,saved)
+            self.notice.set('设置已保存并应用到后台助手')
+        controls=tuple(c for page in self.view.pages.values() for c in [getattr(page,'save_button',None)] if c is not None)
+        self.work(save,saved,label='保存设置',controls=controls)
 
     def edit_groups(self):
         self.view.select('sessions')
@@ -200,7 +256,17 @@ class Panel:
                     stop_confirmed(self.directory,self.client)
                     return {'running':False,'mode':'stopped','group':self.settings.group,'reason':'自动回复已停止'}
                 raise
-        self.work(act,self.show_status)
+        name={'enable':'开启回复','pause':'暂停回复','observe':'切换观察模式'}.get(operation,operation)
+        def done(data):
+            self.show_status(data)
+            groups=data.get('groups',[])
+            if operation=='enable':
+                enabled=sum(row.get('mode')=='auto' for row in groups) if groups else int(data.get('mode')=='auto')
+                total=len(groups) or 1
+                self.notice.set(f'自动回复已开启 · {enabled}/{total} 个会话就绪'+('，请查看未就绪会话的原因' if enabled<total else ''))
+            else:self.notice.set('自动回复已暂停，后台停止发送' if operation=='pause' else '已切换为只观察，不会发送消息')
+        controls=tuple(self.view.actions[k] for k in ('enable','pause') if k in self.view.actions)
+        self.work(act,done,label=name,controls=controls)
 
     def _switch(self,read_current,contact=None):
         if self.switch_busy:return
@@ -235,9 +301,7 @@ class Panel:
         if getattr(self,'switch_busy',False):return
         def save():
             if not names:raise ValueError('请至少填写一个要回复的会话名')
-            try:previous_mode=self.client.status().get('mode')
-            except ControlUnavailable:previous_mode=None
-            cfg=Settings.load(self.directory)
+            original=cfg=Settings.load(self.directory)
             old_group=cfg.group
             if contacts is not None:
                 from .selection import bind_saved_conversations,load_directory
@@ -255,17 +319,14 @@ class Panel:
             # validates each recipient's window again before sending any input.
             if cfg.group!=old_group:cfg.self_name_unique_confirmed=False
             cfg.__post_init__()
-            from .selection import stop_confirmed
-            stop_confirmed(self.directory,self.client)
-            cfg.save()
-            return self.client.start(initial_mode=previous_mode) if previous_mode in ('paused','observe','auto') else self.client.start()
+            return apply_saved_settings(self.client,original,cfg)
         def saved(result):
             self.settings=Settings.load(self.directory)
             self.target_group.set(self.settings.group)
             self.owner_tone.set(self.settings.owner_confirmed)
             self.at_unique.set(self.settings.self_name_unique_confirmed)
             self.view.render();self.show_status(result);done()
-        self.work(save,saved,failed)
+        self.work(save,saved,failed,label='应用监听设置')
 
     def test_model(self):
         from .domain import Message
@@ -283,7 +344,7 @@ class Panel:
         def finished(message):
             self.testing_model=False
             self.notice.set(message)
-        self.work(test,finished,finished,mutates=False)
+        self.work(test,finished,finished,mutates=False,label='测试模型连接')
 
     def show_pending(self,data):
         from .ui_labels import member_label
@@ -353,7 +414,7 @@ class Panel:
             self.view.render();self.show_status(result)
             self.notice.set(f'“{target}”窗口校准已保存'+('，当前发送完成后应用' if result.get('window_reload_pending') else '并已应用'))
             close()
-        self.work(save,saved,failed)
+        self.work(save,saved,failed,label='保存窗口校准')
 
     def close(self):
         if self.closing or getattr(self,'exiting',False):return

@@ -274,7 +274,7 @@ class PersonaPage(tk.Frame):
             self.panel.notice.set('人格已保存，下一次回复使用这份设定。')
         def failed(error):
             self.saving=False;self._draft_state();self.panel.notice.set(error)
-        self.panel.work(write,saved,failed)
+        self.panel.work(write,saved,failed,label='保存人格')
 
     def _file_revision(self):
         try:info=(self.panel.directory/'config'/'persona.md').stat()

@@ -181,7 +181,7 @@ def find_keys(files, cancel, progress, timeout=150, processes=None):
     if remaining:
         if not accessible:
             raise PermissionError(
-                "无法读取微信进程：请让拾光与微信在相同 Windows 用户及权限下运行"
+                "无法读取微信进程：请让小猫助手与微信在相同 Windows 用户及权限下运行"
             )
         raise RuntimeError(
             f"仍有 {len(remaining)} 个数据库无法读取。请确认选中了当前登录账号；此微信版本也可能尚不兼容。"

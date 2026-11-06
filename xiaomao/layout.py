@@ -53,7 +53,7 @@ def adapt_calibration(image, binding, scale=1.0):
     # the toolbar; its lower edge excludes the Send button/footer.
     rectangles={
         'header':(divider+12*scale,18*scale,min(width-180*scale,width*.85),
-                  header-5*scale if detached else min(header-5*scale,64*scale)),
+                  min(header-5*scale,(96 if detached else 64)*scale)),
         'messages':(divider+2,header+2,width-10*scale,toolbar-3*scale),
         'input':(divider+12*scale,toolbar+50*scale,width-25*scale,height-62*scale),
         'send':(width-120*scale,height-57*scale,width-25*scale,height-24*scale),

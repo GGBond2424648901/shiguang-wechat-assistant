@@ -130,7 +130,7 @@ def test_top_bubble_with_clipped_sender_is_partial_not_a_changed_anchor():
     image=Image.new('RGB',(800,600),(237,237,237));draw=ImageDraw.Draw(image)
     draw.rounded_rectangle((60,69,180,105),5,fill='white')
     draw.polygon([(61,80),(53,85),(61,90)],fill='white')
-    frame=Vision(RecordedOCR([TextLine('@小凶许',(74,80,160,99),.99)])).read(image,binding())
+    frame=Vision(RecordedOCR([TextLine('@小明白',(74,80,160,99),.99)])).read(image,binding())
     assert len(frame.messages)==1
     assert frame.messages[0].kind=='partial'
 
@@ -356,3 +356,13 @@ def test_real_white_navigation_pill_is_distinct_from_chat_message():
     image=Image.new('RGB',(820,560),(237,237,237));draw=ImageDraw.Draw(image)
     draw.rounded_rectangle((650,460,795,505),5,fill=(149,236,105));draw.polygon([(794,472),(803,477),(794,482)],fill=(149,236,105))
     assert navigation_lines(image,[TextLine('46条新消息',(662,470,785,493),.99)])==[]
+
+
+def test_upward_unread_indicator_does_not_jump_into_old_history():
+    from xiaomao.vision import navigation_lines,TextLine
+    canvas=Image.new('RGB',(820,560),(237,237,237));draw=ImageDraw.Draw(canvas)
+    draw.rounded_rectangle((655,20,805,56),16,fill='white')
+    line=TextLine('10条新消息',(667,26,794,47),.99)
+    for y in (30,36):
+        draw.line([(669,y+5),(674,y),(679,y+5)],fill=(28,170,102),width=2)
+    assert navigation_lines(canvas,[line])==[]

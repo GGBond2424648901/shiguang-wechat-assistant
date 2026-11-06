@@ -104,12 +104,14 @@ class Settings:
     calibration: dict | None = None
     calibration_account: str = ''
     window_bindings: dict = field(default_factory=dict)
+    idle_wake: bool = False
 
     def __post_init__(self):
         self.root = Path(self.root).resolve()
         if self.receive_mode not in ('database','screen'):raise ValueError('消息读取方式无效')
         if not isinstance(self.auto_on_launch,bool):raise ValueError('启动自动回复偏好必须为布尔值')
         if type(self.split_replies) is not bool:raise ValueError('多气泡设置必须为布尔值')
+        if type(self.idle_wake) is not bool:raise ValueError('空闲唤起设置必须为布尔值')
         if not isinstance(self.owner_private_token,str) or (self.owner_private_token and not re.fullmatch('[a-f0-9]{64}',self.owner_private_token)):
             raise ValueError('私聊称呼绑定无效')
         if not isinstance(self.natural_pacing,bool):raise ValueError('自然回复节奏必须为布尔值')

@@ -190,6 +190,15 @@ def test_scaled_layout_finds_double_pixel_toolbar_and_complete_detached_title():
         if kind=='detached':assert 99<result.rect('header')[3]<header
 
 
+def test_detached_title_fragments_exclude_pinned_banner():
+    from xiaomao.vision import TextLine,read_header
+    b=binding();b.window_kind='detached'
+    lines=[TextLine('群公告', (12,60,82,81),.99),TextLine('(409)',(160,10,200,29),.99),
+           TextLine('摄影交流',(10,11,86,29),.99),TextLine('(互勉拍照)',(90,12,153,30),.99)]
+    out=read_header(lambda _:lines,Image.new('RGB',(340,92)),b)
+    assert ''.join(line.text for line in out)=='摄影交流(互勉拍照)(409)'
+
+
 def test_detached_controls_check_send_label_and_scroll_position_in_database_mode():
     original=binding();original.window_kind='detached'
     image=screenshot()

@@ -150,9 +150,10 @@ class Sticker:
     path: Path
     sha256: str
     animated: bool
+    priority: str = '标准'
 
     def choice(self):
-        return {'id':self.id,'character':self.character,'meaning':self.meaning,'tags':self.tags,'animated':self.animated}
+        return {'id':self.id,'character':self.character,'meaning':self.meaning,'tags':self.tags,'animated':self.animated,'priority':self.priority}
 
 
 @dataclass(frozen=True)
@@ -198,7 +199,17 @@ EMOTIONS=(('开心','好耶','哈哈','成功','搞定','庆祝','击掌'),('困
 
 class StickerLibrary:
     def __init__(self,root):
+        from .sticker_import import StickerShelf
         self.root=Path(root).resolve();self.folder=self.root/'assets/sticker_library';self.items=[]
+        self.shelf=StickerShelf(self.root)
+        self.sources={};self.filenames={};self.preferences={};self.neutral=False
+        self._readable=False
+        self._stamp=object()
+        self._load_catalog()
+        self._base=tuple(self.items)
+        self.refresh()
+
+    def _load_catalog(self):
         try:
             path=self.folder/'catalog.json'
             if path.stat().st_size>8*1024*1024:return
@@ -217,27 +228,89 @@ class StickerLibrary:
                 if not isinstance(tags,list) or any(not isinstance(t,str) for t in tags):continue
                 self.items.append(Sticker(identity,str(row.get('character',''))[:20],str(row.get('meaning',''))[:120],
                     tuple(t[:20] for t in tags[:8]),file,digest,row['animated']))
+                self.sources[digest]=' '.join(str(row.get(k,'')) for k in ('source_page','rights')).strip()[:1000]
+                self.filenames[digest]=file.name
                 seen.add(identity)
         except (OSError,ValueError,TypeError):self.items=[]
 
+    def refresh(self):
+        from .sticker_import import EXTENSIONS,PRIORITIES,annotation
+        import sqlite3
+        try:
+            stamp=self.shelf.database.stat().st_mtime_ns if self.shelf.database.exists() else None
+            if stamp==self._stamp:return
+            rows,prefs,neutral=self.shelf.snapshot()
+            items={s.id:s for s in self._base}
+            by_digest={s.sha256:s for s in self._base}
+            for row in rows:
+                digest,ext=row['digest'],row['ext']
+                if not re.fullmatch('[a-f0-9]{64}',digest) or ext not in EXTENSIONS.values():continue
+                file=(self.shelf.files/(digest+'.'+ext)).resolve()
+                if not file.is_relative_to(self.shelf.files.resolve()) or not file.is_file():continue
+                old=by_digest.get(digest)
+                tags=json.loads(row['tags'])
+                if not isinstance(tags,list) or not all(isinstance(t,str) for t in tags):continue
+                try:annotation(row['category'],row['meaning'],tags,row['source'])
+                except ValueError:continue
+                identity=old.id if old else 'user_'+digest
+                items[identity]=Sticker(identity,row['category'],row['meaning'],tuple(tags),file,digest,row['frames']>1)
+                self.sources[digest]=row['source'];self.filenames[digest]=row['filename']
+            self.preferences=prefs;self.neutral=neutral
+            def priority(s):
+                value=prefs.get(s.character,'优先' if s.character=='菲比' else '标准')
+                if neutral and value!='停用':return '标准'
+                return value if value in PRIORITIES else '标准'
+            self.items=[replace(s,priority=priority(s)) for s in items.values()]
+            self._readable=True
+            self._stamp=stamp
+        except (OSError,sqlite3.Error,ValueError):
+            # An unreadable shelf must not authorize a previously disabled category.
+            self.items=[]
+            self._readable=False
+            self._stamp=object()
+
+    def reviewed(self):
+        self.refresh()
+        return {s.sha256:dict(character=s.character,meaning=s.meaning,tags=s.tags,source=self.sources.get(s.sha256,'')) for s in self.items}
+
+    def collection_enabled(self,name):
+        self.refresh()
+        return self._readable and self.preferences.get(name)!='停用'
+
+    @property
+    def preference_label(self):
+        if self.neutral:return '无分类偏好'
+        return '、'.join(sorted({s.character for s in self.items if s.priority=='优先'})) or '无分类偏好'
+
     def candidates(self,messages,excluded=(),*,request=None):
+        self.refresh()
         # Rank the latest request first; history supplies only light emotional context.
         latest=messages[-1].text if messages else ''
         text=' '.join(m.text for m in list(messages)[-4:])[-1600:]
         groups=[g for g in EMOTIONS if any(t in latest for t in g)]
         grams={latest[i:i+2] for i in range(max(0,len(latest)-1))}
-        def score(item):
+        def relevance(item):
             description=item.meaning+' '+''.join(item.tags)
             value=sum(8 for t in item.tags if t and t in latest)+sum(3 for g in groups if any(t in description for t in g))
             value+=min(6,sum(g in description for g in grams))
             value+=sum(.2 for t in item.tags if t and t in text)
-            if item.character=='菲比':value+=2
+            return value
+        def score(item):
+            value=relevance(item)+(2 if item.priority=='优先' else 0)
             # Stable per-turn variety, with no delay or extra model request.
             value+=int(hashlib.sha256((latest+item.id).encode()).hexdigest()[:4],16)/65536
             return value
         if request is None:request=sticker_request(messages)
+        if request.explicit and not request.character:
+            named=next((n for n in sorted({s.character for s in self.items},key=len,reverse=True) if n and n in latest),'')
+            if named:request=replace(request,character=named)
         excluded_hashes={s.sha256 for s in self.items if s.id in excluded}
-        ranked=sorted((s for s in self.items if s.sha256 not in excluded_hashes and request.accepts(s)),key=score,reverse=True)
+        eligible=[s for s in self.items if s.priority!='停用' and s.sha256 not in excluded_hashes and request.accepts(s)]
+        regular=[s for s in eligible if s.priority!='备用']
+        backup_matches=[s for s in eligible if s.priority=='备用' and relevance(s)>=3]
+        pool=regular or eligible
+        if regular and backup_matches and not any(relevance(s)>=3 for s in regular):pool=backup_matches
+        ranked=sorted(pool,key=score,reverse=True)
         unique=[];hashes=set()
         for item in ranked:
             if item.sha256 not in hashes:unique.append(item);hashes.add(item.sha256)
@@ -266,8 +339,10 @@ class StickerLibrary:
 
     def prepare(self,item):
         try:
+            self.refresh()
+            if not self.collection_enabled(item.character):raise ValueError()
             path=item.path.resolve()
-            if not path.is_relative_to(self.folder.resolve()) or path.stat().st_size>8*1024*1024:raise ValueError()
+            if not (path.is_relative_to(self.folder.resolve()) or path.is_relative_to(self.shelf.files.resolve())) or path.stat().st_size>8*1024*1024:raise ValueError()
             data=path.read_bytes()
             if hashlib.sha256(data).hexdigest()!=item.sha256:raise ValueError()
             with Image.open(io.BytesIO(data)) as image:

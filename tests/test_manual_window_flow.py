@@ -12,6 +12,20 @@ from xiaomao.layout import default_calibration_regions
 from xiaomao.gui import Panel
 
 
+def test_calibrating_secondary_preselects_its_detached_window_not_shared_main(tmp_path,native_root):
+    from xiaomao.calibration_ui import CalibrationFlow
+    from test_window_routing import selected,window,ROOM,PEER
+    cfg=selected(tmp_path,ROOM,PEER).with_window_binding(ROOM.name,window(ROOM,11,'main'))
+    callbacks=[]
+    p=SimpleNamespace(root=native_root,settings=cfg,work=lambda fn,ok,*args,**kw:callbacks.append(ok))
+    flow=CalibrationFlow(p,PEER.name)
+    try:
+        callbacks.pop()([dict(kind='main',hwnd=11,title='微信',minimized=False,pid=71),
+                         dict(kind='detached',hwnd=22,title=PEER.name,minimized=False,pid=71)])
+        assert flow.picker.current()==1
+    finally:flow.close()
+
+
 def test_recalibration_opens_even_when_old_main_geometry_cannot_be_detected(tmp_path,monkeypatch):
     old=Calibration(111,22,900,680,'群甲(3)',default_calibration_regions(),True,'群甲')
     cfg=Settings(tmp_path,group='群甲',calibration=asdict(old));cfg.save()
