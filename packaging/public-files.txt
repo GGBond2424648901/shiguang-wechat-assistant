@@ -21,6 +21,7 @@ packaging/collect_notices.py
 packaging/entry.py
 packaging/export_public.py
 packaging/preview_ui.py
+packaging/check_showcase.py
 packaging/public-files.txt
 packaging/public.gitignore
 packaging/setup.iss
@@ -171,6 +172,11 @@ tests/test_sticker_frequency.py
 tests/test_reply_rules_ui.py
 tests/test_settings_conflicts.py
 docs/screenshots/sticker-detail.png
+docs/screenshots/pacing.png
+docs/screenshots/wechat-group-a-live.png
+docs/screenshots/wechat-group-b-live.png
+docs/screenshots/provenance.json
+docs/media/shiguang-real-use-15s.gif
 停止拾光微信聊天助手.cmd
 启动拾光微信聊天助手.cmd
 启动拾光微信聊天助手.vbs

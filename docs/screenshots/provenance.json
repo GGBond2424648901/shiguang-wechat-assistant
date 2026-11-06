@@ -1,0 +1,396 @@
+{
+  "captured_date": "2026-11-06",
+  "editing": "Opaque privacy masks and documented crop only; no UI or dialogue reconstruction",
+  "screenshots": [
+    {
+      "file": "workspace.png",
+      "origin": "actual Windows application screenshot",
+      "source_sha256": "066fea2dcf967501dd05706d3b80824794f8f36f6016b084252ddceb0ff5a5bb",
+      "output_sha256": "2e9fd0aea499874bbf536a2851a08043e15c80e323ed4e4d20e427b58bf9de48",
+      "source_size": [
+        960,
+        640
+      ],
+      "crop": [
+        0,
+        0,
+        960,
+        640
+      ],
+      "redaction_rectangles": [
+        [
+          228,
+          96,
+          403,
+          119
+        ],
+        [
+          675,
+          299,
+          790,
+          320
+        ],
+        [
+          675,
+          330,
+          800,
+          350
+        ],
+        [
+          675,
+          360,
+          804,
+          380
+        ],
+        [
+          252,
+          427,
+          485,
+          445
+        ],
+        [
+          252,
+          477,
+          485,
+          497
+        ],
+        [
+          252,
+          512,
+          485,
+          531
+        ],
+        [
+          252,
+          535,
+          485,
+          552
+        ]
+      ],
+      "unchanged_outside_redactions": true,
+      "note": "Current v0.2.12 application, existing account and settings; replies remain paused"
+    },
+    {
+      "file": "sessions.png",
+      "origin": "actual Windows application screenshot",
+      "source_sha256": "520edbd9f67388c134b5014db2a1040dc9768383e45a35544811657f9814c27b",
+      "output_sha256": "7e8633524497f2a9fcc6c2d611d46136e1713054c273c96a1433de9064b3ec1f",
+      "source_size": [
+        960,
+        640
+      ],
+      "crop": [
+        0,
+        0,
+        960,
+        640
+      ],
+      "redaction_rectangles": [
+        [
+          236,
+          112,
+          412,
+          134
+        ],
+        [
+          236,
+          199,
+          456,
+          221
+        ],
+        [
+          236,
+          286,
+          496,
+          308
+        ],
+        [
+          596,
+          98,
+          809,
+          119
+        ]
+      ],
+      "unchanged_outside_redactions": true,
+      "note": "Current v0.2.12 application, existing account and settings; replies remain paused"
+    },
+    {
+      "file": "stickers.png",
+      "origin": "actual Windows application screenshot",
+      "source_sha256": "3a819257df90df400152b916bb4bdc05b0cd4c8117974ff08a26c570bb924b1a",
+      "output_sha256": "a8b53d8982420e277247d12c54d98df8f9ef15b01ca949d5cac53842966742d7",
+      "source_size": [
+        960,
+        640
+      ],
+      "crop": [
+        0,
+        0,
+        960,
+        640
+      ],
+      "redaction_rectangles": [],
+      "unchanged_outside_redactions": true,
+      "note": "Current v0.2.12 application, existing account and settings; replies remain paused"
+    },
+    {
+      "file": "sticker-detail.png",
+      "origin": "actual Windows application screenshot",
+      "source_sha256": "a8c6e822a8b7497f8c3bb3e670572aef5efc29c0d73bb2c704627b00614a3799",
+      "output_sha256": "ded64322ab883e68c819e5a5e4ef741640f438a77d6ff2ff8af89e35d02de151",
+      "source_size": [
+        960,
+        640
+      ],
+      "crop": [
+        0,
+        0,
+        960,
+        640
+      ],
+      "redaction_rectangles": [],
+      "unchanged_outside_redactions": true,
+      "note": "Current v0.2.12 application, existing account and settings; replies remain paused"
+    },
+    {
+      "file": "companion.png",
+      "origin": "actual Windows application screenshot",
+      "source_sha256": "f07d6542e33bec9aacd560d8066e40b3d56a75d02ef5cffad6a31715dd1f9884",
+      "output_sha256": "f09fd5b7368d7ed99e0190762162e7984b386744ac2dfb3beebdb721f4ddcfb1",
+      "source_size": [
+        960,
+        640
+      ],
+      "crop": [
+        0,
+        0,
+        960,
+        640
+      ],
+      "redaction_rectangles": [
+        [
+          246,
+          67,
+          404,
+          89
+        ],
+        [
+          800,
+          67,
+          924,
+          89
+        ]
+      ],
+      "unchanged_outside_redactions": true,
+      "note": "Current v0.2.12 application, existing account and settings; replies remain paused"
+    },
+    {
+      "file": "settings-pacing.png",
+      "origin": "actual Windows application screenshot",
+      "source_sha256": "057bd3735cce72f0ce0422d6cbd194288b975d3f421dac399582b26f41851382",
+      "output_sha256": "769ff467bf6d4b7bb71e230076a9e3c0f95676539da0bb0076dd647889cb8d41",
+      "source_size": [
+        960,
+        640
+      ],
+      "crop": [
+        0,
+        0,
+        960,
+        640
+      ],
+      "redaction_rectangles": [
+        [
+          232,
+          205,
+          296,
+          225
+        ],
+        [
+          638,
+          154,
+          855,
+          173
+        ],
+        [
+          638,
+          314,
+          815,
+          335
+        ]
+      ],
+      "unchanged_outside_redactions": true,
+      "note": "Current v0.2.12 application, existing account and settings; replies remain paused"
+    },
+    {
+      "file": "pacing.png",
+      "origin": "actual Windows application screenshot",
+      "source_sha256": "79154cc8d0b701f0bb06c0e609741540539a7cb28802fa861bf5dab4736bc3f5",
+      "output_sha256": "aa426e0e34af9e3d58d8e4a57695a0526b31ae4228fe3fd75fb2a0f3272cfc0b",
+      "source_size": [
+        960,
+        640
+      ],
+      "crop": [
+        0,
+        0,
+        960,
+        640
+      ],
+      "redaction_rectangles": [
+        [
+          638,
+          63,
+          816,
+          83
+        ]
+      ],
+      "unchanged_outside_redactions": true,
+      "note": "Current v0.2.12 application, existing account and settings; replies remain paused"
+    },
+    {
+      "file": "feedback.png",
+      "origin": "actual Windows application screenshot",
+      "source_sha256": "e4c793dad543e6846d534d3733987430b8dc3eec9570b2003aacbc4d652d6606",
+      "output_sha256": "1b184eabb8706fedcaacc55f1ac4cb6871ccf9f4a39af729c77401b477bdce75",
+      "source_size": [
+        960,
+        640
+      ],
+      "crop": [
+        0,
+        0,
+        960,
+        640
+      ],
+      "redaction_rectangles": [
+        [
+          228,
+          96,
+          403,
+          119
+        ],
+        [
+          675,
+          299,
+          790,
+          320
+        ],
+        [
+          675,
+          330,
+          800,
+          350
+        ],
+        [
+          675,
+          360,
+          804,
+          380
+        ],
+        [
+          252,
+          427,
+          485,
+          445
+        ],
+        [
+          252,
+          477,
+          485,
+          497
+        ],
+        [
+          252,
+          512,
+          485,
+          531
+        ],
+        [
+          252,
+          535,
+          485,
+          552
+        ]
+      ],
+      "unchanged_outside_redactions": true,
+      "note": "Current v0.2.12 application, existing account and settings; replies remain paused"
+    },
+    {
+      "file": "wechat-group-a-live.png",
+      "origin": "actual Windows application screenshot",
+      "source_sha256": "2c948e32249ee97539baa237bc676dbfd47be1ebebebd0c5b1896db309360ab7",
+      "output_sha256": "b187e9627359d39c8fd488670e844d42b93eecbb2797865d8a440807311706ff",
+      "source_size": [
+        602,
+        642
+      ],
+      "crop": [
+        0,
+        303,
+        601,
+        489
+      ],
+      "redaction_rectangles": [
+        [
+          12,
+          329,
+          59,
+          377
+        ],
+        [
+          66,
+          333,
+          181,
+          355
+        ],
+        [
+          538,
+          406,
+          585,
+          453
+        ]
+      ],
+      "unchanged_outside_redactions": true,
+      "note": "2026-11-06 historical verified WeChat exchange"
+    },
+    {
+      "file": "wechat-group-b-live.png",
+      "origin": "actual Windows application screenshot",
+      "source_sha256": "5ec2f49e0f6f8f1d17c34dac0a69a544dfd242f73d716a40b83bc40fb27097f5",
+      "output_sha256": "09b218ed0fa916ad7ad3b9f092de2c7e0722efb1716e16931c0981718d323797",
+      "source_size": [
+        601,
+        722
+      ],
+      "crop": [
+        0,
+        192,
+        601,
+        346
+      ],
+      "redaction_rectangles": [
+        [
+          13,
+          220,
+          62,
+          272
+        ],
+        [
+          66,
+          225,
+          288,
+          248
+        ],
+        [
+          538,
+          295,
+          584,
+          341
+        ]
+      ],
+      "unchanged_outside_redactions": true,
+      "note": "2026-11-06 historical verified WeChat exchange"
+    }
+  ]
+}
