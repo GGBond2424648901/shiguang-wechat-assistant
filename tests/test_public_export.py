@@ -17,14 +17,13 @@ def test_export_rejects_runtime_private_and_design_files(monkeypatch,name):
     with pytest.raises(ValueError):exporter(monkeypatch).review_names([Path(name)])
 
 
-def test_export_is_self_contained_neutral_and_rebuildable(tmp_path,monkeypatch):
-    from PIL import Image
+def test_export_preserves_approved_brand_and_is_rebuildable(tmp_path,monkeypatch):
     module=exporter(monkeypatch)
     target=tmp_path/'public'
     module.export(target,tmp_path/'source.zip')
     assert not any((target/n).exists() for n in ('runtime','design','assets'))
-    with Image.open(target/'xiaomao/ui_assets/app.png') as icon:
-        assert icon.getpixel((256,30))[:3]==(27,48,68)
+    for name in ('app.png','app.ico','persona-avatar.png'):
+        assert (target/'xiaomao/ui_assets'/name).read_bytes()==(module.ROOT/'xiaomao/ui_assets'/name).read_bytes()
     assert not (target/'config/settings.json').exists()
     assert (target/'config/persona.md').read_bytes()==(target/'xiaomao/_vendor/dafeiyu/persona-wechat.md').read_bytes()
     assert (target/'xiaomao/ui_assets/表情包收集说明.txt').is_file()

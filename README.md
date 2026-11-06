@@ -1,4 +1,4 @@
-<img src="xiaomao/ui_assets/app.png" width="64" height="64" alt="拾光猫咪图标">
+<img src="xiaomao/ui_assets/app.png" width="64" height="64" alt="拾光原动漫图标">
 
 # 拾光微信聊天助手 · Shiguang WeChat Assistant
 
@@ -6,13 +6,13 @@
 
 ![工作台，显示主要会话、待发送消息与监听范围](docs/screenshots/workspace.png)
 
-工作台为本人实际使用的 v0.2.12 界面，三个会话及 747 条已确认记录均来自本机；拍摄时三个会话处于暂停状态。灰色块遮挡真实群名和成员信息，截图没有改写界面文字或运行状态。
+工作台为本人实际使用的 v0.2.13 界面，所选会话及 747 条已确认记录均来自本机；拍摄时保留各会话的暂停状态。灰色块遮挡真实群名和成员信息，截图没有改写界面文字或运行状态。
 
 ## 15 秒实机介绍
 
-[![15 秒实机截图短片，点击打开 MP4](docs/media/shiguang-real-use-15s.gif)](https://github.com/GGBond2424648901/xiaomao-wechat-assistant/releases/download/v0.2.12/shiguang-real-use-15s.mp4)
+[![15 秒实机截图短片，点击打开 MP4](docs/media/shiguang-real-use-15s.gif)](https://github.com/GGBond2424648901/xiaomao-wechat-assistant/releases/download/v0.2.13/shiguang-real-use-15s.mp4)
 
-点击动图可打开 [MP4 视频](https://github.com/GGBond2424648901/xiaomao-wechat-assistant/releases/download/v0.2.12/shiguang-real-use-15s.mp4)。短片由真实工作台、历史微信收发和实际素材库截图剪辑，时长 15 秒，无声。它是截图介绍片，不能据此推断实际回复耗时。
+点击动图可打开 [MP4 视频](https://github.com/GGBond2424648901/xiaomao-wechat-assistant/releases/download/v0.2.13/shiguang-real-use-15s.mp4)。短片由真实工作台、历史微信收发和实际素材库截图剪辑，时长 15 秒，无声。它是截图介绍片，不能据此推断实际回复耗时。
 
 ## 微信里的真实使用
 
@@ -122,6 +122,6 @@ uv sync --frozen --extra dev
 
 ## 公开源码范围
 
-公开树只包含运行代码、测试、构建工具、使用说明、现有猫咪图标，以及本人授权公开并脱敏的实际使用截图和介绍短片。设计过程稿、私人配置、密钥、原始聊天截图、记忆库、个人素材库与运行日志均不随源码或安装包发布。`packaging/export_public.py` 按审核清单导出，并拒绝运行数据和设计目录。安装版的个人数据保存在本机，更新应用不会将这些内容上传到 GitHub。
+公开树只包含运行代码、测试、构建工具、使用说明、原动漫图标，以及本人授权公开并脱敏的实际使用截图和介绍短片。设计过程稿、私人配置、密钥、原始聊天截图、记忆库、个人素材库与运行日志均不随源码或安装包发布。`packaging/export_public.py` 按审核清单导出，并拒绝运行数据和设计目录。安装版的个人数据保存在本机，更新应用不会将这些内容上传到 GitHub。
 
 `packaging/preview_ui.py` 仅供开发时生成合成界面用例，不能生成这里的真实使用证据。

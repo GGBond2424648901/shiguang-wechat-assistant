@@ -5,8 +5,8 @@
     {
       "file": "workspace.png",
       "origin": "actual Windows application screenshot",
-      "source_sha256": "066fea2dcf967501dd05706d3b80824794f8f36f6016b084252ddceb0ff5a5bb",
-      "output_sha256": "2e9fd0aea499874bbf536a2851a08043e15c80e323ed4e4d20e427b58bf9de48",
+      "source_sha256": "c26b01bc005b2f56f6dd3293a84002054ed6da554b7ba874b9cf9ee2573d1ac1",
+      "output_sha256": "78b97bbf2919d5f3b4d4bb62c9a34990f9d7b572247ca8a6421bcaad572005d9",
       "source_size": [
         960,
         640
@@ -43,6 +43,12 @@
           380
         ],
         [
+          675,
+          389,
+          785,
+          411
+        ],
+        [
           252,
           427,
           485,
@@ -68,13 +74,13 @@
         ]
       ],
       "unchanged_outside_redactions": true,
-      "note": "Current v0.2.12 application, existing account and settings; replies remain paused"
+      "note": "Current v0.2.13 application, existing account and settings; replies remain paused"
     },
     {
       "file": "sessions.png",
       "origin": "actual Windows application screenshot",
-      "source_sha256": "520edbd9f67388c134b5014db2a1040dc9768383e45a35544811657f9814c27b",
-      "output_sha256": "7e8633524497f2a9fcc6c2d611d46136e1713054c273c96a1433de9064b3ec1f",
+      "source_sha256": "24456f93ea11989bd4c9ef59e38ca814f914751bf9e9c6ea62616a969ff347a6",
+      "output_sha256": "f7a319eeb5d4952f4b25a689283b3a378ad1a98dd51b55c2ac4d8e8b394a9d8f",
       "source_size": [
         960,
         640
@@ -112,13 +118,13 @@
         ]
       ],
       "unchanged_outside_redactions": true,
-      "note": "Current v0.2.12 application, existing account and settings; replies remain paused"
+      "note": "Current v0.2.13 application, existing account and settings; replies remain paused"
     },
     {
       "file": "stickers.png",
       "origin": "actual Windows application screenshot",
-      "source_sha256": "3a819257df90df400152b916bb4bdc05b0cd4c8117974ff08a26c570bb924b1a",
-      "output_sha256": "a8b53d8982420e277247d12c54d98df8f9ef15b01ca949d5cac53842966742d7",
+      "source_sha256": "debfe1fbf137098555f5191442778b8d81238e253ff69ae72ef34470626768a2",
+      "output_sha256": "49f61fc4d6956b7f246ae59db571a9f987cc5c83d52b2bd0ffc21efb83aa7acd",
       "source_size": [
         960,
         640
@@ -131,13 +137,13 @@
       ],
       "redaction_rectangles": [],
       "unchanged_outside_redactions": true,
-      "note": "Current v0.2.12 application, existing account and settings; replies remain paused"
+      "note": "Current v0.2.13 application, existing account and settings; replies remain paused"
     },
     {
       "file": "sticker-detail.png",
       "origin": "actual Windows application screenshot",
-      "source_sha256": "a8c6e822a8b7497f8c3bb3e670572aef5efc29c0d73bb2c704627b00614a3799",
-      "output_sha256": "ded64322ab883e68c819e5a5e4ef741640f438a77d6ff2ff8af89e35d02de151",
+      "source_sha256": "2472ad0fb7fc1b3c0ce24d3af086e3d4311310419ec25584f2c91ecafa66f303",
+      "output_sha256": "7f06bf816708a72e048945ca29a40f9208a180fd3942a67284d106e0be47f44d",
       "source_size": [
         960,
         640
@@ -150,13 +156,13 @@
       ],
       "redaction_rectangles": [],
       "unchanged_outside_redactions": true,
-      "note": "Current v0.2.12 application, existing account and settings; replies remain paused"
+      "note": "Current v0.2.13 application, existing account and settings; replies remain paused"
     },
     {
       "file": "companion.png",
       "origin": "actual Windows application screenshot",
-      "source_sha256": "f07d6542e33bec9aacd560d8066e40b3d56a75d02ef5cffad6a31715dd1f9884",
-      "output_sha256": "f09fd5b7368d7ed99e0190762162e7984b386744ac2dfb3beebdb721f4ddcfb1",
+      "source_sha256": "469d5673cbb84f398be90f994d543608ba73523bc58d3ccbeb4310759935df6f",
+      "output_sha256": "2fe3825b260aad0dfe24c535930b4167997ae2fd9e9b6f1c4a5095093b5a98ea",
       "source_size": [
         960,
         640
@@ -182,13 +188,13 @@
         ]
       ],
       "unchanged_outside_redactions": true,
-      "note": "Current v0.2.12 application, existing account and settings; replies remain paused"
+      "note": "Current v0.2.13 application, existing account and settings; replies remain paused"
     },
     {
       "file": "settings-pacing.png",
       "origin": "actual Windows application screenshot",
-      "source_sha256": "057bd3735cce72f0ce0422d6cbd194288b975d3f421dac399582b26f41851382",
-      "output_sha256": "769ff467bf6d4b7bb71e230076a9e3c0f95676539da0bb0076dd647889cb8d41",
+      "source_sha256": "553d90d5deb15e52d30b275ba79161057efc56f5532d0c8f1c3c71247a811d61",
+      "output_sha256": "72252b444af4f7e4de67a9dac97e90d9371c5ece1a025357e6dcab111c91f99f",
       "source_size": [
         960,
         640
@@ -220,13 +226,13 @@
         ]
       ],
       "unchanged_outside_redactions": true,
-      "note": "Current v0.2.12 application, existing account and settings; replies remain paused"
+      "note": "Current v0.2.13 application, existing account and settings; replies remain paused"
     },
     {
       "file": "pacing.png",
       "origin": "actual Windows application screenshot",
-      "source_sha256": "79154cc8d0b701f0bb06c0e609741540539a7cb28802fa861bf5dab4736bc3f5",
-      "output_sha256": "aa426e0e34af9e3d58d8e4a57695a0526b31ae4228fe3fd75fb2a0f3272cfc0b",
+      "source_sha256": "23236a31200e5d865581e6ef2fc1b485f79ac56912e71907330e1d90f5059b3b",
+      "output_sha256": "382ef930d27d7a87dde34d227fa2ddcb2b14042cb3fcf8c04b3b704952ebc08e",
       "source_size": [
         960,
         640
@@ -246,13 +252,13 @@
         ]
       ],
       "unchanged_outside_redactions": true,
-      "note": "Current v0.2.12 application, existing account and settings; replies remain paused"
+      "note": "Current v0.2.13 application, existing account and settings; replies remain paused"
     },
     {
       "file": "feedback.png",
       "origin": "actual Windows application screenshot",
-      "source_sha256": "e4c793dad543e6846d534d3733987430b8dc3eec9570b2003aacbc4d652d6606",
-      "output_sha256": "1b184eabb8706fedcaacc55f1ac4cb6871ccf9f4a39af729c77401b477bdce75",
+      "source_sha256": "6da4abf7fc52b55a06e82b8c026f9afd06198bd392353b348f1eea474eaf2bd2",
+      "output_sha256": "6c7db59a9fc9ebbce043cdfaf0e0691efbf78f93df2f30466d4f98e12b3139ad",
       "source_size": [
         960,
         640
@@ -289,6 +295,12 @@
           380
         ],
         [
+          675,
+          389,
+          785,
+          411
+        ],
+        [
           252,
           427,
           485,
@@ -314,7 +326,7 @@
         ]
       ],
       "unchanged_outside_redactions": true,
-      "note": "Current v0.2.12 application, existing account and settings; replies remain paused"
+      "note": "Current v0.2.13 application, existing account and settings; replies remain paused"
     },
     {
       "file": "wechat-group-a-live.png",

@@ -39,7 +39,7 @@ def export(destination: Path, archive: Path | None = None):
         target.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(ROOT / name, target)
     shutil.copyfile(destination / "packaging/public.gitignore", destination / ".gitignore")
-    # Public builds use neutral artwork, never the owner's local icon/avatar.
+    # Preserve the anime icon/avatar explicitly approved for this product.
     create_assets(destination/'xiaomao/ui_assets')
     # Supply an upstream-derived factory persona, never a user's edited persona.
     config = destination / "config"

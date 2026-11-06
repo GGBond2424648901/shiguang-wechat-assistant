@@ -147,6 +147,9 @@ xiaomao/sticker_import.py
 xiaomao/sticker_ui.py
 xiaomao/sticker_detail_ui.py
 xiaomao/ui_assets/whale-banner.png
+xiaomao/ui_assets/app.png
+xiaomao/ui_assets/app.ico
+xiaomao/ui_assets/persona-avatar.png
 xiaomao/stickers.py
 xiaomao/store.py
 xiaomao/theme.py
