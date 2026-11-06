@@ -119,6 +119,7 @@ class Resident:
                 'group_names':list(settings.allowed_groups),'pending_count':sum(s['pending_count'] for s in states),
                 'window_reload_pending':reload_pending,'idle_wake':settings.idle_wake,'can_stop_if_idle':True,
                 'can_configure_reply_rules':True,
+                'can_control_selected':True,
                 'last_observed':max((s['last_observed'] for s in states if s['last_observed'] is not None),default=None),
                 'groups':[{'name':s['group'],'mode':s['mode'],'reason':s['reason'],'calibrated':s['calibrated'],
                            'window_kind':s['window_kind'],'window_state':s['window_state'],'last_result':s.get('last_result'),
@@ -199,6 +200,7 @@ class Resident:
             ready=[e for e in self.engines if e.settings.binding and e.settings.binding.bottom_confirmed]
             if not ready:raise ValueError('请先校准窗口并确认消息列表位于底部')
             if not self.settings.model_ready:raise ValueError('请先配置模型及有效的加密凭据')
+            self._save_pause_states([(e,False) for e in self.engines])
             self.requested_mode='auto'
             for engine in self.engines:
                 if engine in ready:engine.enable()
@@ -210,7 +212,38 @@ class Resident:
     def pause(self,reason='用户已暂停'):
         with self.lock:
             self.requested_mode='paused'
-            return self._control('pause',reason)
+            self._control('pause',reason)
+            if reason=='用户已暂停':self._save_pause_states([(e,True) for e in self.engines])
+            return self.status()
+
+    def restore_auto(self):
+        """Resume an auto worker after restart without undoing room pauses."""
+        with self.lock:
+            self.requested_mode='auto'
+            for engine in self.engines:
+                if engine.settings.is_conversation_paused():continue
+                if engine.settings.binding and engine.settings.binding.bottom_confirmed and engine.settings.model_ready:
+                    engine.enable()
+            return self.status()
+
+    def _save_pause_states(self,changes):
+        path=self.settings.runtime/'config.json'
+        exists=path.exists()
+        saved=Settings.load(self.settings.root) if exists else self.settings
+        fresh=saved
+        for engine,paused in changes:
+            name,scope=engine.settings.group,engine.settings.memory_scope
+            if name not in saved.saved_groups or saved.conversation_scope(name)!=scope:
+                raise ValueError('该会话身份或监听范围已改变，请重新选择')
+            fresh=fresh.with_conversation_pause(name,paused)
+        fresh.save(expected=saved if exists else None)
+        keys=fresh.paused_conversations
+        self.settings=replace(self.settings,paused_conversations=keys)
+        if self.reload_request:self.reload_request=replace(self.reload_request,paused_conversations=keys)
+        for engine in self.engines:
+            engine.settings=replace(engine.settings,paused_conversations=keys)
+            if hasattr(engine.model,'settings'):engine.model.settings=engine.settings
+            if engine.companion:engine.companion.settings=engine.settings
 
     def reload_windows(self):
         saved=Settings.load(self.settings.root)
@@ -221,6 +254,7 @@ class Resident:
             self.reload_request=replace(self.settings,group=saved.group,group_names=saved.group_names,
                 monitor_all_groups=saved.monitor_all_groups,conversation_targets=saved.conversation_targets,
                 calibration=saved.calibration,calibration_account=saved.calibration_account,idle_wake=saved.idle_wake,
+                paused_conversations=saved.paused_conversations,
                 window_bindings=saved.window_bindings,self_name_unique_confirmed=(
                     self.settings.self_name_unique_confirmed and self.settings.memory_scope==saved.memory_scope))
         if self.cycle_lock.acquire(blocking=False):
@@ -289,6 +323,7 @@ class Resident:
                 engine.settings=cfg
                 if hasattr(engine.model,'settings'):engine.model.settings=cfg
                 if engine.companion:engine.companion.settings=cfg
+                if cfg.is_conversation_paused() and engine.mode!='paused':engine.pause('本会话已暂停')
                 if engine.mode!='paused':
                     if not cfg.binding or not cfg.binding.bottom_confirmed:
                         if engine.mode=='auto':engine.observe()
@@ -378,8 +413,23 @@ class Resident:
 
     def enable_selected(self,group,scope):
         with self.lock:
-            self._selected_engine(group,scope).enable()
+            selected=self._selected_engine(group,scope)
+            if not selected.settings.binding or not selected.settings.binding.bottom_confirmed:
+                raise ValueError('请先校准当前会话窗口')
+            if not selected.settings.model_ready:raise ValueError('请先配置模型及有效的加密凭据')
+            changes=[(e,True) for e in self.engines if e is not selected and e.mode=='paused']+[(selected,False)]
+            self._save_pause_states(changes)
+            selected.enable()
             self.requested_mode='auto'
+            return self.status()
+
+    def pause_selected(self,group,scope):
+        with self.lock:
+            selected=self._selected_engine(group,scope)
+            selected.pause('本会话已暂停')
+            try:self._save_pause_states([(selected,True)])
+            except (OSError,ValueError):
+                raise ValueError('本会话暂停已生效，但重启偏好未能保存，请稍后重试') from None
             return self.status()
 
     def companion_configure(self,group,scope,preferences):

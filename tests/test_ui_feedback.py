@@ -103,18 +103,173 @@ def test_callback_failure_does_not_kill_the_ui_result_pump(native_root):
     assert seen==['next'] and timers and '请重试' in p.notice.get()
 
 
-def test_feedback_is_in_window_and_does_not_take_keyboard_focus(native_root):
+def test_feedback_is_in_window_and_does_not_take_keyboard_focus(native_root,monkeypatch):
     from xiaomao.feedback_ui import FeedbackBar
-    host=tk.Frame(native_root);host.pack()
+    host=tk.Frame(native_root);host.place(x=0,y=0,width=800,height=500)
     value=tk.StringVar(host)
     bar=FeedbackBar(host);bar.watch(value)
+    clock=FeedbackClock(bar,monkeypatch)
     before=native_root.focus_get()
-    value.set('正在保存设置…');native_root.update_idletasks()
+    value.set('正在保存设置…');clock.advance(160)
     assert bar.kind=='busy'
     value.set('设置已保存');native_root.update_idletasks()
     assert bar.kind=='success' and bar.winfo_manager()=='place'
     value.set('保存失败，请检查连接');native_root.update_idletasks()
     assert bar.kind=='error' and bar.dismiss_job is None
     assert native_root.focus_get() is before
-    value.set('');assert not bar.winfo_manager()
+    value.set('');clock.advance(100)
+    assert not bar.winfo_manager()
     host.destroy()
+
+
+class FeedbackClock:
+    """Replace only the widget's wall clock/timers; keep real Tk layout and controls."""
+    def __init__(self,bar,monkeypatch):
+        import xiaomao.feedback_ui as feedback_ui
+        self.bar=bar;self.now=0.;self.jobs={};self.serial=0
+        monkeypatch.setattr(feedback_ui,'monotonic',lambda:self.now/1000,raising=False)
+        monkeypatch.setattr(bar,'after',self.after)
+        monkeypatch.setattr(bar,'after_cancel',lambda job:self.jobs.pop(job,None))
+
+    def after(self,delay,callback,*args):
+        self.serial+=1;job=f'feedback-test-{self.serial}'
+        self.jobs[job]=(self.now+(0 if delay=='idle' else delay),callback,args)
+        return job
+
+    def advance(self,milliseconds):
+        target=self.now+milliseconds
+        self.bar._root().update_idletasks()
+        for _ in range(10000):
+            ready=[(due,job) for job,(due,_,_) in self.jobs.items() if due<=target]
+            if not ready:break
+            due,job=min(ready);self.now=due
+            _,callback,args=self.jobs.pop(job);callback(*args)
+            self.bar._root().update_idletasks()
+        else:raise AssertionError('feedback scheduled an endless timer loop')
+        self.now=target
+        self.bar._root().update_idletasks()
+
+
+def feedback_bar(native_root,monkeypatch):
+    from xiaomao.feedback_ui import FeedbackBar
+    host=tk.Frame(native_root);host.place(x=0,y=0,width=800,height=500)
+    native_root.update_idletasks()
+    bar=FeedbackBar(host)
+    return host,bar,FeedbackClock(bar,monkeypatch)
+
+
+def test_feedback_slides_in_then_retracts_faster_without_unmapping_midway(native_root,monkeypatch):
+    host,bar,clock=feedback_bar(native_root,monkeypatch)
+    try:
+        bar.show('设置已保存');clock.advance(0)
+        outside=bar.winfo_x()
+        clock.advance(80);middle=bar.winfo_x()
+        clock.advance(80);inside=bar.winfo_x()
+        assert outside>middle>inside>=0
+        assert bar.winfo_x()+bar.winfo_width()<=800
+        bar.dismiss();clock.advance(0)
+        assert bar.winfo_manager()=='place' and bar.winfo_x()==inside
+        clock.advance(48)
+        assert bar.winfo_manager()=='place' and bar.winfo_x()>inside
+        clock.advance(52)
+        assert not bar.winfo_manager()
+    finally:host.destroy()
+
+
+def test_feedback_updates_in_place_and_reverses_an_unfinished_retract(native_root,monkeypatch):
+    host,bar,clock=feedback_bar(native_root,monkeypatch)
+    try:
+        bar.show('正在保存设置…');clock.advance(160)
+        inside=bar.winfo_x()
+        bar.show('正在应用设置…');clock.advance(0)
+        assert bar.winfo_x()==inside and bar.progress.winfo_manager()=='grid'
+        bar.show('设置已保存');clock.advance(0)
+        assert bar.winfo_x()==inside and not bar.progress.winfo_manager()
+        bar.dismiss();clock.advance(40)
+        retracting=bar.winfo_x()
+        assert retracting>inside and bar.winfo_manager()=='place'
+        bar.show('连接失败，请重试');clock.advance(0)
+        assert bar.winfo_x()==retracting
+        clock.advance(160)
+        assert bar.winfo_x()==inside and bar.kind=='error' and bar.dismiss_job is None
+        clock.advance(10000)
+        assert bar.winfo_manager()=='place'
+    finally:host.destroy()
+
+
+def test_feedback_repeated_updates_do_not_restart_the_entrance(native_root,monkeypatch):
+    host,bar,clock=feedback_bar(native_root,monkeypatch)
+    try:
+        bar.show('正在保存设置…');clock.advance(64)
+        bar.show('正在应用设置…');clock.advance(64)
+        bar.show('正在刷新设置…');clock.advance(32)
+        assert 0<=bar.winfo_x()
+        assert bar.winfo_x()+bar.winfo_width()<=800
+        assert bar.progress.winfo_manager()=='grid'
+    finally:host.destroy()
+
+
+def test_feedback_success_and_info_auto_retract_after_three_seconds(native_root,monkeypatch):
+    host,bar,clock=feedback_bar(native_root,monkeypatch)
+    try:
+        for text in ('设置已保存','请查看帮助说明'):
+            bar.show(text);clock.advance(2990)
+            assert bar.winfo_manager()=='place'
+            clock.advance(300)
+            assert not bar.winfo_manager()
+    finally:host.destroy()
+
+
+def test_feedback_new_busy_result_cancels_old_auto_dismiss_and_busy_persists(native_root,monkeypatch):
+    host,bar,clock=feedback_bar(native_root,monkeypatch)
+    try:
+        bar.show('设置已保存');clock.advance(2800)
+        bar.show('正在校准…');clock.advance(20000)
+        assert bar.winfo_manager()=='place' and bar.kind=='busy'
+        assert bar.dismiss_job is None and bar.progress.winfo_manager()=='grid'
+    finally:host.destroy()
+
+
+def test_feedback_resizes_inside_host_and_hides_echoed_keys(native_root,monkeypatch):
+    host,bar,clock=feedback_bar(native_root,monkeypatch)
+    try:
+        bar.show('保存失败 sk-project_example-secret，请检查连接。'*10);clock.advance(160)
+        assert 'sk-project_example-secret' not in bar.message.cget('text')
+        assert '[密钥已隐藏]' in bar.message.cget('text')
+        host.place_configure(width=260,height=220);native_root.update_idletasks();clock.advance(0)
+        assert 0<=bar.winfo_x()<260
+        assert bar.winfo_x()+bar.winfo_width()<=260
+        assert 0<=bar.winfo_y()<220
+        assert bar.winfo_y()+bar.winfo_height()<=220
+        assert int(bar.message.cget('wraplength'))<260
+    finally:host.destroy()
+
+
+def test_feedback_destruction_cancels_motion_progress_dismiss_and_variable_traces(native_root,monkeypatch):
+    host,bar,clock=feedback_bar(native_root,monkeypatch)
+    value=tk.StringVar(host);bar.watch(value)
+    value.set('正在保存设置…');clock.advance(32)
+    host.destroy()
+    assert not clock.jobs
+    assert not value.trace_info()
+    value.set('设置已保存');clock.advance(10000)
+
+
+def test_feedback_destroyed_during_auto_retract_leaves_no_callbacks(native_root,monkeypatch):
+    host,bar,clock=feedback_bar(native_root,monkeypatch)
+    bar.show('设置已保存');clock.advance(3050)
+    host.destroy()
+    assert not clock.jobs
+    clock.advance(10000)
+
+
+def test_feedback_native_tcl_timers_are_cancelled_when_host_is_destroyed(native_root):
+    from xiaomao.feedback_ui import FeedbackBar
+    before=set(native_root.tk.splitlist(native_root.tk.call('after','info')))
+    host=tk.Frame(native_root);host.place(x=0,y=0,width=800,height=500)
+    bar=FeedbackBar(host)
+    bar.show('正在保存设置…');native_root.update_idletasks()
+    pending=set(native_root.tk.splitlist(native_root.tk.call('after','info')))-before
+    assert pending
+    host.destroy()
+    assert not pending.intersection(native_root.tk.splitlist(native_root.tk.call('after','info')))

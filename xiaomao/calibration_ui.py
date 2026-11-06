@@ -40,12 +40,14 @@ class CalibrationFlow:
         box=tk.Frame(self.window,bg=PAPER,padx=18,pady=14)
         box.pack(fill='both',expand=True,padx=10,pady=10)
         label(box,'校准微信窗口',size=16,bold=True).pack(fill='x',pady=(0,8))
-        label(box,'回复对象',bold=True).pack(anchor='w')
+        label(box,'校准目标',bold=True).pack(anchor='w')
         names=list(panel.settings.saved_groups)
         if names==[TARGET_GROUP] and not panel.settings.conversation_targets:names=[]
         self.target=ttk.Combobox(box,state='readonly',values=[self.AUTO,*names],width=36)
         self.target.set(target if target in names else self.AUTO)
         self.target.pack(fill='x',pady=(3,10))
+        label(box,'目标与窗口内的会话不同时，可明确选择“识别窗口中的会话”。保存只更新该对象的窗口，其他绑定和暂停状态会保留。',
+              color=MUTED,wraplength=420).pack(fill='x',pady=(0,10))
         label(box,'已打开的微信窗口',bold=True).pack(anchor='w')
         self.picker=ttk.Combobox(box,state='readonly',width=45)
         self.picker.pack(fill='x',pady=(3,8))
@@ -147,6 +149,7 @@ class CalibrationFlow:
             self.window.withdraw()
             self.editor=CalibrationDialog(self.panel,*value,flow=self)
             present_calibration(self.editor.window)
+            self.editor.recognize_target()
         self.panel.work(grab,ready,self.fail,mutates=False)
 
     def release_lease(self):
@@ -211,18 +214,30 @@ class CalibrationDialog:
         self.confirmed = tk.BooleanVar(self.window, False)
         self.message = tk.StringVar(self.window, '按 1–4 选择区域，在截图上拖动重画。Ctrl+Z 可撤销。')
         self.window.columnconfigure(0, weight=1)
-        self.window.rowconfigure(1, weight=1)
+        self.window.rowconfigure(2, weight=1)
         head = tk.Frame(self.window, bg=INK)
         head.grid(row=0, column=0, sticky='ew')
         label(head, '校准微信窗口', size=17, color=PAPER, bold=True).pack(side='left', padx=16, pady=8)
         tk.Button(head, text='×', font=(FONT, 16), command=self.close,
                   bg=INK, fg=PAPER, bd=0, highlightthickness=0, cursor='hand2',
                   activebackground=MUTED, activeforeground=PAPER).pack(side='right', padx=(2, 10))
-        self.target_label = label(head, '当前目标　' + (calibration.target_group or calibration.header_label),
+        self.target_label = label(head, '校准目标　' + (calibration.target_group or '待识别窗口中的会话'),
                                   color='#D9E4EA', size=10)
         self.target_label.pack(side='right', padx=(10, 0))
+        self.identity_card=tk.Frame(self.window,bg='#FFE8D9',padx=12,pady=8)
+        self.identity_card.grid(row=1,column=0,sticky='ew',padx=18,pady=(10,0))
+        self.observed_target=tk.StringVar(self.window,'当前微信：待识别')
+        self.chosen_target=tk.StringVar(self.window,'校准目标：'+(calibration.target_group or '识别窗口中的会话'))
+        self.identity_card.columnconfigure(0,weight=1)
+        self.observed_caption=label(self.identity_card,textvariable=self.observed_target,bold=True)
+        self.observed_caption.grid(row=0,column=0,sticky='ew')
+        self.chosen_caption=label(self.identity_card,textvariable=self.chosen_target)
+        self.chosen_caption.grid(row=1,column=0,sticky='ew',pady=(3,0))
+        self.use_observed_button=button(self.identity_card,'使用窗口中的会话',
+            lambda:self.recognize_target(choose_observed=True),compact=True)
+        self.use_observed_button.grid(row=0,column=1,rowspan=2,sticky='e',padx=(12,0))
         toolbar = tk.Frame(self.window, bg=BG)
-        toolbar.grid(row=2, column=0, sticky='ew', padx=18, pady=(2, 7))
+        toolbar.grid(row=3, column=0, sticky='ew', padx=18, pady=(2, 7))
         self.region_labels, self.pick_regions = {}, {}
         options = [f'矩形区域 {i}' for i in range(1, 5)]
         for col, (name, title) in enumerate(self.NAMES.items()):
@@ -240,7 +255,7 @@ class CalibrationDialog:
             self.pick_regions[name] = picker
         self.canvas = tk.Canvas(self.window, bg='#E4E8E8', bd=0, highlightthickness=1,
                                 highlightbackground=LINE, cursor='crosshair', height=1, width=1)
-        self.canvas.grid(row=1, column=0, sticky='nsew', padx=18, pady=(12, 8))
+        self.canvas.grid(row=2, column=0, sticky='nsew', padx=18, pady=(12, 8))
         self.canvas.bind('<Configure>', self.resize)
         self.canvas.bind('<ButtonPress-1>', self.begin)
         self.canvas.bind('<B1-Motion>', self.drag)
@@ -249,7 +264,7 @@ class CalibrationDialog:
         for number, key in enumerate(self.NAMES,1):
             self.window.bind(f'<KeyPress-{number}>',lambda e,k=key:self._choose_shortcut(e,k))
         footer = tk.Frame(self.window, bg=PAPER)
-        footer.grid(row=3, column=0, sticky='ew', padx=18, pady=(0, 12))
+        footer.grid(row=4, column=0, sticky='ew', padx=18, pady=(0, 12))
         self.check = tk.Checkbutton(footer, text='已确认目标会话唯一、聊天位于底部，并且输入框没有草稿',
                               variable=self.confirmed, bg=PAPER, fg=INK, selectcolor=BG,
                               activebackground=PAPER, activeforeground=INK, anchor='w',
@@ -299,6 +314,8 @@ class CalibrationDialog:
         self.help_label.configure(wraplength=max(120, event.width - 18))
         self.check.configure(wraplength=max(120, event.width - 40))
         self.target_label.configure(wraplength=max(100, event.width // 2))
+        for caption in (self.observed_caption,self.chosen_caption):
+            caption.configure(wraplength=max(120,event.width-self.use_observed_button.winfo_reqwidth()-50))
 
     def _render(self):
         self.render_job = None
@@ -403,6 +420,50 @@ class CalibrationDialog:
     def alive(self):
         return bool(self.window.winfo_exists())
 
+    def _pending(self,busy):
+        self.validating=busy
+        self.undo_button.configure(state='normal' if not busy and self.undo_stack else 'disabled')
+        for control in (self.save_button,self.check,self.use_observed_button):
+            control.configure(state='disabled' if busy else 'normal')
+        for picker in self.pick_regions.values():
+            picker.configure(state='disabled' if busy else 'readonly')
+
+    def recognize_target(self,*,choose_observed=False):
+        """A different recipient is adopted only after this explicit UI action."""
+        if self.validating or self.cancelled.is_set():return
+        from .selection import identify_reviewed_window,CalibrationIdentityError
+        frozen=deepcopy(self.calibration)
+        cfg=self.panel.settings
+        self.confirmed.set(False)
+        self._pending(True)
+        self.message.set('正在读取所选窗口的完整会话，并刷新当前账号通讯录…')
+        def action():
+            try:return identify_reviewed_window(cfg,frozen,self.cancelled,choose_observed=choose_observed)
+            except CalibrationIdentityError as error:return error
+        def done(value):
+            if self.cancelled.is_set() or not self.alive():return
+            if isinstance(value,CalibrationIdentityError):
+                kind={'private':'个人','group':'群聊'}.get(value.kind,'身份未确认')
+                self.observed_target.set(f'当前微信：{value.observed_title}（{kind}）')
+                self._pending(False)
+                self.message.set(str(value))
+                return
+            self.image,current=value
+            self.calibration=deepcopy(current.calibration)
+            self.preview=self.base_image=None
+            self._pending(False)
+            kind='个人' if self.calibration.target_kind=='private' else '群聊'
+            self.target_label.configure(text=f'校准目标　{kind} · {current.name}')
+            self.observed_target.set(f'当前微信：{current.name}（{kind}）')
+            self.chosen_target.set(f'校准目标：{current.name}（{kind}）')
+            self.message.set(f'已识别为{kind}“{current.name}”。核对选区、聊天底部和空白输入框后保存；其他会话保留现有绑定。')
+            self._render()
+        def failed(error):
+            if self.cancelled.is_set() or not self.alive():return
+            self._pending(False)
+            self.message.set(error)
+        self.panel.work(action,done,failed,mutates=False)
+
     def close(self):
         self.cancelled.set()
         if self.render_job is not None:
@@ -425,22 +486,12 @@ class CalibrationDialog:
         except ValueError as error:
             self.message.set(str(error))
             return
-        self.validating = True
-        self.undo_button.configure(state='disabled')
-        self.save_button.configure(state='disabled')
-        self.check.configure(state='disabled')
-        for picker in self.pick_regions.values():
-            picker.configure(state='disabled')
+        self._pending(True)
         self.message.set('正在本机核对目标、聊天底部和草稿…')
 
         def failed(error):
             if self.alive():
-                self.validating = False
-                self.undo_button.configure(state='normal' if self.undo_stack else 'disabled')
-                self.check.configure(state='normal')
-                self.save_button.configure(state='normal')
-                for picker in self.pick_regions.values():
-                    picker.configure(state='readonly')
+                self._pending(False)
                 self.message.set(error)
 
         self.panel.save_calibration(frozen,self.cancelled,self.close,failed)

@@ -7,7 +7,7 @@ from .client import ControlUnavailable
 from .config import Settings,Calibration,TARGET_GROUP,group_name
 from .vision import LocalOCR,title_key,read_header,header_matches
 from .windows import WindowsDesktop,window_details,DesktopUnavailable,find_wechat_window
-from .contacts import visual_name_key,resolve_contact
+from .contacts import visual_name_key,resolve_contact,resolve_title_contact
 
 
 @dataclass(frozen=True)
@@ -17,32 +17,63 @@ class CurrentGroup:
     contact: object = None
 
 
+class CalibrationIdentityError(ValueError):
+    """A displayable observation is not yet permission to change the recipient."""
+    def __init__(self,message,observed_title,kind=''):
+        super().__init__(message)
+        self.observed_title=observed_title
+        self.kind=kind
+
+
 def load_directory(root,cancelled=None):
     return directory_for_settings(Settings.load(root),cancelled)
 
 
 def directory_for_settings(cfg,cancelled=None,*,process_id=None):
-    """Read an account directory using an existing or uncommitted window binding."""
+    """Read the full pinned account directory, independently of recent chats.
+
+    A stale HWND/PID is not a directory identity. A unique live process may
+    recover a read-only directory after restart, but its account must still
+    equal every saved recipient's account before any rows reach the UI.
+    """
     from .database import DatabaseHub,DatabaseUnavailable
-    expected_account=None
-    if not cfg.binding and process_id is None:
-        expected_account=cfg.conversation_targets.get(cfg.group,{}).get('account')
-        if expected_account:
-            for name in cfg.saved_groups:
-                if cfg.conversation_targets.get(name,{}).get('account')==expected_account:
-                    binding=cfg.binding_for(name)
-                    if binding:
-                        process_id=binding.pid
-                        break
-        if process_id is None:raise ValueError('请先校准一次已登录的微信窗口')
-    hub=DatabaseHub(cfg,cancelled or threading.Event(),process_id=process_id) if process_id else DatabaseHub(cfg,cancelled or threading.Event())
+    from .windows import list_calibration_windows
+    cancelled=cancelled or threading.Event()
+    accounts={target['account'] for target in cfg.conversation_targets.values()}
+    if cfg.calibration_account:accounts.add(cfg.calibration_account)
+    if len(accounts)>1:raise ValueError('已保存会话的微信账号不一致，请重新选择当前登录账号')
+    expected_account=next(iter(accounts),None)
+    explicit=process_id is not None
+    if process_id is None:
+        bindings=[cfg.binding,*(cfg.binding_for(name) for name in cfg.saved_groups)]
+        process_id=next((bound.pid for bound in bindings if bound),None)
+    def read(pid):
+        if cancelled.is_set():raise ValueError('联系人读取已取消')
+        hub=DatabaseHub(cfg,cancelled,process_id=pid)
+        try:
+            rows=hub.directory()
+            read_accounts={row.account for row in rows}
+            if (len(read_accounts)!=1 or not next(iter(read_accounts),'') or
+                    expected_account and read_accounts!={expected_account}):
+                raise ValueError('该窗口对应的微信账号已改变或未能唯一确认，请重新校准')
+            if cancelled.is_set():raise ValueError('联系人读取已取消')
+            return rows
+        finally:hub.close()
+    original_error=None
+    if process_id is not None:
+        try:return read(process_id)
+        except DatabaseUnavailable as error:
+            if explicit:raise ValueError(str(error)) from None
+            original_error=error
     try:
-        rows=hub.directory()
-        if expected_account and any(row.account!=expected_account for row in rows):
-            raise ValueError('该窗口对应的微信账号已改变，请重新校准')
-        return rows
+        candidates={row['pid'] for row in list_calibration_windows() if row['pid']!=process_id}
+    except DesktopUnavailable as error:raise ValueError(str(error)) from None
+    if len(candidates)>1:
+        raise ValueError('找到多个微信登录进程，请先在校准中明确选择当前账号的窗口，再刷新联系人')
+    if not candidates:
+        raise ValueError(str(original_error) if original_error else '请先打开已登录的微信窗口，再刷新联系人') from None
+    try:return read(next(iter(candidates)))
     except DatabaseUnavailable as error:raise ValueError(str(error)) from None
-    finally:hub.close()
 
 
 def _initial_window():
@@ -174,13 +205,7 @@ def _read_chat_frames(cfg,binding,desktop_factory,recognizer,entries,expected=No
                 name=group_name(label)
                 binding=replace(binding,target_kind='group',ocr_title='')
             else:
-                matches=[row for row in entries if row.kind in ('private','group') and header_matches(
-                    label,replace(binding,target_group=row.name,target_kind=row.kind,ocr_title=visual_name_key(row.name)))]
-                if len(matches)!=1:
-                    raise ValueError('当前微信标题未能与联系人列表唯一对应')
-                contact=matches[0]
-                if not contact.selectable:
-                    raise ValueError(contact.reason)
+                contact=resolve_title_contact(entries,label,binding.window_kind)
                 name=contact.name
                 resolve_contact(entries,cfg.select_conversation(contact),name)
                 binding=replace(binding,target_kind=contact.kind,ocr_title=visual_name_key(name))
@@ -261,6 +286,10 @@ def bind_reviewed_window(cfg,binding,contact):
     """Keep subscription order and mode while installing one verified calibration."""
     name=binding.target_group
     if not name or not binding.bottom_confirmed:raise ValueError('请先核对会话与校准区域')
+    paused=cfg.is_conversation_paused(name) or all(cfg.is_conversation_paused(n) for n in cfg.allowed_groups)
+    evidence=getattr(binding,'_capture_contact',None)
+    if evidence and (not contact or contact.binding!=evidence.binding or contact.name!=evidence.name):
+        raise ValueError('校准窗口的会话身份已改变，请重新识别')
     if contact:
         if not contact.selectable or (contact.name,contact.kind)!=(name,binding.target_kind):
             raise ValueError('校准窗口与所选会话身份不一致')
@@ -275,7 +304,8 @@ def bind_reviewed_window(cfg,binding,contact):
     if names==(TARGET_GROUP,) and not cfg.calibration and not cfg.window_bindings:
         names=(name,)
     elif name not in names:names=(*names,name)
-    return cfg.with_saved_conversations(names).with_window_binding(name,binding)
+    updated=cfg.with_saved_conversations(names).with_window_binding(name,binding)
+    return updated.with_conversation_pause(name,True) if paused else updated
 
 
 def rediscover_detached(cfg,names,cancelled):
@@ -297,42 +327,71 @@ def rediscover_detached(cfg,names,cancelled):
     return cfg
 
 
+def _reviewed_identity(cfg,draft,cancelled,vision):
+    """Read one immutable window/recipient observation, without sending input."""
+    from .vision import detached_title_matches
+    from .windows import capture_calibration_window
+    if cancelled.is_set():raise ValueError('校准已取消')
+    rows=directory_for_settings(cfg,cancelled,process_id=draft.pid) if cfg.receive_mode=='database' else None
+    image,info=capture_calibration_window(draft.hwnd,draft.pid)
+    if (info['kind'],info['width'],info['height'])!=(draft.window_kind,draft.width,draft.height):
+        raise ValueError('微信窗口尺寸或类型已变化，请重新截图')
+    lines=read_header(vision.ocr,image.crop(draft.rect('header')),draft)
+    if not lines or any(line.score<.92 for line in lines):
+        raise ValueError('未读到完整会话标题，请调整“会话标题”选区')
+    title=''.join(line.text for line in lines)
+    try:contact=resolve_title_contact(rows,title,draft.window_kind) if rows is not None else None
+    except ValueError as error:raise CalibrationIdentityError(str(error),title) from None
+    name,kind=(contact.name,contact.kind) if contact else (group_name(title),'group')
+    if draft.target_group and name!=draft.target_group:
+        raise CalibrationIdentityError(f'读到“{name}”，当前要校准的是“{draft.target_group}”。要绑定这个新对象，请明确选择“使用窗口中的会话”；原有绑定会保留',title,kind)
+    evidence=getattr(draft,'_capture_contact',None)
+    if evidence and (not contact or contact.binding!=evidence.binding):
+        raise ValueError('校准期间微信账号或会话身份已改变，请重新识别')
+    checked=replace(draft,header_label=title,target_group=name,target_kind=kind,bottom_confirmed=False,
+                    ocr_title=visual_name_key(name) if contact else '')
+    if checked.window_kind=='detached' and not detached_title_matches(info['title'],checked):
+        raise ValueError('独立窗口标题与已识别聊天对象不一致')
+    if contact:checked._capture_contact=contact
+    return image,CurrentGroup(name,checked,contact),rows
+
+
+def identify_reviewed_window(cfg,draft,cancelled,*,choose_observed=False):
+    """Preview the exact account-bound object; choosing another object is explicit."""
+    from .vision import Vision
+    if choose_observed:
+        draft=replace(draft,target_group='',ocr_title='',bottom_confirmed=False)
+    draft.validate()
+    vision=Vision()
+    previous=None
+    for _ in range(2):
+        image,current,_rows=_reviewed_identity(cfg,draft,cancelled,vision)
+        identity=(current.name,current.contact.binding if current.contact else None)
+        if previous is not None and identity!=previous:
+            raise ValueError('两次截图的会话身份不同，请重新识别')
+        previous=identity
+    return image,current
+
+
 def verify_reviewed_window(cfg,draft,cancelled):
     """Match the user's four regions twice before persisting any window or recipient."""
-    from .vision import Vision,calibration_send_matches,detached_title_matches
-    from .windows import capture_calibration_window
+    from .vision import Vision,calibration_send_matches
     draft.validate()
-    rows=directory_for_settings(cfg,cancelled,process_id=draft.pid) if cfg.receive_mode=='database' else None
     vision=Vision()
     checked=None
+    previous=None
     for _ in range(2):
-        if cancelled.is_set():raise ValueError('校准已取消')
-        image,info=capture_calibration_window(draft.hwnd,draft.pid)
-        if (info['kind'],info['width'],info['height'])!=(draft.window_kind,draft.width,draft.height):
-            raise ValueError('微信窗口尺寸或类型已变化，请重新截图')
-        lines=read_header(vision.ocr,image.crop(draft.rect('header')),draft)
-        if not lines or any(line.score<.92 for line in lines):
-            raise ValueError('未读到完整会话标题，请调整“会话标题”选区')
-        title=''.join(line.text for line in lines)
-        contact=None
-        if rows is not None:
-            matches=[row for row in rows if row.kind in ('private','group') and header_matches(
-                title,replace(draft,target_group=row.name,target_kind=row.kind,ocr_title=visual_name_key(row.name)))]
-            if len(matches)!=1:raise ValueError('选区中的标题未能与微信目录唯一对应，请重新框选完整标题')
-            contact=matches[0]
-            name,kind=contact.name,contact.kind
-        else:
-            name,kind=group_name(title),'group'
-        if draft.target_group and name!=draft.target_group:
-            raise ValueError(f'读到“{name}”，当前要校准的是“{draft.target_group}”。请选择对应窗口或重新框选标题')
-        binding=replace(draft,header_label=title,target_group=name,target_kind=kind,bottom_confirmed=True,
-                        ocr_title=visual_name_key(name) if contact else '')
-        if binding.window_kind=='detached' and not detached_title_matches(info['title'],binding):
-            raise ValueError('独立窗口标题与已识别聊天对象不一致')
+        image,current,rows=_reviewed_identity(cfg,draft,cancelled,vision)
+        contact=current.contact
+        name,kind=current.name,current.calibration.target_kind
+        binding=replace(current.calibration,bottom_confirmed=True)
+        if contact:binding._capture_contact=contact
         updated=bind_reviewed_window(cfg,binding,contact)
         if contact:resolve_contact(rows,updated,name)
-        if checked and (checked.target_group,checked.target_kind)!=(name,kind):
-            raise ValueError('两次截图的会话不同，请重新校准')
+        identity=(name,kind,contact.binding if contact else None)
+        if previous is not None and identity!=previous:
+            raise ValueError('两次截图的会话身份不同，请重新校准')
+        previous=identity
         frame=vision.read(image,binding)
         if not frame.safe or not frame.at_bottom:raise ValueError(frame.reason or '请确认聊天位于底部，并调整消息区域')
         if not frame.draft_empty:raise ValueError('输入区域含有草稿或图标，请调整选区')
@@ -363,6 +422,7 @@ def switch_group(root:Path,name:str,client,*,binding=None,cancelled=None,contact
         if any(info[key]!=getattr(binding,key) for key in ('hwnd','pid','width','height')):
             raise ValueError('校准后微信窗口身份或尺寸已改变，请重新校准')
     cfg=previous.select_conversation(contact) if contact else previous.select_group(name)
+    cfg=replace(cfg,auto_on_launch=previous.auto_on_launch)
     if first and previous.saved_groups==(TARGET_GROUP,) and not previous.conversation_targets:
         cfg=cfg.with_saved_conversations((name,))
     if contact or name in cfg.conversation_targets:
@@ -376,6 +436,15 @@ def switch_group(root:Path,name:str,client,*,binding=None,cancelled=None,contact
         stop_confirmed(root,client)
         return {'running':False,'mode':'stopped','group':Settings.load(root).group,'reason':'群切换已取消，自动回复保持停止'}
     if cancelled.is_set():return stopped()
+    try:status=client.status()
+    except ControlUnavailable:
+        if (Path(root)/'runtime/control.json').exists():
+            raise ControlUnavailable('无法确认当前回复模式，未切换会话；请检查后台连接') from None
+        status={'running':False,'mode':'stopped'}
+    mode=status.get('mode') if status.get('running',True) else 'stopped'
+    if mode not in ('paused','observe','auto','stopped'):
+        raise ControlUnavailable('当前回复模式未能确认，未切换会话')
+    expected_mode='paused' if mode=='auto' and cfg.is_conversation_paused(name) else mode
     if first and Settings.load(root)!=previous:
         raise ValueError('校准期间设置已变更，请重新打开校准')
     stop_confirmed(root,client)
@@ -386,11 +455,15 @@ def switch_group(root:Path,name:str,client,*,binding=None,cancelled=None,contact
     # on disk and let the new binding use its own account/ID memory.
     cfg.save(expected=previous)
     if cancelled.is_set():return stopped()
-    result=client.start()
+    if mode=='stopped':
+        return {'running':False,'mode':'stopped','group':cfg.group,'group_names':list(cfg.allowed_groups),
+                'reply_mode':cfg.for_group(name).reply_mode,'reason':'会话已切换，自动回复保持停止'}
+    result=client.start(initial_mode=mode)
     if cancelled.is_set():
         stop_confirmed(root,client)
         return stopped()
-    if result.get('group')!=name or result.get('group_names')!=[name] or result.get('reply_mode')!=cfg.for_group(name).reply_mode:
+    if (result.get('group')!=name or result.get('group_names')!=[name] or
+            result.get('reply_mode')!=cfg.for_group(name).reply_mode or result.get('mode')!=expected_mode):
         try:client.pause()
         except ControlUnavailable:raise ControlUnavailable('启动后的监听范围或回复模式不符，无法确认暂停；请停止助手') from None
         raise ValueError('启动后的监听范围或回复模式与所选设置不符，已暂停，未完成切换')

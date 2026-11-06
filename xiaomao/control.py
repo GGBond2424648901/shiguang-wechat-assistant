@@ -53,6 +53,7 @@ class ControlServer:
                                    "/configure_reply_rules":lambda:engine.configure_reply_rules(**payload),
                                    "/configure_reply_defaults":lambda:engine.configure_reply_defaults(**payload),
                                    "/enable_selected":lambda:engine.enable_selected(**payload),
+                                   "/pause_selected":lambda:engine.pause_selected(**payload),
                                    "/companion_configure":lambda:engine.companion_configure(**payload),
                                    "/companion_preview":lambda:engine.companion_preview(**payload),
                                    "/companion_once":lambda:engine.companion_once(**payload)}}
@@ -80,7 +81,7 @@ class ControlServer:
                         elif self.path=='/configure_reply_defaults':
                             if not isinstance(payload,dict) or set(payload)!={'preferences'}:
                                 return self.answer(400, {"error": "需要回复偏好设置"})
-                        elif (self.path in ('/enable_selected','/companion_configure','/configure_reply_rules') or
+                        elif (self.path in ('/enable_selected','/pause_selected','/companion_configure','/configure_reply_rules') or
                                 self.path in ('/companion_preview','/companion_once') and payload!={}):
                             keys={'group','scope','preferences'} if self.path in ('/companion_configure','/configure_reply_rules') else {'group','scope'}
                             if not isinstance(payload,dict) or set(payload)!=keys or not all(isinstance(payload[k],str) and payload[k] for k in ('group','scope')):

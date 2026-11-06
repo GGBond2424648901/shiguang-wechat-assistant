@@ -115,6 +115,9 @@ class Engine:
         if (store.recover() if recovered_unknown is None else recovered_unknown):
             self.mode, self.reason = "paused", "存在发送结果未知的记录，请核实微信后重新观察"
             self.cancelled.set()
+        elif settings.is_conversation_paused():
+            self.mode,self.reason='paused','本会话已暂停'
+            self.cancelled.set()
         elif settings.auto_on_launch and settings.model_ready and settings.binding and settings.binding.bottom_confirmed:
             self.mode,self.reason='auto','工具已启动，正在建立后台监听基线'
         self.store.prune(clock())
@@ -276,7 +279,8 @@ class Engine:
                     if task.media_attempts and task.retry_at>now:progress='等待微信图片加载'
                     elif task.model_attempts:progress='正在准备回复'
                     else:progress='已入队，等待处理'
-                rows.append({'id':task.id,'sender':task.sender,'messages':[m.text for m in task.messages],
+                rows.append({'id':task.id,'sender':task.sender,'sender_name':self.memory.member_names().get(task.sender,'') if self.memory else '',
+                             'messages':[m.text for m in task.messages],
                              'reply':task.reply,'state':task.state,'progress':progress})
             return rows[:20]
 
@@ -627,7 +631,9 @@ class Engine:
             self.media_refs[message.message_id]=message
             self.media_refs.move_to_end(message.message_id)
             while len(self.media_refs)>96:self.media_refs.popitem(last=False)
-        item=replace(message,sender='',media_raw='',media_key='')
+        from .member_names import trusted_display_name
+        name=trusted_display_name(message)
+        item=replace(message,sender=name,sender_source=message.sender_source if name else '',media_raw='',media_key='')
         if not message.message_id and self.context and self.context[-1].key==item.key:return
         if self.memory:
             try:
@@ -869,9 +875,16 @@ class Engine:
             self.reason='数据库后台监听中' if self.mode=='auto' else '数据库观察中'
             baseline=batch.initial or self.source_rebaseline
             self.source_rebaseline=False
+            if self.memory and hasattr(self.message_source,'member_profiles'):
+                try:self.memory.refresh_member_profiles(self.message_source.member_profiles(self.memory.known_member_ids()))
+                except Exception:logging.getLogger(__name__).warning('成员名册暂未更新，聊天继续')
             if baseline:
                 self._seed_context(batch.history)
-            else:self._record(batch.new)
+            else:
+                if self.memory:
+                    try:self.memory.refresh_members(batch.history)
+                    except Exception:logging.getLogger(__name__).warning('成员昵称暂未更新，聊天继续')
+                self._record(batch.new)
         now=self.clock()
         for task in list(self.tasks):
             if task.state=='awaiting_receipt':continue

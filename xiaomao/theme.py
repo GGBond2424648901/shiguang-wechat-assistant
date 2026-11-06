@@ -356,6 +356,9 @@ class GlassView(tk.Frame):
         self._recent_display=None
         self._styled_queue=None
         self._watch_rows=None
+        self.watch_controls={}
+        self._watch_layout_job=None
+        self._watch_row_height=38
         self.queue_group=None
         self._traces=[]
         self._shortcuts=[]
@@ -401,7 +404,8 @@ class GlassView(tk.Frame):
         self.logo=logo(brand,36)
         self.brand_logo=tk.Label(brand,image=self.logo,bg=NAVY)
         self.brand_logo.pack(side='left',padx=(0,7))
-        self.brand_title=label(brand,'小猫助手',14,bold=True,color=PAPER);self.brand_title.pack(side='left')
+        from .brand import BRAND_LINES
+        self.brand_title=label(brand,BRAND_LINES,11,bold=True,color=PAPER);self.brand_title.pack(side='left')
         self.drag_areas=[brand,self.brand_logo,self.brand_title]
         tk.Frame(rail,bg='#3B5265',height=1).pack(fill='x',padx=13,pady=(0,7))
         self.nav={}
@@ -444,7 +448,7 @@ class GlassView(tk.Frame):
         hero=self.hero=card(page,pad=14,bg=NAVY,radius=8,border=NAVY);hero.grid(row=0,column=0,sticky='ew')
         hero.columnconfigure(0,minsize=220)
         hero.columnconfigure(2,weight=1)
-        label(hero,'当前主要会话',10,bold=True,color='#E7EDF0').grid(row=0,column=0,sticky='w')
+        label(hero,'当前查看的会话',10,bold=True,color='#E7EDF0').grid(row=0,column=0,sticky='w')
         main=tk.Frame(hero,bg=NAVY);main.grid(row=1,column=0,sticky='ew',pady=(5,1))
         self.hero_kind=tk.Label(main,bg=NAVY)
         self.hero_kind.pack(side='left',padx=(0,9))
@@ -455,8 +459,8 @@ class GlassView(tk.Frame):
         label(words,textvariable=self.target_info,size=10,color='#E1E9EE').pack(anchor='w')
         actions=self.hero_actions=tk.Frame(hero,bg=NAVY);actions.grid(row=0,column=1,rowspan=2,sticky='w',padx=(10,4))
         self.actions={}
-        for key,name,icon_name,callback in [('enable','开启回复','play',lambda:self.panel.control('enable')),
-                                           ('pause','暂停','pause',lambda:self.panel.control('pause')),
+        for key,name,icon_name,callback in [('enable','开启此会话','play',lambda:self.control_selected('enable')),
+                                           ('pause','暂停此会话','pause',lambda:self.control_selected('pause')),
                                            ('choose','选择会话','list',self.panel.choose_contact)]:
             action=button(actions,name,callback,primary=key=='enable',dark=True,icon_name=icon_name)
             action.pack(side='left',padx=(0,7));self.actions[key]=action
@@ -527,6 +531,11 @@ class GlassView(tk.Frame):
         label(whead,'监听范围',14,bold=True).pack(side='left')
         self.actions['manage']=button(whead,'管理监听',lambda:self.select('sessions'),compact=True,icon_name='settings')
         self.actions['manage'].pack(side='right')
+        global_actions=tk.Frame(watch,bg=PAPER);global_actions.pack(fill='x',side='bottom',pady=(7,0))
+        label(global_actions,'全部会话',9,color=MUTED).pack(side='left')
+        for key,text,op in (('pause_all','暂停全部','pause'),('enable_all','开启全部','enable')):
+            self.actions[key]=button(global_actions,text,lambda operation=op:self.panel.control(operation),compact=True)
+            self.actions[key].pack(side='right',padx=(5,0))
         tk.Frame(watch,bg=LINE,height=1).pack(fill='x',pady=8)
         self.outcome_title=tk.StringVar(self);self.outcome_detail=tk.StringVar(self)
         result=card(watch,pad=8,bg='#F2F5F4',radius=8,border='#E2E8E4');result.pack(side='bottom',fill='x',pady=(5,0))
@@ -537,15 +546,21 @@ class GlassView(tk.Frame):
         watch_area=tk.Frame(watch,bg=PAPER);watch_area.pack(fill='both',expand=True)
         table_style=ttk.Style(self)
         table_style.configure('Watch.Treeview',background=PAPER,fieldbackground=PAPER,borderwidth=0,
-                              relief='flat',rowheight=32,font=(FONT,10))
+                              relief='flat',rowheight=38,font=(FONT,10))
         table_style.layout('Watch.Treeview',[('Treeview.treearea',{'sticky':'nsew'})])
-        self.watch_table=ttk.Treeview(watch_area,columns=('kind','state'),show='tree',height=2,selectmode='browse',style='Watch.Treeview')
+        self.watch_table=ttk.Treeview(watch_area,columns=('kind','state','control'),show='tree',height=2,selectmode='browse',style='Watch.Treeview')
         self.watch_table.bind('<<TreeviewSelect>>',self._watch_selected)
         self.watch_table.tag_configure('even',background='#F4F7F6')
-        for key,width in [('#0',118),('kind',62),('state',76)]:
+        for key,width in [('#0',118),('kind',50),('state',62),('control',62)]:
             self.watch_table.column(key,width=width,minwidth=32,stretch=key=='#0')
         self.watch_table.pack(side='left',fill='both',expand=True)
         _scroll_when_needed(watch_area,self.watch_table)
+        previous_scroll=self.watch_table.cget('yscrollcommand')
+        def scrolled(first,last):
+            if previous_scroll:self.tk.call(previous_scroll,first,last)
+            self._request_watch_layout()
+        self.watch_table.configure(yscrollcommand=scrolled)
+        self.watch_table.bind('<Configure>',lambda event:self._request_watch_layout(),add='+')
         return viewport
 
     def _hero_art(self,canvas):
@@ -565,6 +580,36 @@ class GlassView(tk.Frame):
     def _watch_selected(self,_event):
         selected=self.watch_table.selection()
         if selected and selected[0]!=self.queue_group:self._choose_queue(selected[0])
+
+    def control_selected(self,operation,name=None):
+        if self.busy or getattr(self.panel,'switch_busy',False):return
+        chosen=name or self.queue_group or self.panel.settings.group
+        if chosen not in self.panel.settings.allowed_groups:return
+        self.panel.control_conversation(chosen,operation)
+
+    def _watch_action(self,name):
+        row=next((r for r in self.status.get('groups',[]) if r.get('name')==name),{})
+        self.control_selected('pause' if row.get('mode',self.status.get('mode'))=='auto' else 'enable',name)
+
+    def _request_watch_layout(self):
+        if self._watch_layout_job is None:self._watch_layout_job=self.after_idle(self._place_watch_controls)
+
+    def _place_watch_controls(self):
+        self._watch_layout_job=None
+        wanted=max((control.winfo_reqheight()+6 for control in self.watch_controls.values()),default=38)
+        wanted=max(38,wanted)
+        if wanted!=self._watch_row_height:
+            self._watch_row_height=wanted
+            ttk.Style(self).configure('Watch.Treeview',rowheight=wanted)
+            self._request_watch_layout()
+            return
+        for name,control in self.watch_controls.items():
+            box=self.watch_table.bbox(name,'control') if self.watch_table.exists(name) else ()
+            if box:
+                x,y,width,height=box
+                control.place(x=x+2,y=y+3,width=max(1,width-5),height=max(1,height-6))
+                control.lift()
+            else:control.place_forget()
 
     def _choose_queue(self,name):
         if name is not None and name not in self.panel.settings.allowed_groups:return
@@ -820,11 +865,18 @@ class GlassView(tk.Frame):
         p=self.panel;cfg=p.settings;data=self.status
         mode=data.get('mode','')
         online=bool(data) and data.get('running',True) and mode not in ('stopped','disconnected')
-        auto=online and mode=='auto'
-        self.actions['enable'].configure(text='自动回复中' if auto else '开启回复',
+        names=tuple(data.get('group_names') or cfg.allowed_groups) if online else cfg.allowed_groups
+        name=self.queue_group if self.queue_group in names else cfg.group
+        selected_row=next((row for row in data.get('groups',[]) if row.get('name')==name),{})
+        selected_mode=selected_row.get('mode',mode)
+        auto=online and selected_mode=='auto'
+        self.actions['enable'].configure(text='本会话回复中' if auto else '开启此会话',
                                          state='disabled' if auto or self.busy else 'normal',
                                          bg='#30495E' if auto else PEACH,highlightbackground='#30495E' if auto else PEACH,
                                          disabledforeground='#D1DEE5' if auto else MUTED)
+        self.actions['pause'].configure(text='暂停此会话',state='normal' if online and selected_mode in ('auto','observe') and not self.busy else 'disabled')
+        self.actions['pause_all'].configure(state='normal' if online and any(row.get('mode') in ('auto','observe') for row in data.get('groups',[])) and not self.busy else 'disabled')
+        self.actions['enable_all'].configure(state='disabled' if self.busy else 'normal')
         if not online:
             self._queue_request=None;self.queue_refresh.configure(state='normal',text='刷新')
             if self._receipt_cache:
@@ -833,15 +885,13 @@ class GlassView(tk.Frame):
         self.header_status.configure(text='●  '+state,fg=GREEN if online and mode=='auto' else MUTED)
         self.local_status.configure(text='●  本地运行中' if online else '○  '+state)
         self.side_note.configure(text='窗口已校准' if online and data.get('calibrated') else '本地助手在线' if online else '本地助手')
-        name=data.get('group') if online and data.get('group') in cfg.allowed_groups else cfg.group
-        names=tuple(data.get('group_names') or cfg.allowed_groups) if online else cfg.allowed_groups
         kind={'private':'私聊','group':'群聊'}.get(cfg.conversation_targets.get(name,{}).get('kind'),'会话')
         self.hero_kind.configure(image=glyph(self,'persona' if kind=='私聊' else 'people',PAPER,38,disc='#354F64'))
         limit=13 if self._compact else 20
         self.target_name.set(name if len(name)<=limit else name[:limit-1]+'…')
-        policy={'natural':'自然参与','all':'逐条回复','mentions':'仅点名'}.get(data.get('reply_mode',cfg.reply_mode),'')
+        policy={'natural':'自然参与','all':'逐条回复','mentions':'仅点名'}.get(selected_row.get('reply_mode',data.get('reply_mode',cfg.reply_mode)),'')
         split=data.get('split_replies_effective',cfg.split_replies and cfg.receive_mode=='database')
-        self.target_info.set(' · '.join((kind,policy,'多气泡' if split else '单气泡')))
+        self.target_info.set(' · '.join((kind,policy,'多气泡' if split else '单气泡',MODES.get(selected_mode,'未连接'))))
         counts=data.get('counts') or {}
         self.metrics['selected'].set(str(len(names)))
         self.metrics['pending'].set(str(data.get('pending_count','—')) if online else '—')
@@ -864,7 +914,10 @@ class GlassView(tk.Frame):
             self._watch_rule_key=rule_key
             wanted={r[0] for r in rows}
             for old in self.watch_table.get_children():
-                if old not in wanted:self.watch_table.delete(old)
+                if old not in wanted:
+                    self.watch_table.delete(old)
+                    control=self.watch_controls.pop(old,None)
+                    if control:control.destroy()
             if self.queue_group not in wanted:self.queue_group=None
             for index,(title,kind,status) in enumerate(rows):
                 pic=glyph(self,'persona' if kind=='个人' else 'people','#496D7D',18)
@@ -872,10 +925,16 @@ class GlassView(tk.Frame):
                 target=cfg.conversation_targets.get(title,{})
                 rule=cfg.conversation_rules.get(target.get('account','')+'/'+target.get('id',''),{})
                 reply_mode=live.get(title,{}).get('reply_mode',rule.get('reply_mode',cfg.reply_mode))
-                options=dict(text=' '+title,image=pic,values=('仅点名' if reply_mode=='mentions' else REPLY_MODES[reply_mode],status),tags=('even',) if index%2==0 else ())
+                options=dict(text=' '+title,image=pic,values=('仅点名' if reply_mode=='mentions' else REPLY_MODES[reply_mode],status,''),tags=('even',) if index%2==0 else ())
                 if self.watch_table.exists(title):
                     self.watch_table.item(title,**options);self.watch_table.move(title,'',index)
                 else:self.watch_table.insert('','end',iid=title,**options)
+                if title not in self.watch_controls:
+                    self.watch_controls[title]=button(self.watch_table,'',lambda n=title:self._watch_action(n),compact=True)
+            self._request_watch_layout()
+        for title,control in self.watch_controls.items():
+            active=live.get(title,{}).get('mode',mode)=='auto'
+            control.configure(text='暂停' if active else '开启',state='disabled' if self.busy or not online else 'normal')
         self.queue_filter.configure(text=self.queue_group or '全部监听会话 · 点击监听对象查看对应队列')
         if self.page=='settings':self.pages['settings'].refresh_route()
         self.all_queues.configure(state='normal' if self.queue_group else 'disabled')
@@ -894,5 +953,6 @@ class GlassView(tk.Frame):
         self._queue_request=None
         if self._layout_job is not None:self.after_cancel(self._layout_job)
         if self._nav_job is not None:self.after_cancel(self._nav_job)
+        if self._watch_layout_job is not None:self.after_cancel(self._watch_layout_job)
         for var,token in self._traces:var.trace_remove('write',token)
         for window,sequence,token in self._shortcuts:window.unbind(sequence,token)

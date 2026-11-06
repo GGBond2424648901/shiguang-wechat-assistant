@@ -9,6 +9,7 @@ from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 from .companion import CompanionPreferences,local_day,fresh_state
 from .companion_memory import bounded_facts
 from .privacy import private_dir,atomic_private_write
+from .member_names import merge_profiles, profiles_from_messages, validate_profiles
 
 MAX_BYTES=70*1024*1024
 MAGIC=b'XLCOMPANION1\n'
@@ -45,6 +46,7 @@ def _validate_fact(f):
 def _payload(memory,notes):
     with memory._lock:
         return {'version':1,'scope':memory.group,'summary':memory.summary,
+            'members':validate_profiles(memory._members),
             'messages':[memory._encode_message(m) for m in memory.messages],
             'preferences':notes.data['preferences'],'facts':notes.data['facts'],'diary':notes.data['diary']}
 
@@ -74,6 +76,7 @@ def _read(path,password,scope):
         from .memory import ConversationMemory
         if not isinstance(data['summary'],str) or len(data['summary'])>4000 or not isinstance(data['messages'],list) or len(data['messages'])>4096:raise ValueError()
         data['decoded']=[ConversationMemory._decode_message(m) for m in data['messages']]
+        data['members']=merge_profiles(profiles_from_messages(data['decoded']), validate_profiles(data.get('members', {})))
         CompanionPreferences(**data['preferences'])
         if not isinstance(data['facts'],list) or len(data['facts'])>200 or not isinstance(data['diary'],list) or len(data['diary'])>30:raise ValueError()
         for f in data['facts']:
@@ -108,8 +111,11 @@ def _merge_import(data,memory,notes):
         merged=sorted(incoming+memory.messages,key=lambda m:m.created_at)[-memory.MAX_MESSAGES:]
         seen=list(dict.fromkeys(memory._seen+[memory._identity(m) for m in merged]))[-memory.MAX_SEEN_IDS:]
         summary=memory.summary or data['summary']
-        memory._save(merged,summary,seen)
-        memory.messages,memory._seen,memory.summary=merged,seen,summary
+        # A backup never renames a member already known in the destination.
+        members={**data['members'], **memory._members}
+        merged=memory._with_names(merged,members)
+        memory._save(merged,summary,seen,members=members)
+        memory.messages,memory._seen,memory.summary,memory._members=merged,seen,summary,members
     from dataclasses import asdict
     # Import into a populated profile must not overwrite its newer customization.
     defaults=asdict(CompanionPreferences())

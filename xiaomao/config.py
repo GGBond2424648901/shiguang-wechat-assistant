@@ -108,6 +108,7 @@ class Settings:
     monitor_all_groups: bool = True
     reply_mode: str = 'natural'
     conversation_rules: dict = field(default_factory=dict)
+    paused_conversations: tuple[str,...] = ()
     sticker_frequency: str = 'natural'
     stickers_enabled: bool = True
     assistant_name: str = "小猫"
@@ -171,6 +172,11 @@ class Settings:
         from .reply_preferences import validate_rule_changes,validate_rule_map
         validate_rule_changes({'sticker_frequency':self.sticker_frequency},allow_inherit=False)
         validate_rule_map(self.conversation_rules)
+        if (not isinstance(self.paused_conversations,(list,tuple)) or len(self.paused_conversations)>64
+                or any(not isinstance(k,str) or not re.fullmatch('[a-f0-9]{64}',k) for k in self.paused_conversations)
+                or len(set(self.paused_conversations))!=len(self.paused_conversations)):
+            raise ValueError('会话暂停设置无效')
+        self.paused_conversations=tuple(self.paused_conversations)
         if not self.wake_aliases or len(self.wake_aliases)>4 or any(not isinstance(name,str) or not name.strip() or len(name)>16 for name in self.wake_aliases):
             raise ValueError('唤醒别名设置无效')
         if not (1 <= self.poll_seconds <= 30 and 1 <= self.merge_seconds <= 30 and 10 <= self.expiry_seconds <= 120):
@@ -229,8 +235,10 @@ class Settings:
         # A stale same-name binding may not silently change its recipient.
         previous=self.conversation_targets.get(contact.name)
         if previous and previous!=contact.binding:raise ValueError('同名会话身份改变，请先移除旧收藏再选择')
+        paused=self.is_conversation_paused(contact.name) or all(self.is_conversation_paused(n) for n in self.allowed_groups)
         targets={**self.conversation_targets,contact.name:contact.binding}
-        return replace(self,conversation_targets=targets).select_group(contact.name)
+        chosen=replace(self,conversation_targets=targets).select_group(contact.name)
+        return chosen.with_conversation_pause(contact.name,True) if paused else chosen
 
     def with_saved_conversations(self,names):
         names=tuple(names)
@@ -240,8 +248,10 @@ class Settings:
         keys = {target['account'] + '/' + target['id'] for target in targets.values()}
         bindings = {key: raw for key, raw in self.window_bindings.items() if key in keys}
         rules={key:dict(value) for key,value in self.conversation_rules.items() if key in keys}
+        pause_keys={self.conversation_pause_key(name) for name in names}
         return replace(self,group=current,group_names=names,conversation_targets=targets,window_bindings=bindings,
                        conversation_rules=rules,
+                       paused_conversations=tuple(k for k in self.paused_conversations if k in pause_keys),
                        self_name_unique_confirmed=self.self_name_unique_confirmed if current==self.group else False)
 
     def with_window_binding(self, name: str, calibration: Calibration):
@@ -290,11 +300,26 @@ class Settings:
 
     @property
     def memory_scope(self):
-        target=self.conversation_targets.get(self.group)
+        return self.conversation_scope(self.group)
+
+    def conversation_scope(self,name):
+        target=self.conversation_targets.get(name)
         if target:
             return target['account']+'/'+target['id']
         # An unbound display name may itself spell an account/recipient pair.
-        return '\0title:'+self.group if '/' in self.group else self.group
+        return '\0title:'+name if '/' in name else name
+
+    def conversation_pause_key(self,name):
+        return hashlib.sha256(self.conversation_scope(name).encode()).hexdigest()
+
+    def is_conversation_paused(self,name=None):
+        return self.conversation_pause_key(name or self.group) in self.paused_conversations
+
+    def with_conversation_pause(self,name,paused):
+        if name not in self.saved_groups or type(paused) is not bool:raise ValueError('请选择已保存的会话')
+        keys=set(self.paused_conversations);key=self.conversation_pause_key(name)
+        keys.add(key) if paused else keys.discard(key)
+        return replace(self,paused_conversations=tuple(sorted(keys)))
 
     @property
     def private_tone_key(self):

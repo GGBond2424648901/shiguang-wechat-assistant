@@ -35,13 +35,17 @@ def title_key(text: str) -> str:
 
 
 def header_matches(label, binding):
-    from .contacts import visual_name_key
+    from .contacts import visual_title_matches
     target=binding.target_group or group_name(binding.header_label)
-    key=visual_name_key if binding.ocr_title else title_key
-    suffix=r'\(\d+\)' if binding.target_kind=='group' else ''
-    if suffix and getattr(binding,'window_kind','main')=='detached' and binding.ocr_title:
-        suffix=r'(?:\(\d+\))?'  # directory identity and the exact native window caption corroborate this group
-    return bool(re.fullmatch(re.escape(key(target))+suffix,key(label)))
+    observed=title_key(label)
+    matches=visual_title_matches if binding.ocr_title else lambda actual,wanted:actual==title_key(wanted)
+    if binding.target_kind!='group':return bool(target and matches(observed,target))
+    # An account-bound detached group's exact native caption corroborates a
+    # header without a member count. Main windows still require that suffix.
+    optional=getattr(binding,'window_kind','main')=='detached' and binding.ocr_title
+    if optional and matches(observed,target):return True
+    counted=re.fullmatch(r'(.+)\(\d+\)',observed)
+    return bool(target and counted and matches(counted[1],target))
 
 
 def detached_title_matches(title,binding):

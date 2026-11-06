@@ -26,7 +26,7 @@ class ContactDialog:
         ttk.Label(bottom,textvariable=self.note,wraplength=780).pack(fill='x',pady=(0,10))
         ttk.Button(bottom,text='刷新联系人',command=self.refresh).pack(side='left')
         ttk.Button(bottom,text='使用微信当前会话',command=self.current).pack(side='left',padx=10)
-        self.choose=ttk.Button(bottom,text='选择并开启自动回复',command=self.select,state='disabled');self.choose.pack(side='right')
+        self.choose=ttk.Button(bottom,text='选择此会话',command=self.select,state='disabled');self.choose.pack(side='right')
         self.query.trace_add('write',lambda *_:self.render());self.kind.trace_add('write',lambda *_:self.render())
         self.list.bind('<<TreeviewSelect>>',self.changed)
         entry.focus_set();self.refresh()
@@ -54,7 +54,7 @@ class ContactDialog:
             self.list.insert('', 'end',iid=str(index),values=({'private':'个人','group':'群聊','service':'服务'}[row.kind],row.name,row.nickname,
                 '可选择' if row.selectable else row.reason))
         self.choose.configure(state='disabled')
-        self.note.set(f'显示 {len(self.visible)} / {len(self.rows)} 个本机联系人。仅选中的会话会自动回复；其他会话不会开启。')
+        self.note.set(f'显示 {len(self.visible)} / {len(self.rows)} 个本机联系人。选择后保留当前暂停或运行状态，可再单独开启。')
 
     def changed(self,*_):
         selection=self.list.selection()

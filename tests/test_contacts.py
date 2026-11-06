@@ -23,6 +23,30 @@ def test_directory_lists_personal_group_and_searches_alias_beyond_visible_rows()
     assert not any(r.selectable for r in rows if r.name=='重复')
 
 
+def test_directory_hides_nonfriend_member_metadata_but_keeps_groups_and_disabled_services():
+    from xiaomao.contacts import read_directory
+    conn=contacts()
+    conn.executemany('INSERT INTO contact VALUES(?,?,?,?,0,?,?)',[
+        ('member-only','群成员','','',0,3),
+        ('unknown-system','缓存条目','','',0,0),
+        ('public-account','公众号','','',8,1),
+        ('room@chatroom','收藏群','','',0,2)])
+    rows=read_directory(conn,'self','account')
+    assert not {'member-only','unknown-system'} & {r.id for r in rows}
+    assert next(r for r in rows if r.id=='room@chatroom').kind=='group'
+    service=next(r for r in rows if r.id=='public-account')
+    assert service.kind=='service' and not service.selectable
+
+
+def test_hidden_nonfriend_same_title_still_prevents_title_only_friend_impersonation():
+    from xiaomao.contacts import read_directory
+    conn=contacts()
+    conn.execute('INSERT INTO contact VALUES(?,?,?,?,0,0,3)',('member-only','朋友甲','',''))
+    rows=read_directory(conn,'self','account')
+    assert not any(r.id=='member-only' for r in rows)
+    assert not next(r for r in rows if r.id=='a').selectable
+
+
 def test_binding_uses_exact_account_id_and_detects_rename_and_duplicate():
     from xiaomao.contacts import read_directory,resolve_contact
     from xiaomao.config import Settings
@@ -72,7 +96,7 @@ def test_short_title_fallback_preserves_all_ink_including_distant_suffix():
     assert calls==[(885,45),(676,75)]
 
 
-def test_contact_switch_starts_only_exact_private_binding(tmp_path,monkeypatch):
+def test_contact_switch_keeps_pause_and_exact_private_binding(tmp_path,monkeypatch):
     from test_vision import binding
     from xiaomao.config import Settings
     from xiaomao.contacts import read_directory
@@ -81,12 +105,14 @@ def test_contact_switch_starts_only_exact_private_binding(tmp_path,monkeypatch):
     monkeypatch.setattr('xiaomao.selection.load_directory',lambda *args:rows)
     cfg=Settings(tmp_path,calibration=asdict(binding()));cfg.save();events=[]
     class Client:
+        def status(self):return {'running':True,'mode':'paused'}
         def stop(self):events.append('stop')
         def wait_stopped(self):events.append('wait')
-        def start(self):
+        def start(self,initial_mode=None):
+            assert initial_mode=='paused'
             loaded=Settings.load(tmp_path);events.append('start')
             assert loaded.binding.target_kind=='private' and loaded.conversation_targets[target.name]==target.binding
-            return {'group':loaded.group,'group_names':list(loaded.allowed_groups),'reply_mode':loaded.reply_mode,'mode':'auto'}
+            return {'group':loaded.group,'group_names':list(loaded.allowed_groups),'reply_mode':loaded.reply_mode,'mode':initial_mode}
     switch_group(tmp_path,target.name,Client(),binding=cfg.binding,contact=target)
     assert events==['stop','wait','start']
 
@@ -185,9 +211,10 @@ def test_first_binding_never_imports_unproven_display_name_history(tmp_path,monk
     old.remember(Message('另一个登录账号的群聊记录',message_id='old'))
     monkeypatch.setattr('xiaomao.selection.load_directory',lambda *args:[contact])
     class Client:
+        def status(self):return {'running':False,'mode':'stopped'}
         def stop(self):pass
         def wait_stopped(self):pass
-        def start(self):return {'group':cfg.group,'group_names':[cfg.group],'reply_mode':cfg.reply_mode}
+        def start(self,initial_mode=None):raise AssertionError('selection must keep a stopped worker stopped')
     switch_group(tmp_path,contact.name,Client(),binding=cfg.binding,contact=contact)
     loaded=Settings.load(tmp_path)
     assert not ConversationMemory(cfg.runtime,loaded.memory_scope).messages

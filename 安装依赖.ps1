@@ -16,4 +16,4 @@ if ($taskUv) {
     if ($LASTEXITCODE -ne 0) { throw '项目依赖安装失败' }
 }
 & '.venv/Scripts/python.exe' -m xiaomao doctor
-Write-Output '完成。双击 启动小猫助手.vbs 或 启动小猫助手.cmd。'
+Write-Output '完成。双击 启动拾光微信聊天助手.vbs 或 启动拾光微信聊天助手.cmd。'

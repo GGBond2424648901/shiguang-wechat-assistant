@@ -12,7 +12,7 @@ def apply_initial_mode(engine,store,initial_mode):
     if initial_mode in ('paused','observe'):
         engine.pause() if initial_mode=='paused' else engine.observe()
     elif initial_mode=='auto' and not store.counts().get('unknown'):
-        engine.enable()
+        engine.restore_auto() if hasattr(engine,'restore_auto') else engine.enable()
 
 
 def daemon(root: Path,initial_mode=None):
@@ -66,7 +66,8 @@ def main():
         sys.stdout.reconfigure(encoding="utf-8")
     if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8")
-    parser = argparse.ArgumentParser(description="小猫微信群回复助手，启动遵循本机运行偏好")
+    from .brand import APP_NAME
+    parser = argparse.ArgumentParser(description=APP_NAME+'，启动遵循本机运行偏好')
     parser.add_argument("--root", type=Path, default=default_root())
     parser.add_argument("command", nargs="?", default="gui", choices=["gui","daemon","mcp","start","observe","enable","status","pause","stop","doctor","key","test-model"])
     parser.add_argument("--stdin", action="store_true", help="key 命令从标准输入读取；一行更新主密钥，多行依次替换主密钥及备用密钥")

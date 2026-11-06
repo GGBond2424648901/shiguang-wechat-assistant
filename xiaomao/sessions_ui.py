@@ -621,7 +621,7 @@ class DirectoryPage(tk.Frame):
         self.refresh_button = button(self.actions, '刷新', self.refresh, compact=True,icon_name='refresh')
         self.current_button = button(self.actions, '使用微信当前会话', self.use_current, compact=True)
         self.add = button(self.actions, '加入监听列表', self.stage, primary=True,compact=True,icon_name='add')
-        self.choose = button(self.actions, '仅开启此会话', self.select, compact=True)
+        self.choose = button(self.actions, '仅选择此会话', self.select, compact=True)
         self.buttons = [self.refresh_button, self.current_button, self.add, self.choose]
         for item in self.buttons:
             item.configure(font=(FONT, 10, 'bold' if item is self.choose else 'normal'), pady=6)

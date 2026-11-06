@@ -29,7 +29,7 @@ class ControlClient:
             raise ControlUnavailable("助手尚未运行，或本机控制信息无效") from None
 
     def request(self, operation: str, payload=None) -> dict:
-        if operation not in ("status", "pending", "observe", "enable", "pause", "stop", "reply_latest", "companion_preview", "companion_once","reload_windows","stop_if_idle","queue_text","companion_configure","enable_selected","configure_reply_rules","configure_reply_defaults"):
+        if operation not in ("status", "pending", "observe", "enable", "pause", "stop", "reply_latest", "companion_preview", "companion_once","reload_windows","stop_if_idle","queue_text","companion_configure","enable_selected","pause_selected","configure_reply_rules","configure_reply_defaults"):
             raise ControlUnavailable("不支持这个控制操作")
         url, token = self._endpoint()
         try:
@@ -57,6 +57,8 @@ class ControlClient:
         return self.request('companion_configure',dict(group=group,scope=scope,preferences=preferences))
     def enable_selected(self,group,scope):
         return self.request('enable_selected',dict(group=group,scope=scope))
+    def pause_selected(self,group,scope):
+        return self.request('pause_selected',dict(group=group,scope=scope))
     def reload_windows(self):return self.request('reload_windows')
     def configure_reply_rules(self,group,scope,preferences):
         return self.request('configure_reply_rules',dict(group=group,scope=scope,preferences=preferences))
@@ -69,7 +71,7 @@ class ControlClient:
         if initial_mode not in (None,'auto','observe','paused'):raise ValueError('启动模式无效')
         from .launch import spawn_worker
         from .windows import worker_scope
-        conflict = "另一份小猫助手后台已在运行。请在原面板的「运行设置」点击「停止并退出」，再启动当前助手。"
+        conflict = "另一份拾光微信聊天助手后台已在运行。请在原面板的「运行设置」点击「停止并退出」，再启动当前助手。"
         deadline = time.monotonic()+15
         started = False
         while time.monotonic() < deadline:

@@ -9,18 +9,18 @@
 #endif
 [Setup]
 AppId={{86BF0513-B482-4378-972A-5CEE40CE9353}
-AppName=小猫助手
-AppVerName=小猫助手 {#AppVersion}
+AppName=拾光微信聊天助手
+AppVerName=拾光微信聊天助手 {#AppVersion}
 AppVersion={#AppVersion}
-AppPublisher=Xiaomao WeChat Assistant contributors
+AppPublisher=Shiguang WeChat Assistant contributors
 DefaultDirName={localappdata}\Programs\XiaomaoAssistant
-DefaultGroupName=小猫助手
+DefaultGroupName=拾光微信聊天助手
 PrivilegesRequired=lowest
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
 UninstallDisplayIcon={app}\Xiaomao.exe
 OutputDir={#OutDir}
-OutputBaseFilename=Xiaomao-WeChat-Assistant-{#AppVersion}-windows-x64-setup
+OutputBaseFilename=Shiguang-WeChat-Assistant-{#AppVersion}-windows-x64-setup
 Compression=lzma2/fast
 SolidCompression=yes
 WizardStyle=modern
@@ -38,6 +38,14 @@ Name: "english"; MessagesFile: "compiler:Default.isl"
 [Files]
 Source: "{#Payload}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 
+[Tasks]
+Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "快捷方式："; Flags: checkedonce
+
+[InstallDelete]
+Type: files; Name: "{userprograms}\小猫助手\小猫助手.lnk"
+Type: dirifempty; Name: "{userprograms}\小猫助手"
+
 [Icons]
-Name: "{group}\小猫助手"; Filename: "{app}\Xiaomao.exe"
+Name: "{group}\拾光微信聊天助手"; Filename: "{app}\Xiaomao.exe"
+Name: "{userdesktop}\拾光微信聊天助手"; Filename: "{app}\Xiaomao.exe"; Tasks: desktopicon
 

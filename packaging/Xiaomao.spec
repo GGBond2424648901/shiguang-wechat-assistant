@@ -12,8 +12,8 @@ version = tomllib.loads((root / "pyproject.toml").read_text("utf-8"))["project"]
 version_tuple = (*map(int, version.split(".")), 0)
 version_info = VSVersionInfo(FixedFileInfo(filevers=version_tuple, prodvers=version_tuple), [
     StringFileInfo([StringTable("080404B0", [
-        StringStruct("ProductName", "小猫助手"),
-        StringStruct("FileDescription", "Xiaomao WeChat Assistant"),
+        StringStruct("ProductName", "拾光微信聊天助手"),
+        StringStruct("FileDescription", "Shiguang WeChat Assistant"),
         StringStruct("FileVersion", version),
         StringStruct("ProductVersion", version),
     ])]),

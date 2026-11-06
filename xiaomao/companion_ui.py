@@ -43,7 +43,7 @@ def entry(parent, variable, width=14):
 def memory_details(cfg):
     notes = CompanionStore(cfg.runtime, cfg.memory_scope)
     memory = ConversationMemory(cfg.runtime, cfg.memory_scope)
-    people = {}
+    people = memory.member_names()
     facts = []
     for fact in notes.data['facts'][-30:]:
         speaker = member_label(fact['speaker'], people, '共同话题')

@@ -1156,7 +1156,8 @@ class SingleInstance:
         if ctypes.get_last_error() == 183:
             K.CloseHandle(self.handle)
             self.handle = None
-            raise DesktopUnavailable("已有一个小猫助手正在运行")
+            from .brand import APP_NAME
+            raise DesktopUnavailable(f"已有一个{APP_NAME}正在运行")
         if root is not None:
             # Publish the profile before advertising that scope detection is supported.
             for name in (_scope_marker(root), _WORKER_MUTEX + "-scoped"):

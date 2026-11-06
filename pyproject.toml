@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "xiaomao-wechat-assistant"
-version = "0.2.11"
+version = "0.2.12"
 description = "Visible Windows WeChat group assistant with local OCR and MCP controls"
 requires-python = ">=3.13"
 dependencies = [

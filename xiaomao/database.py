@@ -8,10 +8,12 @@ import re
 import sqlite3
 import struct
 import time
+from types import MappingProxyType
 import xml.etree.ElementTree as ET
 import zstandard
 from .dbcodec.crypto import decode_page, _checksum
 from .domain import Message
+from .member_names import read_member_names
 
 
 class DatabaseUnavailable(RuntimeError):
@@ -124,8 +126,10 @@ class MessageBatch:
 
 
 class DatabaseFeed:
-    def __init__(self,sources,group_id,self_id,*,table=None,clock=time.time):
+    def __init__(self,sources,group_id,self_id,*,table=None,clock=time.time,member_names=None):
         self.sources=sources;self.group_id=group_id;self.self_id=self_id;self.clock=clock
+        self.member_names=member_names
+        self._speaker_tokens={}
         self.table=table or 'Msg_'+hashlib.md5(group_id.encode()).hexdigest()
         if not re.fullmatch(r'Msg_[a-fA-F0-9]{32}',self.table):raise ValueError('无效群标识')
         self.watermarks={};self.started=None;self.seen=set()
@@ -133,6 +137,7 @@ class DatabaseFeed:
 
     def poll(self):
         now=self.clock();initial=self.started is None
+        members=self.member_names() if self.member_names else {}
         group=self.group_id.endswith('@chatroom')
         if not initial and now<self.started:
             self.watermarks.clear();self.seen.clear();self.uploading.clear();initial=True
@@ -198,11 +203,13 @@ class DatabaseFeed:
                 if kind==3:
                     from .media import extract_cache_key
                     cache_key=extract_cache_key(d.get('packed_info_data',b''))
+                display=members.get(sender) if sender!=self.self_id else None
                 message=Message(raw if kind==1 else '[图片]' if kind==3 else '[表情静态帧]',
-                    '','out' if sender==self.self_id else 'in','text' if kind==1 else 'image' if kind==3 else 'emoji',
+                    display.name if display else '','out' if sender==self.self_id else 'in','text' if kind==1 else 'image' if kind==3 else 'emoji',
                     message_id=identity,created_at=at,media_raw=raw if kind!=1 else '',media_key=cache_key,
-                    speaker_id='self' if sender==self.self_id else 'p_'+hashlib.sha256(
-                        (self.self_id+'\0'+self.group_id+'\0'+sender).encode()).hexdigest()[:16])
+                    sender_source=display.source if display else '',
+                    sender_observed_at=now if display else 0,
+                    speaker_id='self' if sender==self.self_id else self._speaker_token(sender))
                 # Server timestamps can lead the local fractional second. Do
                 # not consume that fresh ID as history and lose its receipt.
                 is_new=(fresh or was_uploading) and identity not in self.seen
@@ -220,6 +227,30 @@ class DatabaseFeed:
         if len(self.seen)>4096:self.seen=set(unique)
         return MessageBatch([m for m,new in unique.values()][-(96 if initial else 24):],[m for m,new in unique.values() if new],initial)
 
+    def _speaker_token(self,sender):
+        token=self._speaker_tokens.get(sender)
+        if token:return token
+        token='p_'+hashlib.sha256((self.self_id+'\0'+self.group_id+'\0'+sender).encode()).hexdigest()[:16]
+        if len(self._speaker_tokens)<4096:self._speaker_tokens[sender]=token
+        return token
+
+    def member_profiles(self,known_ids):
+        """Refresh known people independently of the recent message window.
+
+        The raw directory may include unrelated contacts. Only already-known,
+        conversation-scoped opaque IDs leave this reader; raw IDs stay local.
+        """
+        from .member_names import known_member,safe_name
+        known={value for value in known_ids if known_member(value)}
+        if not known or not self.member_names:return {}
+        now=self.clock();profiles={}
+        for uid,display in self.member_names().items():
+            if not isinstance(uid,str) or uid==self.self_id:continue
+            speaker=self._speaker_token(uid)
+            if speaker in known and safe_name(display.name):
+                profiles[speaker]={'name':display.name,'source':display.source,'observed_at':now}
+        return profiles
+
 
 class DatabaseHub:
     """One selected logged-in account; credentials imported encrypted from 拾光."""
@@ -227,6 +258,7 @@ class DatabaseHub:
         self.settings=settings;self.cancelled=cancelled;self.account=None
         self.process_id=process_id
         self.keys={};self.snapshots={};self.last_identity_check=0;self.feeds={}
+        self._contact_cache=None
 
     @property
     def pid(self):
@@ -322,22 +354,43 @@ class DatabaseHub:
             raise DatabaseUnavailable('同名群的身份发生变化，已阻止跨群回复')
         if key not in self.feeds:
             sources=lambda:[self._snapshot(path) for path in sorted((root/'message').glob('message_[0-9]*.db'))]
-            self.feeds[key]=DatabaseFeed(sources,group_id,self.account['wxid'])
+            self.feeds[key]=DatabaseFeed(sources,group_id,self.account['wxid'],
+                member_names=lambda:self.member_names(group_id))
         return self.feeds[key]
+
+    def member_names(self,conversation_id):
+        """Local-only raw-ID lookup, refreshed with the contact/WAL snapshot."""
+        self._ensure()
+        conn,cache=self._contact_metadata()
+        if conversation_id not in cache['members']:
+            cache['members'][conversation_id]=MappingProxyType(read_member_names(conn,conversation_id))
+        return cache['members'][conversation_id]
+
+    def _contact_metadata(self):
+        conn=self._snapshot(Path(self.account['path'])/'db_storage/contact/contact.db').connection()
+        # MemoryDatabase replaces its RAM connection only after the DB/WAL
+        # signature changes and the replacement snapshot authenticates.
+        if self._contact_cache is None or self._contact_cache['connection'] is not conn:
+            self._contact_cache={'connection':conn,'directory':None,'members':{}}
+        return conn,self._contact_cache
 
     def directory(self):
         self._ensure()
         from .contacts import read_directory
-        conn=self._snapshot(Path(self.account['path'])/'db_storage/contact/contact.db').connection()
-        return read_directory(conn,self.account['wxid'],self.account['id'])
+        conn,cache=self._contact_metadata()
+        if cache['directory'] is None:
+            cache['directory']=read_directory(conn,self.account['wxid'],self.account['id'])
+        return list(cache['directory'])
 
     def close(self):
+        self._contact_cache=None
         for snapshot in self.snapshots.values():snapshot.close()
 
 
 class LazyDatabaseFeed:
     def __init__(self,hub,group):self.hub=hub;self.group=group
     def poll(self):return self.hub.feed(self.group).poll()
+    def member_profiles(self,known_ids):return self.hub.feed(self.group).member_profiles(known_ids)
     def assert_identity(self):self.hub.feed(self.group,force_identity=True)
     def resolve_media(self,message):
         feed=self.hub.feed(self.group)

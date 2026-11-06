@@ -99,8 +99,9 @@ def test_switch_primary_to_bound_detached_chat_preserves_shared_main_window(tmp_
     cfg.save()
     monkeypatch.setattr(selection,'load_directory',lambda *args:[primary,secondary])
     monkeypatch.setattr(selection,'refresh_binding',lambda cfg:cfg.binding)
-    client=SimpleNamespace(stop=lambda:None,wait_stopped=lambda:None,
-                           start=lambda:{'group':secondary.name,'group_names':[secondary.name],'reply_mode':'natural'})
+    client=SimpleNamespace(status=lambda:{'running':True,'mode':'paused'},stop=lambda:None,wait_stopped=lambda:None,
+                           start=lambda initial_mode=None:{'group':secondary.name,'group_names':[secondary.name],
+                                                           'reply_mode':'natural','mode':initial_mode})
     selection.switch_group(tmp_path,secondary.name,client,contact=secondary)
     saved=Settings.load(tmp_path)
     assert saved.calibration['hwnd']==main.hwnd

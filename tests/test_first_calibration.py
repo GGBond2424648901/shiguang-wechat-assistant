@@ -65,10 +65,14 @@ class Worker:
     def wait_stopped(self):
         self.events.append('wait')
 
-    def start(self):
+    def status(self):
+        return dict(running=True, mode='paused')
+
+    def start(self,initial_mode=None):
+        assert initial_mode == 'paused'
         self.events.append('start')
         saved = Settings.load(self.root)
-        return dict(group=saved.group, group_names=list(saved.allowed_groups), reply_mode=saved.reply_mode)
+        return dict(group=saved.group, group_names=list(saved.allowed_groups), reply_mode=saved.reply_mode, mode=initial_mode)
 
 
 @pytest.mark.parametrize('contact,headers', [
@@ -104,7 +108,7 @@ def test_bootstrap_preview_then_save_uses_captured_recipient_and_drops_placehold
     ([PEER, GROUP], [PEER.name, GROUP.name+'(2)'], '变化'),
     ([replace(PEER, selectable=False, reason='同名')], [PEER.name], '同名'),
     ([PEER, replace(GROUP,account='account-b')], [PEER.name], '登录账号'),
-    ([SYSTEM], [SYSTEM.name], '联系人列表'),
+    ([SYSTEM], [SYSTEM.name], '系统服务'),
     ([PEER], ['完全不同'], '联系人列表'),
 ])
 def test_bootstrap_rejects_unstable_or_ambiguous_chat(tmp_path, monkeypatch, rows, headers, error):

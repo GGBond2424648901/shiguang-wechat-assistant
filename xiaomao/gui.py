@@ -80,7 +80,8 @@ class Panel:
         from .workspace_ui import logo,BG
         self.app_icon=logo(root,48)
         root.iconphoto(True,self.app_icon)
-        root.title("小猫 · 微信聊天助手")
+        from .brand import APP_NAME
+        root.title(APP_NAME)
         width=min(1200,root.winfo_screenwidth()-42);height=min(800,root.winfo_screenheight()-85)
         root.geometry(f"{width}x{height}")
         root.minsize(min(930,width),min(620,height))
@@ -125,6 +126,8 @@ class Panel:
                     previous_controls.append((control,control.cget('text'),control.cget('state')))
                     control.configure(text='处理中…',state='disabled')
         def finish(ok,value):
+            for control,text,state in previous_controls:
+                if control.winfo_exists():control.configure(text=text,state=state)
             try:
                 callback=success if ok else failure or self.show_error
                 before=self.notice.get() if label else None
@@ -136,8 +139,6 @@ class Panel:
                 self.show_error(str(error) if isinstance(error,ValueError) else '界面未能显示操作结果，请刷新状态后核对')
             finally:
                 if label:self.active_actions.discard(label)
-                for control,text,state in previous_controls:
-                    if control.winfo_exists():control.configure(text=text,state=state)
         if mutates:self.pending_mutations+=1
         def run():
             try:
@@ -288,6 +289,22 @@ class Panel:
         controls=tuple(self.view.actions[k] for k in ('enable','pause') if k in self.view.actions)
         self.work(act,done,label=name,controls=controls)
 
+    def control_conversation(self,group,operation):
+        if operation not in ('enable','pause'):raise ValueError('会话控制操作无效')
+        cfg=self.settings
+        if group not in cfg.allowed_groups or group not in cfg.conversation_targets:
+            self.show_error('请先选择并绑定准确的回复对象');return
+        scope=cfg.conversation_scope(group)
+        def action():
+            if operation=='enable':self.client.start(initial_mode='paused')
+            return getattr(self.client,operation+'_selected')(group,scope)
+        def done(data):
+            self.settings=Settings.load(self.directory)
+            self.view.render();self.show_status(data)
+            self.notice.set(f'已{"暂停" if operation=="pause" else "开启"}“{group}”的自动回复，其他会话保持各自状态')
+        controls=tuple(self.view.actions[k] for k in ('enable','pause','enable_all','pause_all'))+tuple(self.view.watch_controls.values())
+        self.work(action,done,label='暂停此会话' if operation=='pause' else '开启此会话',controls=controls)
+
     def _switch(self,read_current,contact=None):
         if self.switch_busy:return
         self.switch_busy=True;self.switch_cancel=threading.Event()
@@ -390,7 +407,12 @@ class Panel:
     def show_pending(self,data):
         from .ui_labels import member_label
         tasks=data.get("tasks",[])
+        from .member_names import known_member,safe_name
         people={};lines=[]
+        for t in tasks:
+            group=t.get('group',self.settings.group)
+            if known_member(t['sender']) and safe_name(t.get('sender_name')):
+                people.setdefault(group,{})[t['sender']]=safe_name(t['sender_name'])
         for t in tasks:
             group=t.get('group',self.settings.group)
             who=member_label(t['sender'],people.setdefault(group,{}),'对方')

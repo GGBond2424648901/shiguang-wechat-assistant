@@ -16,7 +16,7 @@ $bundle = Join-Path $job 'bundle'
 New-Item -Type Directory -Force $job, $dest | Out-Null
 $version = (& $py -c "import sys,tomllib;print(tomllib.load(open(sys.argv[1], 'rb'))['project']['version'])" (Join-Path $repo 'pyproject.toml')).Trim()
 if ($LASTEXITCODE -or $version -notmatch '^\d+\.\d+\.\d+$') { throw 'Invalid version' }
-$archive = Join-Path $dest "Xiaomao-WeChat-Assistant-$version-source.zip"
+$archive = Join-Path $dest "Shiguang-WeChat-Assistant-$version-source.zip"
 & $py "$PSScriptRoot/export_public.py" $stage --archive $archive
 if ($LASTEXITCODE) { throw 'Public source export failed' }
 Push-Location -LiteralPath $stage
@@ -30,7 +30,7 @@ try {
     Copy-Item -LiteralPath $compilerLicense -Destination (Join-Path $payload 'licenses/Inno-Setup.txt')
     & $compiler "/DAppVersion=$version" "/DPayload=$payload" "/DOutDir=$dest" "/DAppIcon=$stage/xiaomao/ui_assets/app.ico" 'packaging/setup.iss'
     if ($LASTEXITCODE) { throw 'Installer compilation failed' }
-    $installer = Join-Path $dest "Xiaomao-WeChat-Assistant-$version-windows-x64-setup.exe"
+    $installer = Join-Path $dest "Shiguang-WeChat-Assistant-$version-windows-x64-setup.exe"
     @($installer,$archive) | ForEach-Object {
         $item=Get-FileHash -Algorithm SHA256 -LiteralPath $_
         $item.Hash.ToLowerInvariant() + '  ' + (Split-Path $item.Path -Leaf)

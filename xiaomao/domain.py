@@ -25,10 +25,12 @@ class Message:
     reply_to_id: str = ''
     reply_to_speaker: str = ''
     delivery_status: str = field(default='',compare=False)
+    sender_source: str = ''
+    sender_observed_at: float = field(default=0, compare=False)
 
     @property
     def key(self) -> tuple:
-        return (self.direction, self.sender, self.kind, self.quoted, normalized(self.text))
+        return (self.direction, self.speaker_id or self.sender, self.kind, self.quoted, normalized(self.text))
 
 
 @dataclass(frozen=True)

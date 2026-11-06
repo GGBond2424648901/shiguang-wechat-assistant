@@ -48,12 +48,12 @@ def main():
 
     groups=('读书分享','摄影交流','小夏')
     class DemoClient:
-        def __init__(self,root):self.mode='auto'
+        def __init__(self,root):self.mode='auto';self.paused={groups[1]}
         def status(self):
             return dict(running=True,mode=self.mode,group=groups[0],active_group=groups[0],group_names=list(groups),
                         reason='数据库后台监听中',pending_count=0,counts={'verified':12},receive_mode='database',
-                        calibrated=True,window_reload_pending=False,can_stop_if_idle=True,reply_mode='natural',
-                        groups=[dict(name=n,mode=self.mode,pending_count=0,reason='数据库后台监听中',
+                        calibrated=True,window_reload_pending=False,can_stop_if_idle=True,reply_mode='natural',can_control_selected=True,
+                        groups=[dict(name=n,mode='paused' if n in self.paused else self.mode,pending_count=0,reason='数据库后台监听中',
                                      calibrated=True,window_kind='detached',window_state='在后台',
                                      companion=dict(enabled=True,daily_max=3,reason='安静陪伴，等待合适话题',
                                          next_stage='空闲话题',next_candidate_at=time.time()+1200,
@@ -67,6 +67,8 @@ def main():
         def reload_windows(self):return self.status()
         def enable(self):self.mode='auto';return self.status()
         def pause(self):self.mode='paused';return self.status()
+        def pause_selected(self,group,scope):self.paused.add(group);return self.status()
+        def enable_selected(self,group,scope):self.paused.discard(group);return self.status()
 
     def pump(window,seconds=.5):
         deadline=time.monotonic()+seconds
