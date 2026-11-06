@@ -7,6 +7,64 @@ from xiaomao.sticker_ui import StickerPage
 from test_stickers import library
 
 
+def _loaded_page(native_root,tmp_path,count=15):
+    library(tmp_path,count);Settings(tmp_path).save();jobs=[]
+    panel=SimpleNamespace(directory=tmp_path,work=lambda f,success,error,**kw:jobs.append((f,success,error)))
+    page=StickerPage(native_root,panel);page.on_show()
+    action,done,_=jobs.pop(0);done(action())
+    return page
+
+
+def test_gallery_wheel_changes_page_only_over_tiles_and_accumulates_small_deltas(native_root,tmp_path):
+    page=_loaded_page(native_root,tmp_path)
+    try:
+        tile=page.gridbox.winfo_children()[0]
+        for _ in range(3):page._wheel(SimpleNamespace(widget=tile,delta=-30))
+        assert page.page==0
+        page._wheel(SimpleNamespace(widget=tile,delta=-30))
+        assert page.page==1 and '2/3' in page.counter.cget('text')
+        before=page.filter.get()
+        page._wheel(SimpleNamespace(widget=page.categories,delta=-120))
+        assert page.page==1 and page.filter.get()==before
+        page.on_hide()
+        page._wheel(SimpleNamespace(widget=page.gridbox,delta=-120))
+        assert page.page==1
+    finally:page.destroy()
+
+
+def test_gallery_turn_at_boundary_does_not_destroy_visible_tiles(native_root,tmp_path):
+    page=_loaded_page(native_root,tmp_path)
+    try:
+        tiles=page.gridbox.winfo_children()
+        page._turn(-1)
+        assert page.page==0 and page.gridbox.winfo_children()==tiles
+        page._turn(20)
+        assert page.page==2
+        tiles=page.gridbox.winfo_children();page._turn(1)
+        assert page.page==2 and page.gridbox.winfo_children()==tiles
+    finally:page.on_hide();page.destroy()
+
+
+def test_resize_burst_keeps_tiles_until_settled_and_ignores_threshold_jitter(native_root,tmp_path):
+    import time
+    page=_loaded_page(native_root,tmp_path)
+    def settle():
+        end=time.monotonic()+.2
+        while time.monotonic()<end:native_root.update();time.sleep(.005)
+    try:
+        tiles=page.gridbox.winfo_children()
+        for width in (950,870,850,900,750):page._resize(SimpleNamespace(width=width))
+        assert page.gridbox.winfo_children()==tiles
+        settle();assert page.thumb_edge==92
+        tiles=page.gridbox.winfo_children()
+        for width in (858,862,859,865,861):page._resize(SimpleNamespace(width=width))
+        settle()
+        assert page.thumb_edge==92 and page.gridbox.winfo_children()==tiles
+        page._resize(SimpleNamespace(width=1000));settle()
+        assert page.thumb_edge==128 and page.gridbox.winfo_children()!=tiles
+    finally:page.on_hide();page.destroy()
+
+
 def test_real_import_page_preserves_manual_edits_and_confirms_only_selected(native_root,tmp_path):
     items=library(tmp_path,2)
     settings=Settings(tmp_path);settings.save()

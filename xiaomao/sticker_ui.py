@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import os
 import re
+import time
 import tkinter as tk
 from tkinter import filedialog,ttk
 
@@ -39,6 +40,11 @@ class StickerPage(tk.Frame):
         self.loading=False
         self.gallery_key=None
         self.search_job=None
+        self.resize_job=None
+        self.resize_width=None
+        self.wheel_delta=0
+        self.wheel_at=0
+        self.last_page=0
         self.thumb_cache={}
         self.rows={}
         self.busy=False
@@ -98,6 +104,16 @@ class StickerPage(tk.Frame):
 
     def _wheel(self,event):
         if not self.active or not str(event.widget).startswith(str(self)+'.'):return
+        if not event.delta:return
+        if self.tab=='library' and (event.widget is self.gridbox or str(event.widget).startswith(str(self.gridbox)+'.')):
+            now=time.monotonic()
+            if now-self.wheel_at>.45 or self.wheel_delta*event.delta<0:self.wheel_delta=0
+            self.wheel_at=now;self.wheel_delta+=event.delta
+            if abs(self.wheel_delta)>=120:
+                self._turn(-1 if self.wheel_delta>0 else 1)
+                self.wheel_delta=0
+            return 'break'
+        if event.widget.winfo_class() in ('TCombobox','Combobox','Entry','TEntry','Spinbox','TSpinbox'):return
         if event.widget is self.queue:return
         if self.body.winfo_height()<=self.canvas.winfo_height():return
         self.canvas.yview_scroll(-1 if event.delta>0 else 1,'units')
@@ -108,15 +124,27 @@ class StickerPage(tk.Frame):
         self._stop_preview()
         self.detail.stop()
         if self.search_job is not None:self.after_cancel(self.search_job)
+        if self.resize_job is not None:self.after_cancel(self.resize_job)
         try:self.winfo_toplevel().unbind('<MouseWheel>',self._wheel_token)
         except tk.TclError:pass
 
     def _resize(self,event):
-        self.canvas.itemconfigure(self.window,width=event.width)
-        edge=128 if event.width>=860 else 92
+        width=max(1,event.width)
+        if width==self.resize_width:return
+        self.resize_width=width
+        self.canvas.itemconfigure(self.window,width=width)
+        if self.resize_job is not None:self.after_cancel(self.resize_job)
+        self.resize_job=self.after(120,self._resize_gallery)
+
+    def _resize_gallery(self):
+        self.resize_job=None
+        width=self.resize_width
+        if width is None:return
+        # A small dead band avoids repeatedly swapping every tile at the breakpoint.
+        edge=128 if width>=(844 if self.thumb_edge==128 else 876) else 92
         if edge!=self.thumb_edge:
             self.thumb_edge=edge
-            if self.tab=='library':self._gallery()
+            if self.active and self.tab=='library':self._gallery()
 
     def on_show(self):
         self.active=True
@@ -135,6 +163,7 @@ class StickerPage(tk.Frame):
 
     def on_hide(self):
         self.active=False;self._stop_preview();self.detail.stop()
+        self.wheel_delta=0
 
     def can_leave(self):
         if self.detail.saving:self.notice.set('素材正在保存，请稍候');return False
@@ -177,7 +206,7 @@ class StickerPage(tk.Frame):
         box=self.pages['library']
         left=card(box,pad=12);left.grid(row=0,column=0,sticky='nsew',padx=(0,5))
         self._heading(left,'素材库','list')
-        label(left,'点击素材查看与编辑 · 新图片请用「导入素材」',9,color=MUTED).pack(anchor='w',pady=(0,8))
+        label(left,'图片区域滚轮翻页 · 点击查看编辑 · 新图用「导入素材」',9,color=MUTED).pack(anchor='w',pady=(0,8))
         row=tk.Frame(left,bg=PAPER);row.pack(fill='x')
         self.categories=ttk.Combobox(row,textvariable=self.filter,state='readonly',width=10)
         self.categories.pack(side='left')
@@ -204,7 +233,7 @@ class StickerPage(tk.Frame):
         button(right,'保存偏好设置',self.save,primary=True,icon_name='save').pack(side='bottom',anchor='e')
 
     def _filter(self):
-        self.page=0;self._gallery()
+        self.page=0;self.wheel_delta=0;self._gallery()
 
     def _search(self):
         if self.search_job is not None:self.after_cancel(self.search_job)
@@ -212,7 +241,9 @@ class StickerPage(tk.Frame):
         self.search_job=self.after(150,run)
 
     def _turn(self,delta):
-        self.page+=delta;self._gallery()
+        target=min(self.last_page,max(0,self.page+delta))
+        if target==self.page:return
+        self.page=target;self._gallery()
 
     def _gallery(self):
         if self.lib is None:return
@@ -245,7 +276,7 @@ class StickerPage(tk.Frame):
         # Interleave collections on the overview; imports appear before older entries in their own collection.
         for values in groups.values():values.sort(key=lambda s:s.path.parent!=self.lib.shelf.files)
         items=[groups[k][i] for i in range(max(map(len,groups.values()),default=0)) for k in order if i<len(groups[k])]
-        last=max(0,(len(items)-1)//6);self.page=min(last,max(0,self.page))
+        last=self.last_page=max(0,(len(items)-1)//6);self.page=min(last,max(0,self.page))
         self.gallery_key=(self.lib._stamp,self.filter.get(),query,self.page,self.thumb_edge)
         self.counter.configure(text=f'{len(items)} 条 · {self.page+1}/{last+1}')
         for b,on in ((self.prev,self.page>0),(self.next,self.page<last)):b.configure(state='normal' if on else 'disabled')

@@ -10,7 +10,7 @@ from tkinter import ttk
 
 from PIL import Image, ImageDraw, ImageOps, ImageTk
 
-from .workspace_ui import BG, FONT, GREEN, INK, LINE, MUTED, NAVY, PAPER, PEACH, button, card, glyph, label, logo, nav_button, styles
+from .workspace_ui import BG, FONT, GREEN, INK, LINE, MUTED, NAVY, PAPER, PEACH, HoverTip, button, card, glyph, label, logo, nav_button, styles
 
 # The calibration dialog and older external callers still import these names.
 TEXT, PANEL, GOLD, FIELD, AMBER = INK, BG, '#854E34', PAPER, PEACH
@@ -103,6 +103,40 @@ def _install_resize_edges(root, view, hwnd):
              relx=side,rely=1,anchor='s'+anchor)
 
 
+def _install_window_rounding(root,hwnd):
+    """Release stale clipping during sizing, apply small corners once settled."""
+    import win32gui
+    state={'job':None,'observed':None,'clipped':False}
+    def apply():
+        state['job']=None
+        if not root.winfo_exists():return
+        zoomed=root.state()=='zoomed'
+        left,top,right,bottom=win32gui.GetWindowRect(hwnd)
+        region=0 if zoomed else win32gui.CreateRoundRectRgn(0,0,right-left+1,bottom-top+1,12,12)
+        try:
+            win32gui.SetWindowRgn(hwnd,region,False)
+            state['clipped']=bool(region)
+        except Exception:
+            if region:win32gui.DeleteObject(region)
+    def resized(event):
+        if event.widget is not root:return
+        size=(event.width,event.height,root.state())
+        if size==state['observed']:return
+        state['observed']=size
+        if state['job'] is not None:root.after_cancel(state['job'])
+        if state['clipped']:
+            # An old smaller region crops growing windows until the timer runs.
+            win32gui.SetWindowRgn(hwnd,0,False);state['clipped']=False
+        state['job']=root.after(140,apply)
+    def destroy(event):
+        if event.widget is root and state['job'] is not None:
+            root.after_cancel(state['job']);state['job']=None
+    root.bind('<Configure>',resized,add='+')
+    root.bind('<Destroy>',destroy,add='+')
+    state['job']=root.after(0,apply)
+    return resized
+
+
 def titlebar(root, view):
     """Keep the normal Windows frame and put its controls in the page header."""
     if root.tk.call('tk', 'windowingsystem') != 'win32':
@@ -163,6 +197,8 @@ def titlebar(root, view):
                             activebackground='#F1B7B2' if name=='close' else '#DCE3E5')
         control.pack(side='left')
         control.bind('<Return>', lambda e: e.widget.invoke())
+        control._hint=HoverTip(control,lambda w=control,n=name:
+            '关闭界面，后台继续运行' if n=='close' else str(w.cget('text')))
 
     last_zoomed=None
     def update_maximize_icon(event):
@@ -175,23 +211,7 @@ def titlebar(root, view):
                                                     image=icons['restore' if zoomed else 'maximize'])
 
     root.bind('<Configure>', update_maximize_icon, add='+')
-    rounding={'size':None,'job':None}
-    def round_window():
-        rounding['job']=None
-        if not root.winfo_exists():return
-        zoomed=root.state()=='zoomed'
-        left,top,right,bottom=win32gui.GetWindowRect(hwnd)
-        size=(right-left,bottom-top,zoomed)
-        if size==rounding['size']:return
-        rounding['size']=size
-        region=0 if zoomed else win32gui.CreateRoundRectRgn(0,0,size[0]+1,size[1]+1,12,12)
-        try:win32gui.SetWindowRgn(hwnd,region,True)
-        except Exception:
-            if region:win32gui.DeleteObject(region)
-    def schedule_round(event):
-        if event.widget is root and rounding['job'] is None:rounding['job']=root.after(40,round_window)
-    root.bind('<Configure>',schedule_round,add='+')
-    rounding['job']=root.after(0,round_window)
+    _install_window_rounding(root,hwnd)
     root.bind('<Alt-F4>', lambda _: command(wc.SC_CLOSE), add='+')
     # Hand dragging to Windows so snapping and dragging from maximized work.
     # Wait for real movement so a double-click still reaches Tk as a double-click.

@@ -4,6 +4,23 @@ from types import SimpleNamespace
 import pytest
 
 
+def test_cloaked_window_waits_without_activating_or_restoring(monkeypatch):
+    from xiaomao import windows
+    from test_vision import binding
+    d=windows.WindowsDesktop(binding());calls=[]
+    monkeypatch.setattr(windows,'window_cloaked',lambda hwnd:True,raising=False)
+    monkeypatch.setattr(windows,'input_desktop_available',lambda:True)
+    d._bound_details=lambda:{'pid':d.calibration.pid}
+    d.input_generation=lambda:100;d.idle_for=lambda:30
+    monkeypatch.setattr(windows,'U',SimpleNamespace(GetForegroundWindow=lambda:99,
+        IsIconic=lambda h:False,IsWindowVisible=lambda h:True,
+        SetForegroundWindow=lambda h:calls.append(('activate',h))))
+    assert not d.try_idle_wake(10)
+    assert calls==[]
+    assert '桌面' in d.wake_reason and '隐藏' in d.wake_reason
+    assert '桌面' in d.route_state()
+
+
 @pytest.mark.parametrize('fault', ['', 'unsafe', 'wrong_chat', 'draft', 'popup', 'disabled', 'user_input', 'moved'])
 def test_detached_history_can_activate_without_bypassing_editor_guards(monkeypatch, fault):
     import win32gui

@@ -191,6 +191,17 @@ def window_details(hwnd: int) -> dict:
     return candidate or dict(info,kind=None)
 
 
+def window_cloaked(hwnd: int) -> bool:
+    """DWM-cloaked windows remain IsWindowVisible but cannot be used here."""
+    if os.name!='nt':return False
+    try:
+        api=ctypes.WinDLL('dwmapi').DwmGetWindowAttribute
+        api.argtypes=[W.HWND,W.DWORD,ctypes.c_void_p,W.DWORD]
+        value=W.DWORD()
+        return api(hwnd,14,ctypes.byref(value),ctypes.sizeof(value))==0 and bool(value.value)
+    except (OSError,AttributeError):return False
+
+
 def list_calibration_windows():
     """List eligible windows in z order, without restoring or activating any of them."""
     if os.name!='nt':raise DesktopUnavailable('仅支持 Windows')
@@ -580,6 +591,7 @@ class WindowsDesktop:
         try:
             info=self._bound_details()
             if info['pid']!=b.pid:return '需重新绑定'
+            if window_cloaked(b.hwnd):return '被桌面隐藏'
             if U.IsIconic(b.hwnd):return '已最小化'
             if not U.IsWindowVisible(b.hwnd):return '窗口不可见'
             return '在前台' if self.is_foreground() else '在后台'
@@ -590,12 +602,16 @@ class WindowsDesktop:
         b=self.calibration
         now=time.monotonic()
         if not b or now-self._last_wake<20 or not input_desktop_available():return False
+        if window_cloaked(b.hwnd):
+            self.wake_reason='微信被桌面隐藏（可能位于其他虚拟桌面），等待回到当前桌面，不自动切换'
+            return False
         original=U.GetForegroundWindow()
         generation=self.input_generation()
         self._return_window=None
         self._wake_generation=None
         def valid():
             if (self.cancelled.is_set() or not input_desktop_available() or
+                    window_cloaked(b.hwnd) or
                     self.input_generation()!=generation or self.idle_for()<idle_seconds or
                     U.GetForegroundWindow() not in (original,b.hwnd)):return False
             _check_calibration_lease(b.hwnd)

@@ -121,6 +121,44 @@ def _button_style(parent,face,ink,outside,font,px,py,nav):
     return store['style'][key]
 
 
+class HoverTip:
+    """Small in-window hint; never creates or focuses another native window."""
+    def __init__(self,widget,text,delay=450):
+        self.widget,self.text,self.delay=widget,text,delay
+        self.job=None
+        root=widget.winfo_toplevel()
+        self.label=tk.Label(root,bg=NAVY,fg=PAPER,font=(FONT,9),padx=9,pady=5,
+                            bd=0,wraplength=260,takefocus=False)
+        for event in ('<Enter>','<FocusIn>'):widget.bind(event,self.schedule,add='+')
+        for event in ('<Leave>','<FocusOut>','<ButtonPress>','<Escape>','<Return>','<space>'):
+            widget.bind(event,self.hide,add='+')
+        widget.bind('<Destroy>',self.destroy,add='+')
+
+    def schedule(self,_event=None):
+        self.hide()
+        self.job=self.widget.after(self.delay,self.show)
+
+    def show(self):
+        self.job=None
+        if not self.widget.winfo_exists() or not self.widget.winfo_ismapped():return
+        self.label.configure(text=self.text() if callable(self.text) else self.text)
+        self.label.update_idletasks()
+        root=self.widget.winfo_toplevel()
+        x=self.widget.winfo_rootx()-root.winfo_rootx()
+        y=self.widget.winfo_rooty()-root.winfo_rooty()+self.widget.winfo_height()+5
+        x=max(4,min(x,root.winfo_width()-self.label.winfo_reqwidth()-4))
+        y=max(4,min(y,root.winfo_height()-self.label.winfo_reqheight()-4))
+        self.label.place(x=x,y=y);self.label.lift()
+
+    def hide(self,_event=None):
+        if self.job is not None:self.widget.after_cancel(self.job);self.job=None
+        if self.label.winfo_exists():self.label.place_forget()
+
+    def destroy(self,event):
+        if event.widget is not self.widget:return
+        self.hide();self.label.destroy()
+
+
 class ActionButton(ttk.Button):
     """The themed button handles activation, accessibility and state in Tk itself."""
     def __init__(self,parent,text,command,*,primary=False,dark=False,compact=False,icon_name=None,nav=False,selected=False):
