@@ -35,7 +35,11 @@ class StickerPage(tk.Frame):
     def __init__(self,parent,panel):
         super().__init__(parent,bg=BG)
         self.panel=panel
-        self.lib=StickerLibrary(panel.directory)
+        self.lib=None
+        self.loading=False
+        self.gallery_key=None
+        self.search_job=None
+        self.thumb_cache={}
         self.rows={}
         self.busy=False
         self.analysis_running=False
@@ -82,8 +86,12 @@ class StickerPage(tk.Frame):
             box.columnconfigure(0,weight=3,uniform='cards');box.columnconfigure(1,weight=2,uniform='cards')
             self.pages[key]=box
         self._build_library();self._build_queue()
+        from .sticker_detail_ui import StickerDetail
+        self.detail=StickerDetail(self.body,self)
+        self.detail.grid(row=0,column=0,sticky='nsew');self.pages['detail']=self.detail
+        self.detail_save=self.detail.save_button
         label(self,textvariable=self.notice,color=MUTED,size=9).grid(row=2,column=0,sticky='ew',pady=(4,0))
-        self.query.trace_add('write',lambda *_:self._filter())
+        self.query.trace_add('write',lambda *_:self._search())
         self._wheel_token=self.winfo_toplevel().bind('<MouseWheel>',self._wheel,add='+')
         self.bind('<Destroy>',self._destroyed,add='+')
         self.switch('library')
@@ -98,6 +106,8 @@ class StickerPage(tk.Frame):
     def _destroyed(self,event):
         if event.widget is not self:return
         self._stop_preview()
+        self.detail.stop()
+        if self.search_job is not None:self.after_cancel(self.search_job)
         try:self.winfo_toplevel().unbind('<MouseWheel>',self._wheel_token)
         except tk.TclError:pass
 
@@ -109,25 +119,47 @@ class StickerPage(tk.Frame):
             if self.tab=='library':self._gallery()
 
     def on_show(self):
-        self.active=True;self.lib.refresh();self._gallery()
+        self.active=True
+        if self.lib is None and not self.loading:
+            self.loading=True
+            def loaded(lib):
+                if not self.winfo_exists():return
+                self.lib=lib;self.loading=False;self._gallery()
+            def failed(error):
+                if self.winfo_exists():self.loading=False;self.notice.set(str(error))
+            self.panel.work(lambda:StickerLibrary(self.panel.directory),loaded,failed,mutates=False)
+        elif self.lib is not None:self._gallery()
         if not self.frequency_editor.dirty():self.frequency_editor.select(None)
         if self.tab=='import':self._select_row()
+        elif self.tab=='detail':self.detail.resume()
 
     def on_hide(self):
-        self.active=False;self._stop_preview()
+        self.active=False;self._stop_preview();self.detail.stop()
+
+    def can_leave(self):
+        if self.detail.saving:self.notice.set('素材正在保存，请稍候');return False
+        if self.tab=='detail' and self.detail.dirty():
+            self.detail.note.set('有未保存修改，请保存后再离开，或撤销修改');return False
+        if self.frequency_editor.dirty():
+            self.notice.set('默认表情频率尚未保存，请先保存');return False
+        return True
+
+    def back_to_library(self):
+        self.switch('library')
 
     def switch(self,key):
+        if self.tab=='detail' and key!='detail' and not self.can_leave():return
         self._stash()
-        self._stop_preview()
+        self._stop_preview();self.detail.stop()
         self.tab=key
         for name,box in self.pages.items():
             if name==key:box.grid()
             else:box.grid_remove()
-            self.tabs[name].configure(bg=PEACH if name==key else PAPER,fg=INK,
+            if name in self.tabs:self.tabs[name].configure(bg=PEACH if name==key else PAPER,fg=INK,
                                       font=('Microsoft YaHei UI',10,'bold' if name==key else 'normal'))
         self.canvas.yview_moveto(0)
         if key=='library':self._gallery()
-        else:self._select_row()
+        elif key=='import':self._select_row()
 
     def open_guide(self):
         try:os.startfile(str(ASSETS/'表情包收集说明.txt'))
@@ -145,6 +177,7 @@ class StickerPage(tk.Frame):
         box=self.pages['library']
         left=card(box,pad=12);left.grid(row=0,column=0,sticky='nsew',padx=(0,5))
         self._heading(left,'素材库','list')
+        label(left,'点击素材查看与编辑 · 新图片请用「导入素材」',9,color=MUTED).pack(anchor='w',pady=(0,8))
         row=tk.Frame(left,bg=PAPER);row.pack(fill='x')
         self.categories=ttk.Combobox(row,textvariable=self.filter,state='readonly',width=10)
         self.categories.pack(side='left')
@@ -152,6 +185,7 @@ class StickerPage(tk.Frame):
         label(row,'搜索',9,color=MUTED).pack(side='left',padx=(7,3))
         ttk.Entry(row,textvariable=self.query,width=12).pack(side='left',expand=True,fill='x',ipady=2)
         self.gridbox=tk.Frame(left,bg=PAPER);self.gridbox.pack(fill='both',expand=True,pady=7)
+        label(self.gridbox,'正在读取本地素材库…',color=MUTED).grid(columnspan=3,pady=52)
         for i in range(3):self.gridbox.columnconfigure(i,weight=1,uniform='thumb')
         footer=tk.Frame(left,bg=PAPER);footer.pack(side='bottom',fill='x')
         self.counter=label(footer,'',9,color=MUTED);self.counter.pack(side='left')
@@ -172,11 +206,19 @@ class StickerPage(tk.Frame):
     def _filter(self):
         self.page=0;self._gallery()
 
+    def _search(self):
+        if self.search_job is not None:self.after_cancel(self.search_job)
+        def run():self.search_job=None;self._filter()
+        self.search_job=self.after(150,run)
+
     def _turn(self,delta):
         self.page+=delta;self._gallery()
 
     def _gallery(self):
+        if self.lib is None:return
         self.lib.refresh()
+        key=(self.lib._stamp,self.filter.get(),self.query.get().strip().casefold(),self.page,self.thumb_edge)
+        if key==self.gallery_key:return
         cats=sorted(set(CATEGORIES)|{s.character for s in self.lib.items}|set(self.lib.preferences))
         self.categories.configure(values=(ALL,*cats))
         if self.filter.get() not in (ALL,*cats):self.filter.set(ALL)
@@ -204,6 +246,7 @@ class StickerPage(tk.Frame):
         for values in groups.values():values.sort(key=lambda s:s.path.parent!=self.lib.shelf.files)
         items=[groups[k][i] for i in range(max(map(len,groups.values()),default=0)) for k in order if i<len(groups[k])]
         last=max(0,(len(items)-1)//6);self.page=min(last,max(0,self.page))
+        self.gallery_key=(self.lib._stamp,self.filter.get(),query,self.page,self.thumb_edge)
         self.counter.configure(text=f'{len(items)} 条 · {self.page+1}/{last+1}')
         for b,on in ((self.prev,self.page>0),(self.next,self.page<last)):b.configure(state='normal' if on else 'disabled')
         for w in self.gridbox.winfo_children():w.destroy()
@@ -212,10 +255,15 @@ class StickerPage(tk.Frame):
             tile=tk.Frame(self.gridbox,bg='#F7F8F7',highlightbackground=LINE,highlightthickness=1)
             tile.grid(row=i//3,column=i%3,sticky='nsew',padx=2,pady=3)
             try:
-                with Image.open(s.path) as image:
-                    if image.width*image.height>4_000_000:raise ValueError()
-                    im=image.convert('RGBA');im.thumbnail((self.thumb_edge,self.thumb_edge))
-                photo=ImageTk.PhotoImage(im,master=self);self.photos.append(photo)
+                photo=self.thumb_cache.get((s.sha256,self.thumb_edge))
+                if photo is None:
+                    with Image.open(s.path) as image:
+                        if image.width*image.height>4_000_000:raise ValueError()
+                        im=image.convert('RGBA');im.thumbnail((self.thumb_edge,self.thumb_edge))
+                    photo=ImageTk.PhotoImage(im,master=self)
+                    if len(self.thumb_cache)>=72:self.thumb_cache.pop(next(iter(self.thumb_cache)))
+                    self.thumb_cache[s.sha256,self.thumb_edge]=photo
+                self.photos.append(photo)
                 tk.Label(tile,image=photo,bg=tile.cget('bg'),height=self.thumb_edge+10).pack(fill='x',pady=5)
             except (OSError,ValueError):label(tile,'预览不可用',9).pack(pady=21)
             label(tile,s.character+(' · GIF' if s.animated else ''),8,color=MUTED).pack(anchor='w',padx=4)
@@ -225,6 +273,8 @@ class StickerPage(tk.Frame):
         if not items:label(self.gridbox,'还没有匹配的素材',color=MUTED).grid(columnspan=3,pady=52)
 
     def save(self):
+        if self.tab=='detail':self.detail.save();return
+        if self.lib is None:self.notice.set('素材库还在加载，请稍候');return
         if self.tab=='import':self.confirm();return
         preferences={k:v.get() for k,v in self.priorities.items()};neutral=self.neutral.get()
         def done(_):
@@ -336,7 +386,9 @@ class StickerPage(tk.Frame):
 
     def add_paths(self,paths):
         if self.busy:return
+        if self.lib is None:self.notice.set('素材库还在加载，请稍候再导入');return
         self.switch('import')
+        if self.tab!='import':return
         paths=list(dict.fromkeys(Path(p).resolve() for p in paths))
         new=[p for p in paths if str(p) not in self.rows]
         if len(self.rows)+len(new)>100:self.notice.set('每批最多 100 张，请先移出已处理的素材');return
@@ -350,6 +402,7 @@ class StickerPage(tk.Frame):
             self.analyze(keys)
 
     def analyze(self,keys=None):
+        if self.lib is None:self.notice.set('素材库还在加载，请稍候再识别');return
         if self.busy:
             if self.analysis_running:
                 self.cancel_analysis=True
@@ -399,18 +452,7 @@ class StickerPage(tk.Frame):
 
     def edit_item(self,item):
         if self.busy:return
-        key=str(item.path);row=self.rows.get(key)
-        if not row:
-            if len(self.rows)>=100:self.notice.set('队列已满，请先移出已处理的素材');return
-            try:picture=inspect_picture(item.path)
-            except ValueError as e:self.notice.set(str(e));return
-            row=QueueRow(item.path,picture,item.character,item.meaning,'、'.join(item.tags),
-                         self.lib.sources.get(item.sha256,''),'已入库')
-            filename=self.lib.filenames.get(item.sha256,item.path.name)
-            self.rows[key]=row;self.queue.insert('','end',iid=key,values=(filename,'已入库'))
-            self._queue_thumbnail(key,picture)
-        self.queue.selection_set(key);self.queue.focus(key);self.switch('import');self.queue.see(key)
-        self.queue_total.configure(text=f'{len(self.rows)} 个文件')
+        self.switch('detail');self.detail.open(item)
 
     def remove(self):
         if self.busy:return

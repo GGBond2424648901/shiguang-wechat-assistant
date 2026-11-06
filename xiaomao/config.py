@@ -6,10 +6,40 @@ import hashlib
 import math
 import re
 import unicodedata
+import os
+import time
+from contextlib import contextmanager
 from urllib.parse import urlsplit
 from .privacy import atomic_private_write, private_dir
 
 TARGET_GROUP = "示例会话"
+
+
+@contextmanager
+def configuration_lock(runtime):
+    """Serialize brief read/compare/write transactions across panel and worker."""
+    private_dir(runtime)
+    with (runtime/'config.lock').open('a+b') as handle:
+        if handle.seek(0,2)==0:handle.write(b'0');handle.flush()
+        deadline=time.monotonic()+3
+        while True:
+            try:
+                handle.seek(0)
+                if os.name=='nt':
+                    import msvcrt
+                    msvcrt.locking(handle.fileno(),msvcrt.LK_NBLCK,1)
+                else:
+                    import fcntl
+                    fcntl.flock(handle,fcntl.LOCK_EX|fcntl.LOCK_NB)
+                break
+            except OSError:
+                if time.monotonic()>=deadline:raise ValueError('设置正在保存，请稍后重试') from None
+                time.sleep(.025)
+        try:yield
+        finally:
+            handle.seek(0)
+            if os.name=='nt':msvcrt.locking(handle.fileno(),msvcrt.LK_UNLCK,1)
+            else:fcntl.flock(handle,fcntl.LOCK_UN)
 
 
 def validate_send_pacing(min_interval, hourly_limit, minute_limit, jitter):
@@ -120,6 +150,7 @@ class Settings:
         if not isinstance(self.stickers_enabled,bool):raise ValueError('自动表情设置必须为布尔值')
         if not isinstance(self.monitor_all_groups,bool):raise ValueError('群监听范围必须为布尔值')
         self.group_names=tuple(self.group_names)
+        self.wake_aliases=tuple(self.wake_aliases)
         names=self.group_names or (self.group,)
         invalid=any(not isinstance(n,str) or not n.strip() or len(n)>80 or any(ord(c)<32 for c in n) for n in names)
         if invalid or len(names)>8 or self.group not in names or len({''.join(unicodedata.normalize('NFKC',n).split()) for n in names})!=len(names):
@@ -335,9 +366,12 @@ class Settings:
             data['wake_aliases']=['小猫','小玲']
         return cls(root=Path(root), **data)
 
-    def save(self) -> None:
+    def save(self, *, expected=None) -> None:
         self.__post_init__()
         private_dir(self.runtime)
         data = asdict(self)
         data.pop("root")
-        atomic_private_write(self.runtime / "config.json", json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8"))
+        with configuration_lock(self.runtime):
+            if expected is not None and Settings.load(self.root)!=expected:
+                raise ValueError('设置已在其他窗口更新，未覆盖新配置，请重新保存')
+            atomic_private_write(self.runtime / "config.json", json.dumps(data, ensure_ascii=False, indent=2).encode("utf-8"))

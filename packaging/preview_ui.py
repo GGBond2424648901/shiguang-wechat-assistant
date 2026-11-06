@@ -91,7 +91,10 @@ def main():
             window=tk.Tk();panel=Panel(window,folder);window.geometry('1200x800+30+30')
             pump(window);panel.feedback.dismiss();shot(window,'workspace')
             panel.view.select('sessions');panel.feedback.dismiss();shot(window,'sessions')
-            panel.view.select('stickers');panel.feedback.dismiss();shot(window,'stickers')
+            panel.view.select('stickers');pump(window,.8);panel.feedback.dismiss();shot(window,'stickers')
+            stickers=panel.view.pages['stickers']
+            stickers.edit_item(stickers.lib.items[0]);pump(window,.6);panel.feedback.dismiss();shot(window,'sticker-detail')
+            stickers.back_to_library();pump(window)
             panel.view.select('settings');pump(window)
             page=panel.view.pages['settings'];page.save_button.invoke();pump(window,.8)
             assert '设置已保存' in panel.notice.get(),panel.notice.get()
@@ -101,7 +104,7 @@ def main():
                 assert page.save_button.winfo_rootx()+page.save_button.winfo_width()<=window.winfo_rootx()+window.winfo_width()
                 assert panel.feedback.winfo_x()>=0
             panel.close()
-    print('Captured 4 native previews with fictional data; responsive controls passed')
+    print('Captured 5 native previews with fictional data; responsive controls passed')
 
 
 if __name__=='__main__':main()

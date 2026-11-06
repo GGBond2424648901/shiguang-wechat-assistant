@@ -153,8 +153,11 @@ class SessionsPage(tk.Frame):
                                   style='Session.TCheckbutton')
         sticker.pack(anchor='w', pady=3)
         self.widgets.append(sticker)
-        self.apply = button(self.defaults, '保存监听范围与默认规则', self.save, primary=True,icon_name='save')
-        self.apply.pack(side='bottom', anchor='e', pady=(8, 0))
+        actions=tk.Frame(self.defaults,bg=PAPER);actions.pack(side='bottom',fill='x',pady=(8,0))
+        self.apply = button(actions, '保存本页全部设置', self.save, primary=True,icon_name='save')
+        self.apply.pack(side='right')
+        self.discard_button=button(actions,'撤销本页修改',self.discard,compact=True)
+        self.discard_button.pack(side='left')
         self.message = label(self.defaults, textvariable=self.note, size=9, color=MUTED)
         self.message.pack(side='bottom', fill='x', pady=(6, 0))
         self.wheel_tag = f'SessionScroll{self.winfo_id()}'
@@ -291,6 +294,30 @@ class SessionsPage(tk.Frame):
 
     def on_show(self):
         self.refresh_scope()
+
+    def can_leave(self):
+        if self.busy or self.rule_editor.busy:
+            self.note.set('正在保存会话设置，请稍候');return False
+        if self.dirty():
+            self.note.set('本页有未保存修改，请保存本页全部设置，或撤销修改')
+            return False
+        return True
+
+    def dirty(self):
+        if self.rule_editor.dirty():return True
+        if self.baseline is None:return False
+        names,_,monitor,mode,rate,stickers,*_=self.baseline
+        try:current_rate=parse_rate(self._raw_rate())
+        except ValueError:return True
+        return (tuple(self.names)!=names or self.monitor_all.get()!=monitor or self.mode.get()!=mode
+                or self.stickers.get()!=stickers or current_rate!=rate)
+
+    def discard(self):
+        if self.busy or self.rule_editor.busy:return
+        self.panel.settings=Settings.load(self.panel.directory)
+        self.baseline=None;self.rate_edited=False;self.picked.clear()
+        self.rule_editor.discard();self.refresh_scope()
+        self.note.set('已撤销本页未保存修改')
 
     def refresh_scope(self):
         """Rebase local edits onto persisted settings when the active recipient changes."""
@@ -479,6 +506,7 @@ class SessionsPage(tk.Frame):
 
     def _busy(self, busy):
         self.busy = busy
+        self.rule_editor.busy=busy;self.rule_editor._states()
         for widget in (self.add, self.apply, *self.widgets):
             widget.configure(state='disabled' if busy else 'normal')
         self.pacing.configure(state='disabled' if busy else 'readonly')
@@ -508,6 +536,12 @@ class SessionsPage(tk.Frame):
                     break
             return
         settings = (list(self.names), self.mode.get(), rate)
+        editor=self.rule_editor
+        if editor.busy:
+            self.note.set('会话规则正在保存，请稍候');return
+        rule_edit=(editor.group,editor.scope,editor.preferences()) if editor.dirty() else None
+        if rule_edit and (editor.group not in self.names or not editor.scope):
+            self.note.set('独立规则的对象尚未保存，请先加入监听后再编辑');return
         picked = [self.picked[n] for n in self.names if n in self.picked]
         self._busy(True)
         self.note.set('正在应用会话与回复规则…')
@@ -519,6 +553,7 @@ class SessionsPage(tk.Frame):
 
         def done():
             if self.winfo_exists():
+                self.rule_editor.select(self.selected_name,force=True)
                 self.baseline = None
                 self.picked.clear()
                 self.refresh_scope()
@@ -527,7 +562,7 @@ class SessionsPage(tk.Frame):
 
         self.panel.apply_group_settings(*settings, done, failed, monitor_all=self.monitor_all.get(),
                                        stickers_enabled=self.stickers.get(), contacts=picked,
-                                       keep_pacing=not self.rate_edited)
+                                       keep_pacing=not self.rate_edited,rule_edit=rule_edit)
 
 
 class DirectoryPage(tk.Frame):

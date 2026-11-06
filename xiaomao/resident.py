@@ -145,7 +145,7 @@ class Resident:
                 fresh=saved.with_conversation_rules(group,preferences)
             else:fresh=replace(saved,**preferences)
             # Persist first. Failed writes must not claim success or affect the worker.
-            fresh.save()
+            fresh.save(expected=saved)
             changes={k:getattr(fresh,k) for k in ('reply_mode','sticker_frequency','conversation_rules')}
             self.settings=replace(self.settings,**changes)
             if self.reload_request:self.reload_request=replace(self.reload_request,**changes)

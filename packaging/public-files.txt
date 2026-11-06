@@ -131,6 +131,8 @@ xiaomao/sessions_ui.py
 xiaomao/settings_ui.py
 xiaomao/sticker_import.py
 xiaomao/sticker_ui.py
+xiaomao/sticker_detail_ui.py
+xiaomao/ui_assets/whale-banner.png
 xiaomao/stickers.py
 xiaomao/store.py
 xiaomao/theme.py
@@ -146,6 +148,8 @@ tests/test_reply_preferences.py
 tests/test_conversation_rules.py
 tests/test_sticker_frequency.py
 tests/test_reply_rules_ui.py
+tests/test_settings_conflicts.py
+docs/screenshots/sticker-detail.png
 停止小猫助手.cmd
 启动小猫助手.cmd
 启动小猫助手.vbs

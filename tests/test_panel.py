@@ -44,6 +44,7 @@ def panel(tmp_path):
     events=[];p=Panel.__new__(Panel)
     p.closing=False;p.switch_busy=False;p.switch_cancel=threading.Event();p.directory=tmp_path
     p.root=SimpleNamespace(destroy=lambda:events.append('closed'))
+    p.view=SimpleNamespace(pages={})
     p.reason=SimpleNamespace(set=lambda value:None)
     p.client=SimpleNamespace(stop=lambda:events.append('stop'),wait_stopped=lambda:events.append('wait'))
     p.work=lambda action,success=None,failure=None,**options:success(action()) if success else action()
@@ -59,6 +60,17 @@ def test_closing_panel_keeps_standalone_worker_running(tmp_path):
 def test_explicit_stop_and_exit_waits_for_worker_exit(tmp_path):
     p,events=panel(tmp_path);p.stop_and_exit()
     assert events==['stop','wait','closed'] and p.closing
+
+
+@pytest.mark.parametrize('discard',[True,False])
+def test_explicit_exit_confirms_unsaved_session_changes(tmp_path,monkeypatch,discard):
+    p,events=panel(tmp_path)
+    p.view.pages={'sessions':SimpleNamespace(can_leave=lambda:False)}
+    asked=[]
+    monkeypatch.setattr('tkinter.messagebox.askokcancel',lambda *a,**kw:asked.append(a) or discard)
+    p.stop_and_exit()
+    assert asked
+    assert events==(['stop','wait','closed'] if discard else [])
 
 
 def test_quick_chat_profile_supports_shorter_idle_and_larger_context(tmp_path):

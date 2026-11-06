@@ -26,13 +26,26 @@ def apply_saved_settings(client,original,updated,key=''):
     if not key.strip() and rule_only and status.get('can_configure_reply_rules'):
         return client.configure_reply_defaults({k:getattr(updated,k) for k in rule_fields
                                                if getattr(updated,k)!=getattr(original,k)})
+    if (not key.strip() and status.get('can_configure_reply_rules') and
+            replace(original,conversation_rules=updated.conversation_rules)==updated):
+        changed=[scope for scope in original.conversation_rules.keys()|updated.conversation_rules.keys()
+                 if original.conversation_rules.get(scope)!=updated.conversation_rules.get(scope)]
+        if len(changed)==1:
+            scope=changed[0]
+            name=next((name for name,target in original.conversation_targets.items()
+                       if target['account']+'/'+target['id']==scope),None)
+            if name:
+                before=original.conversation_rules.get(scope,{})
+                after=updated.conversation_rules.get(scope,{})
+                return client.configure_reply_rules(name,scope,{field:after.get(field) for field in rule_fields
+                                                               if before.get(field)!=after.get(field)})
     route_fields=('group','group_names','monitor_all_groups','conversation_targets','calibration',
                   'calibration_account','window_bindings')
     if 'idle_wake' in status:route_fields+=('idle_wake',)
     if original.group!=updated.group and not updated.self_name_unique_confirmed:route_fields+=('self_name_unique_confirmed',)
     route_only=replace(original,**{k:getattr(updated,k) for k in route_fields})==updated
     if not key.strip() and route_only and 'window_reload_pending' in status:
-        updated.save()
+        updated.save(expected=original)
         return client.reload_windows()
     if status.get('pending_count'):
         raise ValueError('仍有待发回复，已保留队列；监听范围可在线修改，其他设置请等本轮结束后保存')
@@ -40,8 +53,10 @@ def apply_saved_settings(client,original,updated,key=''):
         client.stop_if_idle()
         client.wait_stopped()
     else:stop_confirmed(original.root,client)
+    if Settings.load(original.root)!=original:
+        raise ValueError('设置已在等待期间更新，未覆盖新配置，请重新保存')
     if key.strip():CredentialStore(updated.runtime).set_key(key)
-    updated.save()
+    updated.save(expected=original)
     return client.start(initial_mode=mode) if mode in ('paused','observe','auto') else client.start()
 
 
@@ -302,7 +317,7 @@ class Panel:
     def use_current_group(self):self._switch(True)
     def switch_selected_group(self):self._switch(False)
 
-    def apply_group_settings(self,names,mode,rate,done,failed=None,monitor_all=True,stickers_enabled=None,*,contacts=None,keep_pacing=False):
+    def apply_group_settings(self,names,mode,rate,done,failed=None,monitor_all=True,stickers_enabled=None,*,contacts=None,keep_pacing=False,rule_edit=None):
         if getattr(self,'switch_busy',False):return
         def save():
             if not names:raise ValueError('请至少填写一个要回复的会话名')
@@ -312,6 +327,12 @@ class Panel:
                 from .selection import bind_saved_conversations,load_directory
                 cfg=bind_saved_conversations(cfg,names,load_directory(self.directory),contacts)
             else:cfg=cfg.with_saved_conversations(names)
+            if rule_edit:
+                name,scope,preferences=rule_edit
+                target=cfg.conversation_targets.get(name,{})
+                if scope!=target.get('account','')+'/'+target.get('id',''):
+                    raise ValueError('会话身份已改变，请重新选择')
+                cfg=cfg.with_conversation_rules(name,preferences)
             cfg.reply_mode=mode
             cfg.monitor_all_groups=monitor_all
             if stickers_enabled is not None:cfg.stickers_enabled=stickers_enabled
@@ -396,7 +417,7 @@ class Panel:
             updated=bind_reviewed_window(cfg,checked,contact)
             if cancelled.is_set():raise ValueError('校准已取消')
             if Settings.load(self.directory)!=cfg:raise ValueError('校准期间设置已变化，请重新核对')
-            updated.save()
+            updated.save(expected=cfg)
             try:previous=self.client.status()
             except ControlUnavailable:
                 if (self.directory/'runtime/control.json').exists():
@@ -428,12 +449,21 @@ class Panel:
             self.reason.set('正在完成设置操作，随后关闭面板并保留后台…')
             self.root.after(100,self.close)
             return
+        for key,page in self.view.pages.items():
+            if hasattr(page,'can_leave') and not page.can_leave():
+                self.view.select(key)
+                self.show_error('有尚未保存的修改，请先保存或撤销，再关闭面板')
+                return
         self.closing=True
         self.root.destroy()
 
     def stop_and_exit(self):
         if self.closing:
             return
+        if any(hasattr(page,'can_leave') and not page.can_leave() for page in self.view.pages.values()):
+            from tkinter import messagebox
+            if not messagebox.askokcancel('停止并退出','有未保存修改。要放弃这些修改，停止后台并退出吗？',parent=self.root):
+                return
         self.exiting=True
         self.switch_cancel.set()
         self.reason.set("正在停止助手…")

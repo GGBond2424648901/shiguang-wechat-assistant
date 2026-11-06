@@ -17,14 +17,14 @@ def persist_preferences(root,preferences,group=None,scope=None):
         from .windows import worker_scope
         if worker_scope(root) is not None:
             raise ControlUnavailable('后台正在运行但暂未连接，未修改设置，请稍后重试')
-        cfg=Settings.load(root)
+        original=cfg=Settings.load(root)
         if group is not None:
             target=cfg.conversation_targets.get(group,{})
             if scope!=target.get('account','')+'/'+target.get('id',''):
                 raise ValueError('会话身份已改变，请重新选择')
             cfg=cfg.with_conversation_rules(group,preferences)
         else:cfg=replace(cfg,**preferences)
-        cfg.save()
+        cfg.save(expected=original)
         return {'offline':True}
     return (client.configure_reply_rules(group,scope,preferences) if group is not None
             else client.configure_reply_defaults(preferences))
@@ -76,6 +76,8 @@ class ReplyRulesEditor(tk.Frame):
         self.feedback=label(self,textvariable=self.note,size=9,color=MUTED)
         self.feedback.pack(fill='x',pady=(7,0))
         self.bind('<Configure>',self._resize)
+        for var in (self.mode,self.frequency,self.inherit_mode,self.inherit_stickers):
+            var.trace_add('write',lambda *_:self._changed())
         self._help()
         if defaults:self.select(None,force=True)
 
@@ -94,6 +96,9 @@ class ReplyRulesEditor(tk.Frame):
         return (self.inherit_mode.get(),self.mode.get(),self.inherit_stickers.get(),self.frequency.get())
 
     def dirty(self):return self.baseline is not None and self._snapshot()!=self.baseline
+
+    def _changed(self):
+        if not self.busy and self.dirty():self.note.set('有未保存修改，保存后才会在下次启动保留')
 
     def select(self,name,*,force=False):
         if self.busy and not force:return False
@@ -126,12 +131,16 @@ class ReplyRulesEditor(tk.Frame):
     def discard(self):
         if not self.busy:self.select(self.group,force=True);self.note.set('已恢复已保存的设置')
 
-    def save(self):
-        if self.busy or (not self.defaults and not self.scope):return
+    def preferences(self):
         preferences={'sticker_frequency':next(k for k,v in STICKER_FREQUENCIES.items() if v==self.frequency.get())}
         if not self.defaults:
             preferences['reply_mode']=None if self.inherit_mode.get() else self.mode.get()
             if self.inherit_stickers.get():preferences['sticker_frequency']=None
+        return preferences
+
+    def save(self):
+        if self.busy or (not self.defaults and not self.scope):return
+        preferences=self.preferences()
         group,scope=self.group,self.scope
         self.busy=True;self._states();self.note.set('正在保存…')
         def done(result):

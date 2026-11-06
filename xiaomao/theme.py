@@ -175,6 +175,23 @@ def titlebar(root, view):
                                                     image=icons['restore' if zoomed else 'maximize'])
 
     root.bind('<Configure>', update_maximize_icon, add='+')
+    rounding={'size':None,'job':None}
+    def round_window():
+        rounding['job']=None
+        if not root.winfo_exists():return
+        zoomed=root.state()=='zoomed'
+        left,top,right,bottom=win32gui.GetWindowRect(hwnd)
+        size=(right-left,bottom-top,zoomed)
+        if size==rounding['size']:return
+        rounding['size']=size
+        region=0 if zoomed else win32gui.CreateRoundRectRgn(0,0,size[0]+1,size[1]+1,12,12)
+        try:win32gui.SetWindowRgn(hwnd,region,True)
+        except Exception:
+            if region:win32gui.DeleteObject(region)
+    def schedule_round(event):
+        if event.widget is root and rounding['job'] is None:rounding['job']=root.after(40,round_window)
+    root.bind('<Configure>',schedule_round,add='+')
+    rounding['job']=root.after(0,round_window)
     root.bind('<Alt-F4>', lambda _: command(wc.SC_CLOSE), add='+')
     # Hand dragging to Windows so snapping and dragging from maximized work.
     # Wait for real movement so a double-click still reaches Tk as a double-click.
@@ -325,6 +342,7 @@ class GlassView(tk.Frame):
         self._compact=None
         self._stacked=None
         self._layout_job=None
+        self._nav_job=None
         styles(panel.root)
         self.rowconfigure(0,weight=1);self.columnconfigure(1,weight=1)
         self._sidebar()
@@ -371,6 +389,7 @@ class GlassView(tk.Frame):
             control=nav_button(rail,name,lambda k=key:self.select(k),icon_name=key)
             control.pack(fill='x',padx=9,pady=2)
             self.nav[key]=control
+        self.nav_marker=tk.Frame(rail,bg=PEACH,width=3,height=22)
         bottom=tk.Frame(rail,bg=NAVY);bottom.pack(side='bottom',fill='x',padx=13,pady=13)
         tk.Frame(bottom,bg='#465B6A',height=1).pack(fill='x',pady=(0,8))
         self.local_status=label(bottom,'本地助手',10,bold=True,color=PAPER);self.local_status.pack(anchor='w')
@@ -380,6 +399,18 @@ class GlassView(tk.Frame):
     def _paint_nav(self):
         active='sessions' if self.page=='contacts' else self.page
         for key,control in self.nav.items():control.set_selected(key==active)
+        if self._nav_job is not None:self.after_cancel(self._nav_job)
+        def begin():
+            control=self.nav.get(active)
+            if control is None:self._nav_job=None;return
+            target=control.winfo_y()+max(0,(control.winfo_height()-22)//2)
+            start=self.nav_marker.winfo_y() if self.nav_marker.winfo_ismapped() else target
+            def step(index=1):
+                progress=1-(1-index/8)**3
+                self.nav_marker.place(x=2,y=round(start+(target-start)*progress),width=3,height=22)
+                self._nav_job=self.after(16,lambda:step(index+1)) if index<8 else None
+            step()
+        self._nav_job=self.after_idle(begin)
 
     def _dashboard(self):
         viewport=tk.Frame(self.body,bg=BG)
@@ -390,7 +421,7 @@ class GlassView(tk.Frame):
         self.dashboard_window=self.dashboard_canvas.create_window(0,0,anchor='nw',window=page)
         self.dashboard_canvas.bind('<Configure>',self._request_layout)
         page.grid_columnconfigure(0,weight=1);page.grid_rowconfigure(2,weight=1)
-        hero=self.hero=card(page,pad=14,bg=NAVY,radius=14,border=NAVY);hero.grid(row=0,column=0,sticky='ew')
+        hero=self.hero=card(page,pad=14,bg=NAVY,radius=8,border=NAVY);hero.grid(row=0,column=0,sticky='ew')
         hero.columnconfigure(0,minsize=220)
         hero.columnconfigure(2,weight=1)
         label(hero,'当前主要会话',10,bold=True,color='#E7EDF0').grid(row=0,column=0,sticky='w')
@@ -409,7 +440,7 @@ class GlassView(tk.Frame):
                                            ('choose','选择会话','list',self.panel.choose_contact)]:
             action=button(actions,name,callback,primary=key=='enable',dark=True,icon_name=icon_name)
             action.pack(side='left',padx=(0,7));self.actions[key]=action
-        art=self.hero_art=tk.Canvas(hero,width=112,height=43,bg=NAVY,highlightthickness=0,bd=0)
+        art=self.hero_art=tk.Canvas(hero,width=204,height=68,bg=NAVY,highlightthickness=0,bd=0)
         art.grid(row=0,column=2,rowspan=2,sticky='e')
         self._hero_art(art)
 
@@ -498,17 +529,14 @@ class GlassView(tk.Frame):
         return viewport
 
     def _hero_art(self,canvas):
-        path=Path(__file__).resolve().parent.parent/'assets'/'background-original.jpg'
+        path=Path(__file__).resolve().parent/'ui_assets'/'whale-banner.png'
         if path.is_file():
             try:
                 with Image.open(path) as source:
-                    art=ImageOps.fit(source.convert('RGB'),(112,43))
-                art=Image.blend(Image.new('RGB',art.size,NAVY),art,.035)
+                    art=ImageOps.fit(source.convert('RGB'),(204,68),method=Image.Resampling.LANCZOS)
                 self.texture=ImageTk.PhotoImage(art,master=self)
                 canvas.create_image(0,0,anchor='nw',image=self.texture)
             except OSError:pass
-        for y,color in [(0,'#91A8B7'),(5,'#6B879A'),(10,'#516F84')]:
-            canvas.create_line(0,34+y,19,25+y,50,39+y,82,9+y,113,7+y,smooth=True,fill=color,width=1)
 
     def _recover(self):
         if self.queue_group and self.queue_group!=self.panel.settings.group:return
@@ -645,6 +673,7 @@ class GlassView(tk.Frame):
             if queue:self.refresh_pending()
             return
         old=self.pages.get(self.page)
+        if old and hasattr(old,'can_leave') and not old.can_leave():return
         if old and key!=self.page:
             if hasattr(old,'on_hide'):old.on_hide()
             old.grid_remove()
@@ -844,5 +873,6 @@ class GlassView(tk.Frame):
         if event.widget is not self:return
         self._queue_request=None
         if self._layout_job is not None:self.after_cancel(self._layout_job)
+        if self._nav_job is not None:self.after_cancel(self._nav_job)
         for var,token in self._traces:var.trace_remove('write',token)
         for window,sequence,token in self._shortcuts:window.unbind(sequence,token)

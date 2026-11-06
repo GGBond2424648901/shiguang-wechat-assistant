@@ -99,7 +99,7 @@ def _button_style(parent,face,ink,outside,font,px,py,nav):
         states=[('normal',face,edge,False),('active',hover,edge,False),('pressed',pressed,edge,False),
                 ('disabled',disabled,disabled,False),('focus',face,edge,True),
                 ('active-focus',hover,edge,True),('pressed-focus',pressed,edge,True)]
-        images={key:ImageTk.PhotoImage(_rounded(30,color,border,outside,8,focus),master=parent)
+        images={key:ImageTk.PhotoImage(_rounded(30,color,border,outside,6,focus),master=parent)
                 for key,color,border,focus in states}
         element='XiaomaoSurface'+str(len(store['element']))
         style.element_create(element,'image',images['normal'],('disabled',images['disabled']),
@@ -183,7 +183,7 @@ def nav_button(parent,text,command,*,icon_name):
     return ActionButton(parent,text,command,icon_name=icon_name,nav=True)
 
 
-def card(parent, *, pad=15,bg=PAPER,radius=11,border=LINE):
+def card(parent, *, pad=15,bg=PAPER,radius=7,border=LINE):
     """A normal geometry container with rounded corners outside its content padding."""
     outside=_surface(parent)
     frame=tk.Frame(parent,bg=bg,padx=pad,pady=pad,highlightthickness=1,highlightbackground=border)

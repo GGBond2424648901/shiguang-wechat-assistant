@@ -384,7 +384,7 @@ def switch_group(root:Path,name:str,client,*,binding=None,cancelled=None,contact
         raise ValueError('校准期间设置已变更，助手已停止，请重新校准')
     # A name-only archive cannot establish its account or recipient. Keep it
     # on disk and let the new binding use its own account/ID memory.
-    cfg.save()
+    cfg.save(expected=previous)
     if cancelled.is_set():return stopped()
     result=client.start()
     if cancelled.is_set():

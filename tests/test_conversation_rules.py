@@ -53,7 +53,7 @@ def test_active_delivery_finishes_before_its_rules_change(live,state):
 def test_stale_identity_and_failed_save_do_not_change_live_settings(live,monkeypatch):
     a=live.engines[0]
     with pytest.raises(ValueError):live.configure_reply_rules('甲群','other/account',{'reply_mode':'all'})
-    def fail(self):raise OSError('disk unavailable')
+    def fail(self,**kw):raise OSError('disk unavailable')
     monkeypatch.setattr(Settings,'save',fail)
     with pytest.raises(OSError):live.configure_reply_rules('甲群',a.settings.memory_scope,{'reply_mode':'all'})
     assert a.policy.mode=='natural' and not live.settings.conversation_rules
@@ -104,6 +104,29 @@ def test_default_mode_save_from_panel_keeps_worker_and_inflight_receipt(live):
     assert not live.stop_event.is_set() and a.tasks==[receipt]
     assert a.policy.mode=='natural' and b.policy.mode=='mentions'
     assert result['groups'][0]['rules_pending']
+
+
+def test_page_save_of_independent_rule_does_not_require_stopping_receipt(live):
+    from xiaomao.gui import apply_saved_settings
+    from xiaomao.client import ControlClient
+    from xiaomao.control import ControlServer
+    a,b,_=live.engines;receipt=queue(live,a,'小玲吃饭啦','awaiting_receipt')
+    original=Settings.load(live.settings.root)
+    updated=original.with_conversation_rules('乙群',{'reply_mode':'mentions','sticker_frequency':'requested'})
+    with ControlServer(live.settings.root,live):
+        result=apply_saved_settings(ControlClient(live.settings.root),original,updated)
+    assert not live.stop_event.is_set() and a.tasks==[receipt]
+    assert b.policy.mode=='mentions' and b.settings.sticker_frequency=='requested'
+    restored=Settings.load(live.settings.root)
+    reboot=Resident(restored,live.store,desktop_factory=lambda _:Screen(),vision=IdentityVision(),
+        model_factory=lambda _:ReplyModel(),clock=Clock(),settle_seconds=0)
+    try:
+        assert reboot.engines[1].settings.reply_mode=='mentions'
+        assert reboot.engines[0].settings.reply_mode=='natural'
+        assert reboot.engines[1].settings.sticker_frequency=='requested'
+    finally:
+        for e in reboot.engines:
+            if e.companion:e.companion.close()
 
 
 def test_authenticated_rule_api_updates_recipient_and_rejects_extra_fields(live):

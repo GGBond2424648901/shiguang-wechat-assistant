@@ -91,6 +91,55 @@ def test_editor_refuses_system_conflicting_bindings_and_cross_account_staging(pa
     assert (5, 60, 6, 7) in RATES.values() and (4, 180, 10, 4) in RATES.values()
 
 
+def test_page_save_includes_current_conversation_rule_draft(panel):
+    page=SessionsPage(panel.root,panel);page.on_show()
+    page._pick_row(PERSON.name)
+    editor=page.rule_editor
+    editor.inherit_mode.set(False);editor.mode.set('mentions')
+    editor.inherit_stickers.set(False);editor.frequency.set('仅按需')
+    page.save()
+    args,kw=panel.applied.pop()
+    assert kw['rule_edit']==(PERSON.name,'a/fixture-user',
+                           {'reply_mode':'mentions','sticker_frequency':'requested'})
+    args[4]('写入失败')
+    assert editor.dirty() and editor.mode.get()=='mentions'
+
+
+@pytest.mark.parametrize('success',[True,False])
+def test_general_save_locks_rule_editor_until_completion(panel,success):
+    page=SessionsPage(panel.root,panel);page.on_show()
+    editor=page.rule_editor
+    editor.inherit_mode.set(False);editor.mode.set('mentions');editor._states()
+    page.save()
+    assert editor.busy and editor.apply.cget('state')=='disabled'
+    assert all(str(r.cget('state'))=='disabled' for r in editor.radios)
+    editor.save();assert not panel.jobs
+    args,kw=panel.applied.pop()
+    if success:
+        name,_,preferences=kw['rule_edit']
+        panel.settings=panel.settings.with_conversation_rules(name,preferences)
+        panel.settings.save();args[3]()
+        assert not editor.dirty()
+    else:
+        args[4]('保存失败');assert editor.dirty()
+    assert not editor.busy and editor.apply.cget('state')=='normal'
+
+
+@pytest.mark.parametrize('field',['mode','listeners','order','monitor','pacing','stickers'])
+def test_all_session_drafts_block_leaving_and_can_be_discarded(panel,field):
+    page=SessionsPage(panel.root,panel);page.on_show()
+    if field=='mode':page.mode.set('mentions')
+    elif field=='listeners':page.remove(PERSON.name)
+    elif field=='order':page.promote(PERSON.name)
+    elif field=='monitor':page.monitor_all.set(False)
+    elif field=='pacing':page.rate_values[0].set('17')
+    else:page.stickers.set(False)
+    assert not page.can_leave()
+    page.discard()
+    assert page.can_leave()
+    assert page.names==list(panel.settings.saved_groups)
+
+
 def test_directory_filters_and_staging_have_no_service_side_effects(panel, monkeypatch):
     rows = [GROUP, PERSON, SYSTEM, TWIN]
     monkeypatch.setattr('xiaomao.sessions_ui.load_directory', lambda directory, cancelled: rows)
