@@ -624,7 +624,10 @@ class WindowsDesktop:
             if not valid():return
             image=self.capture();b=self.calibration
             frame=self._wake_vision.read_controls(image,b)
-            if not frame.safe or frame.group!=b.target_group or not frame.at_bottom or not frame.draft_empty:return
+            # Activation must precede go_to_latest: a detached window left in
+            # history cannot scroll until foreground. No text is entered here;
+            # Engine._frame still requires latest position before any edit/send.
+            if not frame.safe or frame.group!=b.target_group or not frame.draft_empty:return
         info=self._bound_details()
         left,top=info['rect'][:2]
         x1,y1,x2,y2=b.rect('input')

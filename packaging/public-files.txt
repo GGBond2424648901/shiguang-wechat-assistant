@@ -43,6 +43,7 @@ tests/test_database.py
 tests/test_engine.py
 tests/test_first_calibration.py
 tests/test_groups.py
+tests/test_idle_wake.py
 tests/test_launch.py
 tests/test_manual_window_flow.py
 tests/test_mcp.py

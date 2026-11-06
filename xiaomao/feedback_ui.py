@@ -29,7 +29,9 @@ class FeedbackBar(tk.Frame):
         self.traces.append((var,var.trace_add('write',lambda *_:self.show(var.get()))))
 
     def show(self,text,kind=None):
-        if not text:return
+        if not text:
+            self.dismiss()
+            return
         self.dismiss()
         self.kind=kind or feedback_kind(text)
         color={'error':'#A1472C','success':GREEN,'busy':'#865536','info':INK}[self.kind]

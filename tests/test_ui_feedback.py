@@ -66,5 +66,5 @@ def test_feedback_is_in_window_and_does_not_take_keyboard_focus(native_root):
     value.set('保存失败，请检查连接');native_root.update_idletasks()
     assert bar.kind=='error' and bar.dismiss_job is None
     assert native_root.focus_get() is before
-    bar.dismiss();assert not bar.winfo_manager()
+    value.set('');assert not bar.winfo_manager()
     host.destroy()
