@@ -390,7 +390,7 @@ def switch_group(root:Path,name:str,client,*,binding=None,cancelled=None,contact
     if cancelled.is_set():
         stop_confirmed(root,client)
         return stopped()
-    if result.get('group')!=name or result.get('group_names')!=[name] or result.get('reply_mode')!=cfg.reply_mode:
+    if result.get('group')!=name or result.get('group_names')!=[name] or result.get('reply_mode')!=cfg.for_group(name).reply_mode:
         try:client.pause()
         except ControlUnavailable:raise ControlUnavailable('启动后的监听范围或回复模式不符，无法确认暂停；请停止助手') from None
         raise ValueError('启动后的监听范围或回复模式与所选设置不符，已暂停，未完成切换')

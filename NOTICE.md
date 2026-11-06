@@ -11,5 +11,7 @@
 
 ChatLuna 仅作为 YAML 字段格式的参考。公开包仅保留本项目自行实现的解析器及简短预设。安装包省略来源与再分发许可未经确认的表情集合、背景图片和 FFmpeg 可执行程序。用户添加到本地的内容由各自的权利人授权。
 
+会话表达偏好与语言调整参考了 [HaireXe-dsh-bili-whale 的人格示例](https://github.com/HaireXe-d/HaireXe-dsh-bili-whale/blob/main/persona.example.md) 和 [private_companion](https://github.com/menglimi/astrbot_plugin_private_companion) 的按会话配置、互动状态思路。本次没有引入它们的 QQ 通信层或照搬角色背景；微信身份、消息发送与回执仍由本项目的适配层处理。
+
 安装器简体中文翻译取自 [Inno Setup 6.7.1](https://github.com/jrsoftware/issrc/blob/is-6_7_1/Files/Languages/Unofficial/ChineseSimplified.isl)，保留 [原作者 MIT 许可](licenses/inno-chinese-MIT.txt)。
 

@@ -77,6 +77,8 @@ class Settings:
     conversation_targets: dict = field(default_factory=dict)
     monitor_all_groups: bool = True
     reply_mode: str = 'natural'
+    conversation_rules: dict = field(default_factory=dict)
+    sticker_frequency: str = 'natural'
     stickers_enabled: bool = True
     assistant_name: str = "小猫"
     wake_aliases: tuple[str,...] = ("小猫","小玲")
@@ -135,6 +137,9 @@ class Settings:
             raise ValueError('两个回复对象使用了同一会话身份，请仅保留当前备注名')
         if self.assistant_name!='小猫' or self.reply_mode not in ('natural','mentions','all'):
             raise ValueError('助手或回复模式无效')
+        from .reply_preferences import validate_rule_changes,validate_rule_map
+        validate_rule_changes({'sticker_frequency':self.sticker_frequency},allow_inherit=False)
+        validate_rule_map(self.conversation_rules)
         if not self.wake_aliases or len(self.wake_aliases)>4 or any(not isinstance(name,str) or not name.strip() or len(name)>16 for name in self.wake_aliases):
             raise ValueError('唤醒别名设置无效')
         if not (1 <= self.poll_seconds <= 30 and 1 <= self.merge_seconds <= 30 and 10 <= self.expiry_seconds <= 120):
@@ -203,7 +208,9 @@ class Settings:
         current=names[0]
         keys = {target['account'] + '/' + target['id'] for target in targets.values()}
         bindings = {key: raw for key, raw in self.window_bindings.items() if key in keys}
+        rules={key:dict(value) for key,value in self.conversation_rules.items() if key in keys}
         return replace(self,group=current,group_names=names,conversation_targets=targets,window_bindings=bindings,
+                       conversation_rules=rules,
                        self_name_unique_confirmed=self.self_name_unique_confirmed if current==self.group else False)
 
     def with_window_binding(self, name: str, calibration: Calibration):
@@ -277,8 +284,28 @@ class Settings:
 
     def for_group(self,name: str):
         if name not in self.allowed_groups:raise ValueError('该群未被选定')
+        target=self.conversation_targets.get(name,{})
+        scope=target.get('account','')+'/'+target.get('id','')
+        overrides=self.conversation_rules.get(scope,{})
         return replace(self,group=name,group_names=(),
+                       **overrides,
                        self_name_unique_confirmed=self.self_name_unique_confirmed if name==self.group else False)
+
+    def with_conversation_rules(self,name,changes):
+        from .reply_preferences import validate_rule_changes
+        changes=validate_rule_changes(changes)
+        target=self.conversation_targets.get(name)
+        if name not in self.saved_groups or not target:
+            raise ValueError('请先绑定该会话的准确身份')
+        scope=target['account']+'/'+target['id']
+        rules={key:dict(value) for key,value in self.conversation_rules.items()}
+        current=rules.get(scope,{})
+        for key,value in changes.items():
+            if value is None:current.pop(key,None)
+            else:current[key]=value
+        if current:rules[scope]=current
+        else:rules.pop(scope,None)
+        return replace(self,conversation_rules=rules)
 
     @property
     def binding(self) -> Calibration | None:

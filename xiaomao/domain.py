@@ -72,4 +72,5 @@ class ReplyTask:
     raw_bubble: str | None = None
     sticker_clipboard_wait: str = ''
     wait_reason: str = ''
+    wait_detail: str = ''
     idle_deadline: float = 0

@@ -110,6 +110,7 @@ class StickerPage(tk.Frame):
 
     def on_show(self):
         self.active=True;self.lib.refresh();self._gallery()
+        if not self.frequency_editor.dirty():self.frequency_editor.select(None)
         if self.tab=='import':self._select_row()
 
     def on_hide(self):
@@ -157,7 +158,10 @@ class StickerPage(tk.Frame):
         self.next=button(footer,'下一页',lambda:self._turn(1),compact=True);self.next.pack(side='right')
         self.prev=button(footer,'上一页',lambda:self._turn(-1),compact=True);self.prev.pack(side='right',padx=4)
         right=card(box,pad=12);right.grid(row=0,column=1,sticky='nsew',padx=(5,0))
-        self._heading(right,'发送偏好','send')
+        from .reply_rules_ui import ReplyRulesEditor
+        self.frequency_editor=ReplyRulesEditor(right,self.panel,defaults=True)
+        self.frequency_editor.pack(fill='x',pady=(0,18))
+        self._heading(right,'分类优先级','send')
         self.pref_box=tk.Frame(right,bg=PAPER);self.pref_box.pack(fill='x')
         tk.Checkbutton(right,text='不偏好任何分类',variable=self.neutral,bg=PAPER,fg=INK,
                        activebackground=PAPER).pack(anchor='w',pady=7)

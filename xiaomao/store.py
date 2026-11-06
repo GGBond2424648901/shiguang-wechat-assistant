@@ -181,13 +181,17 @@ class StateStore:
         with self.lock:
             return [r[0] for r in self.db.execute("SELECT sticker_id FROM send_receipts WHERE group_digest=? AND at>? AND sticker_id!=''",(self.fingerprint(group),now-1800))]
 
-    def sticker_ready(self,group,now):
+    def sticker_ready(self,group,now,frequency='natural'):
+        from .reply_preferences import STICKER_PACING
+        if frequency not in STICKER_PACING:raise ValueError('表情频率无效')
+        if frequency=='requested':return False
+        seconds,texts=STICKER_PACING[frequency]
         with self.lock:
             scope=self.fingerprint(group)
             last=self.db.execute("SELECT max(at) FROM send_receipts WHERE group_digest=? AND sticker_id!=''",(scope,)).fetchone()[0]
             if last is None:return True
-            if now-last<60:return False
-            return self.db.execute("SELECT count(*) FROM send_receipts WHERE group_digest=? AND at>? AND sticker_id=''",(scope,last)).fetchone()[0]>=2
+            if now-last<seconds:return False
+            return self.db.execute("SELECT count(*) FROM send_receipts WHERE group_digest=? AND at>? AND sticker_id=''",(scope,last)).fetchone()[0]>=texts
 
     def counts(self) -> dict:
         with self.lock:

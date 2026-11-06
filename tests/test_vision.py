@@ -350,8 +350,8 @@ def test_bubble_rail_tracks_uniform_window_scale(own):
 def test_real_white_navigation_pill_is_distinct_from_chat_message():
     from xiaomao.vision import navigation_lines,TextLine
     image=Image.new('RGB',(820,560),(237,237,237));draw=ImageDraw.Draw(image)
-    draw.rounded_rectangle((655,20,805,56),16,fill='white')
-    line=TextLine('46条新消息',(680,28,795,48),.99)
+    draw.rounded_rectangle((655,500,805,536),16,fill='white')
+    line=TextLine('46条新消息',(680,508,795,528),.99)
     assert navigation_lines(image,[line])==[line]
     image=Image.new('RGB',(820,560),(237,237,237));draw=ImageDraw.Draw(image)
     draw.rounded_rectangle((650,460,795,505),5,fill=(149,236,105));draw.polygon([(794,472),(803,477),(794,482)],fill=(149,236,105))
@@ -366,3 +366,21 @@ def test_upward_unread_indicator_does_not_jump_into_old_history():
     for y in (30,36):
         draw.line([(669,y+5),(674,y),(679,y+5)],fill=(28,170,102),width=2)
     assert navigation_lines(canvas,[line])==[]
+
+
+@pytest.mark.parametrize('label',['17条新消息','新消息','新消息↓'])
+def test_top_unread_pill_is_never_a_latest_button_when_arrow_is_unclear(label):
+    from xiaomao.vision import navigation_lines,TextLine
+    canvas=Image.new('RGB',(600,350),(237,237,237));draw=ImageDraw.Draw(canvas)
+    draw.rounded_rectangle((470,12,580,43),14,fill='white')
+    # Small/antialiased Qt chevrons cannot reliably establish direction.
+    line=TextLine(label,(490,20,570,35),.99)
+    assert navigation_lines(canvas,[line])==[]
+
+
+def test_explicit_return_to_bottom_label_remains_usable_at_top():
+    from xiaomao.vision import navigation_lines,TextLine
+    canvas=Image.new('RGB',(600,350),(237,237,237));draw=ImageDraw.Draw(canvas)
+    draw.rounded_rectangle((470,12,580,43),14,fill='white')
+    line=TextLine('回到底部',(490,20,570,35),.99)
+    assert navigation_lines(canvas,[line])==[line]

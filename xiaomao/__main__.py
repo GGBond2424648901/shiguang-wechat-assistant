@@ -21,6 +21,10 @@ def daemon(root: Path,initial_mode=None):
         from .privacy import private_dir
         output = (private_dir(root / "runtime") / "worker.log").open("a", encoding="utf-8", buffering=1)
         sys.stdout = sys.stderr = output
+    # Native-library failures otherwise leave only a stale control file.
+    # Tracebacks contain code locations, not chat contents or model credentials.
+    import faulthandler
+    faulthandler.enable(file=sys.stderr,all_threads=True)
     from .config import Settings
     from .control import ControlServer
     from .resident import Resident

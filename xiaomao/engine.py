@@ -110,6 +110,7 @@ class Engine:
         self.latest_requested=False
         self.latest_candidate=None
         self.bottom_recovery_attempts=0
+        self.bottom_retry_at=0
         self.baseline_position_checked=False
         if (store.recover() if recovered_unknown is None else recovered_unknown):
             self.mode, self.reason = "paused", "存在发送结果未知的记录，请核实微信后重新观察"
@@ -166,6 +167,7 @@ class Engine:
             self.latest_requested=False
             self.latest_candidate=None
             self.bottom_recovery_attempts=0
+            self.bottom_retry_at=0
         return self.status()
 
     def observe(self) -> dict:
@@ -266,7 +268,7 @@ class Engine:
                 progress={'staged':'正在核对输入内容','sending':'已开始发送','awaiting_receipt':'等待微信回执',
                           'generated':'已准备，等待发送条件','unknown':'发送结果待核对'}.get(task.state)
                 if task.sticker_clipboard_wait:progress=_STICKER_CLIPBOARD_WAIT[task.sticker_clipboard_wait]
-                elif task.state=='generated' and task.wait_reason:progress=_SEND_WAITS[task.wait_reason]
+                elif task.state=='generated' and task.wait_reason:progress=task.wait_detail or _SEND_WAITS[task.wait_reason]
                 if not progress:
                     if task.media_attempts and task.retry_at>now:progress='等待微信图片加载'
                     elif task.model_attempts:progress='正在准备回复'
@@ -317,7 +319,17 @@ class Engine:
             self.baseline_position_checked=True
             return self._frame(observation=True)
         if observation and frame.safe and frame.group==self.settings.group and not frame.at_bottom:
-            if self.bottom_recovery_attempts>=3:raise ValueError('定位最新消息未生效，请检查微信群的滚动位置')
+            if self.bottom_recovery_attempts>=3:
+                # A transient scroll/layout failure must not latch forever.
+                # Keep collecting new messages, then retry navigation under
+                # the same identity, empty-draft and human-input guards.
+                now=self.clock()
+                if not self.bottom_retry_at or self.bottom_retry_at-now>30:
+                    self.bottom_retry_at=now+30
+                if now<self.bottom_retry_at:
+                    raise DesktopTemporarilyHidden('最新消息位置尚未确认，稍后自动重新定位；仍在后台接收')
+                self.bottom_recovery_attempts=0
+                self.bottom_retry_at=0
             if self.desktop.go_to_latest(self.settings.idle_seconds):
                 with self.lock:
                     self.bottom_recovery_attempts+=1
@@ -330,6 +342,7 @@ class Engine:
         if not frame.safe or frame.group != self.settings.group or not frame.at_bottom:
             raise ValueError(frame.reason or "目标群或消息底部无法确认")
         self.bottom_recovery_attempts=0
+        self.bottom_retry_at=0
         return frame
 
     def _active(self, task: ReplyTask) -> bool:
@@ -387,6 +400,7 @@ class Engine:
 
     def _waiting(self,task,reason):
         task.wait_reason=reason
+        task.wait_detail=''
         self.reason=_SEND_WAITS[reason]
         # An accepted text may wait one extra freshness interval for the user
         # to finish typing. Never extend a draft, a partial delivery or an
@@ -838,7 +852,7 @@ class Engine:
             self.reason='已点击发送，正在等待微信回执；不会重复发送'
             return
         if now<task.retry_at:
-            self.reason=_STICKER_CLIPBOARD_WAIT.get(task.sticker_clipboard_wait,'正在等待本条回复自动重试；仍在后台接收消息')
+            self.reason=task.wait_detail or _STICKER_CLIPBOARD_WAIT.get(task.sticker_clipboard_wait,'正在等待本条回复自动重试；仍在后台接收消息')
             return
         allowed,limit_reason=self.store.allow_send(now,self.settings.min_interval,self.settings.hourly_limit,minute_limit=self.settings.minute_limit if self.settings.natural_pacing else 0)
         if not allowed and not self._participation_pending(task):
@@ -854,6 +868,7 @@ class Engine:
                 else:
                     task.retry_at=max(task.retry_at,self.clock()+3)
                     task.wait_reason='draft' if '草稿' in str(error) else 'window'
+                    task.wait_detail=str(error)
                     task.idle_deadline=0
                     self.reason=str(error)
         except (ValueError,DesktopUnavailable) as error:
@@ -866,7 +881,8 @@ class Engine:
                 else:
                     task.retry_at=max(task.retry_at,self.clock()+3)
                     task.wait_reason='window';task.idle_deadline=0
-                    self.reason='微信发送窗口暂不可用，正在自动重试；数据库继续接收'
+                    task.wait_detail=str(error)
+                    self.reason=task.wait_detail+'；正在自动重试，数据库继续接收'
         except Exception:
             with self.lock:
                 if epoch!=self.epoch or self.cancelled.is_set():return
@@ -924,7 +940,7 @@ class Engine:
                 sticker_mode=(self.settings.stickers_enabled and self.message_source
                         and hasattr(self.desktop,'type_sticker') and hasattr(self.desktop,'verify_sticker_input')
                         and hasattr(self.model,'reply_plan'))
-                ready=request.explicit or self.store.sticker_ready(self.settings.memory_scope,self.clock())
+                ready=request.explicit or self.store.sticker_ready(self.settings.memory_scope,self.clock(),self.settings.sticker_frequency)
                 if sticker_mode and not task.sticker_failed and ready:
                     choices=self.stickers.candidates(context,request=request,excluded=self.store.recent_stickers(self.settings.memory_scope,self.clock()))
                 if sticker_mode and local_order:
@@ -1038,7 +1054,7 @@ class Engine:
         if task.sticker and hasattr(self.stickers,'collection_enabled') and not self.stickers.collection_enabled(task.sticker.item.character):
             self._sticker_unavailable(task,'该表情分类已停用，改用文字回复')
             return
-        if task.sticker and not task.sticker_requested and not self.store.sticker_ready(self.settings.memory_scope,self.clock()):
+        if task.sticker and not task.sticker_requested and not self.store.sticker_ready(self.settings.memory_scope,self.clock(),self.settings.sticker_frequency):
             self._sticker_unavailable(task,'刚刚已发表情，这条改用文字接话')
             return
         # Deadlines are sampled once, never redrawn by polling or model retry.
@@ -1065,7 +1081,8 @@ class Engine:
             self.message_source.assert_identity()
             if not wake(self.settings.idle_seconds) or not foreground():
                 self._waiting(task,'foreground')
-                self.reason='空闲唤起未获前台，保留待发回复；不模拟按键强抢焦点'
+                self.reason=getattr(self.desktop,'wake_reason','') or '空闲唤起未获前台，保留待发回复；不模拟按键强抢焦点'
+                task.wait_detail=self.reason
                 return
         if self.desktop.idle_for()<self.settings.idle_seconds:
             self._waiting(task,'desktop_busy')
@@ -1090,12 +1107,21 @@ class Engine:
             with self.lock:
                 if self._active(task):
                     self._waiting(task,'window')
+                    task.wait_detail=str(error)
+                    task.retry_at=max(task.retry_at,self.clock()+3)
                     self.reason=str(error)
             return
+        park=getattr(self.desktop,'park_editor_pointer',None)
+        if park:park(self.settings.idle_seconds)
         before = self._frame(observation=bool(self.message_source))
         if not before.draft_empty:
             self.pause("输入框已有草稿，未执行输入")
             return
+        if task.sticker:
+            fits=getattr(self.desktop,'sticker_preview_fits',None)
+            if fits and not fits(task.sticker):
+                self._sticker_unavailable(task,'输入区太窄，无法核对表情预览，本轮改用文字')
+                return
         # 激活后截图/OCR也耗时，不能让新的人工输入被 click_input 建立的 cookie 吞掉。
         if self.desktop.input_generation()!=prepared_generation:
             with self.lock:self._waiting(task,'desktop_busy')
@@ -1118,6 +1144,7 @@ class Engine:
                     self._retire(task,'skipped','expired')
                     return
         task.wait_reason=''
+        task.wait_detail=''
         self.desktop.click_input(prepared_generation)
         focused = self._frame()
         if self.message_source and hasattr(self.desktop,'confirm_empty_editor'):

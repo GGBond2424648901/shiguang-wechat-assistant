@@ -21,6 +21,11 @@ def apply_saved_settings(client,original,updated,key=''):
     except ControlUnavailable:status={}
     mode=status.get('mode')
     if Settings.load(original.root)!=original:raise ValueError('设置已在其他窗口修改，请重新打开设置')
+    rule_fields=('reply_mode','sticker_frequency')
+    rule_only=replace(original,**{k:getattr(updated,k) for k in rule_fields})==updated
+    if not key.strip() and rule_only and status.get('can_configure_reply_rules'):
+        return client.configure_reply_defaults({k:getattr(updated,k) for k in rule_fields
+                                               if getattr(updated,k)!=getattr(original,k)})
     route_fields=('group','group_names','monitor_all_groups','conversation_targets','calibration',
                   'calibration_account','window_bindings')
     if 'idle_wake' in status:route_fields+=('idle_wake',)

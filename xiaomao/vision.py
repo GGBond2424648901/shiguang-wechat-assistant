@@ -131,29 +131,13 @@ def navigation_lines(image,lines,messages=None):
         if any(m.box[0]<=cx<=m.box[2] and m.box[1]<=cy<=m.box[3] for m in messages):continue
         patch=array[max(0,y1-3):min(height,y2+4),max(0,x1-3):min(width,x2+4)]
         if patch.size and np.mean(np.all(patch>247,axis=2))>=.55:
-            if y1<height*.25 and _points_to_earlier_unread(array,line.box):continue
+            # Qt's top unread pill jumps back to the FIRST unread message.
+            # Small/antialiased chevrons and OCR cannot reliably prove its
+            # direction. Only an explicit bottom label is usable at the top;
+            # otherwise use the real scrollbar or a bottom navigation pill.
+            if y1<height*.25 and title_key(line.text)!='回到底部':continue
             found.append(line)
     return found
-
-
-def _points_to_earlier_unread(pixels,box):
-    """The green double-up chevron jumps *back* to the first unread message."""
-    x1,y1,_,y2=box
-    h=y2-y1
-    patch=pixels[max(0,y1-3):y2+4,max(0,x1-h):x1+h].astype(np.int16)
-    green=(patch[:,:,1]>patch[:,:,0]+25)&(patch[:,:,1]>patch[:,:,2]+10)
-    _,parts,stats,_=cv2.connectedComponentsWithStats(green.astype(np.uint8),8)
-    for i,(x,y,w,height,_) in sorted(enumerate(stats[1:],1),key=lambda part:part[1][0]):
-        if not (5<=w<=h and 4<=height<=h):continue
-        rows=parts[y:y+height,x:x+w]==i
-        top=np.flatnonzero(rows[0])
-        # An upward caret starts at a narrow central apex and widens below it.
-        if not len(top) or top[-1]-top[0]>w*.4 or abs(top.mean()-(w-1)/2)>w*.24:return False
-        for row in rows[2:min(height,8)]:
-            xs=np.flatnonzero(row)
-            if len(xs)>1 and xs[-1]-xs[0]>=w*.7 and not row[w//2]:return True
-        return False
-    return False
 
 
 class LocalOCR:

@@ -50,6 +50,8 @@ class ControlServer:
                                    "/stop_if_idle":lambda:engine.stop_if_idle(),
                                    "/reload_windows":lambda:engine.reload_windows(),
                                    "/queue_text":lambda:engine.queue_text(**payload),
+                                   "/configure_reply_rules":lambda:engine.configure_reply_rules(**payload),
+                                   "/configure_reply_defaults":lambda:engine.configure_reply_defaults(**payload),
                                    "/enable_selected":lambda:engine.enable_selected(**payload),
                                    "/companion_configure":lambda:engine.companion_configure(**payload),
                                    "/companion_preview":lambda:engine.companion_preview(**payload),
@@ -75,9 +77,12 @@ class ControlServer:
                         if self.path=='/queue_text':
                             if not isinstance(payload,dict) or set(payload)!={'group','text','request_id'} or not all(isinstance(v,str) for v in payload.values()):
                                 return self.answer(400, {"error": "需要指定会话、文字和请求编号"})
-                        elif (self.path in ('/enable_selected','/companion_configure') or
+                        elif self.path=='/configure_reply_defaults':
+                            if not isinstance(payload,dict) or set(payload)!={'preferences'}:
+                                return self.answer(400, {"error": "需要回复偏好设置"})
+                        elif (self.path in ('/enable_selected','/companion_configure','/configure_reply_rules') or
                                 self.path in ('/companion_preview','/companion_once') and payload!={}):
-                            keys={'group','scope','preferences'} if self.path=='/companion_configure' else {'group','scope'}
+                            keys={'group','scope','preferences'} if self.path in ('/companion_configure','/configure_reply_rules') else {'group','scope'}
                             if not isinstance(payload,dict) or set(payload)!=keys or not all(isinstance(payload[k],str) and payload[k] for k in ('group','scope')):
                                 return self.answer(400, {"error": "请指定监听会话及身份"})
                         elif payload != {}:

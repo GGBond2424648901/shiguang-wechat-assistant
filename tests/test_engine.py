@@ -831,6 +831,32 @@ def test_initial_background_baseline_waits_for_visible_scroll_position(system):
     assert engine.last_observed==clock() and engine.pending()==[] and store.counts()=={}
 
 
+def test_failed_latest_navigation_backs_off_then_recovers_without_restart(system):
+    from xiaomao.windows import DesktopTemporarilyHidden
+    engine,screen,_,clock,_=system
+    engine.enable();engine.message_source=object()
+    screen.frame=replace(screen.frame,at_bottom=False)
+    engine.bottom_recovery_attempts=3
+    calls=[]
+    def latest(seconds):
+        calls.append(seconds)
+        return True
+    screen.go_to_latest=latest
+    with pytest.raises(DesktopTemporarilyHidden,match='稍后自动'):
+        engine._frame(observation=True)
+    clock.advance(29)
+    with pytest.raises(DesktopTemporarilyHidden,match='稍后自动'):
+        engine._frame(observation=True)
+    assert calls==[] and screen.events==[] and engine.mode=='auto'
+    clock.advance(2)
+    with pytest.raises(DesktopTemporarilyHidden,match='已定位'):
+        engine._frame(observation=True)
+    assert calls==[10] and engine.bottom_recovery_attempts==1
+    screen.frame=replace(screen.frame,at_bottom=True)
+    assert engine._frame(observation=True).at_bottom
+    assert engine.bottom_recovery_attempts==0 and engine.bottom_retry_at==0
+
+
 @pytest.mark.parametrize('at_bottom',[True,False])
 def test_initial_existing_draft_does_not_activate_or_navigate(system,at_bottom):
     engine,screen,_,_,_=system

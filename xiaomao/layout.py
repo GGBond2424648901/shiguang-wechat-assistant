@@ -7,6 +7,19 @@ from dataclasses import replace
 import numpy as np
 
 
+def idle_caption_point(image,scale=1.0):
+    """Blank center of Qt's custom caption, excluding pin/window buttons."""
+    if not hasattr(image,'size') or not .75<=scale<=3:return None
+    w,h=image.size
+    if w<360*scale or h<100*scale:return None
+    x,y=w//2,round(16*scale)
+    if not 70*scale<x<w-150*scale:return None
+    pad=round(12*scale);dy=round(5*scale)
+    patch=np.asarray(image.crop((x-pad,y-dy,x+pad+1,y+dy+1)).convert('RGB')).astype(np.int16)
+    if patch.size and patch.min()>=190 and np.ptp(patch)<6:return x,y
+    return None
+
+
 def default_calibration_regions(kind='main'):
     """Starting points for a manual edit, in whole-window coordinates."""
     if kind=='main':
@@ -44,7 +57,16 @@ def adapt_calibration(image, binding, scale=1.0):
                        &neutral[1:-2]&neutral[2:-1])
     line_start=round(12*scale) if detached else divider+2
     coverage=horizontal[:,line_start:round(width*.94)].mean(1)
-    headers=[y for y in range(round(40*scale),round(height*.25)) if coverage[y-1]>.98]
+    # A clipped chat bubble can touch the row immediately BELOW the header.
+    # The separator itself must remain complete, uniform and neutral; its
+    # upper boundary still needs full contrast. Do not relax toolbar checks.
+    band=pixels[:,line_start:round(width*.94)]
+    uniform=np.ptp(band,axis=(1,2))<3
+    shade=band.mean(axis=(1,2))
+    above=((gray[1:-1]<gray[:-2]-2)&neutral[1:-1])[:,line_start:round(width*.94)].mean(1)
+    headers=[y for y in range(round(40*scale),round(height*.25))
+             if coverage[y-1]>.98 or (uniform[y] and 190<=shade[y]<=225
+                                      and above[y-1]>.98 and coverage[y-1]>.5)]
     toolbars=[y for y in range(round(height*.55),round(height*.94)) if coverage[y-1]>.98]
     if len(headers)!=1 or len(toolbars)!=1:return binding
     header,toolbar=headers[0],toolbars[0]

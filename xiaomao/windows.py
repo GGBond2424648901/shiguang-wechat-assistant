@@ -486,8 +486,6 @@ class WindowsDesktop:
         if U.IsIconic(binding.hwnd):
             raise DesktopTemporarilyHidden('微信已最小化，等待微信回到前台')
         if info['width']!=binding.width or info['height']!=binding.height:
-            if getattr(binding,'manual_regions',False):
-                raise DesktopUnavailable('手动校准的微信窗口尺寸已改变，请重新校准')
             self._rebind_size(info)
         return info
 
@@ -497,7 +495,13 @@ class WindowsDesktop:
         if self._input_cookie is not None:
             raise DesktopUnavailable('输入过程中微信尺寸改变，已保留草稿')
         original=self.calibration
-        candidate=replace(original,width=info['width'],height=info['height'])
+        # Never scale an old manual crop into a differently sized window.
+        # Recover from full separators and two independent identity/button
+        # checks instead; unchanged manual geometry remains authoritative.
+        candidate=replace(original,width=info['width'],height=info['height'],manual_regions=False)
+        if original.manual_regions:
+            from .vision import LocalOCR,read_header,header_matches,calibration_send_matches
+            if self._sidebar_ocr is None:self._sidebar_ocr=LocalOCR()
         previous=None
         for _ in range(2):
             try:image=capture_window(original.hwnd,info['width'],info['height'])
@@ -509,6 +513,12 @@ class WindowsDesktop:
             detected=adapt_calibration(image,candidate,self._dpi_scale())
             if detected is candidate or (previous and previous.regions!=detected.regions):
                 raise DesktopTemporarilyHidden('窗口布局暂不完整，等待重新识别后自动继续')
+            if original.manual_regions:
+                lines=read_header(self._sidebar_ocr,image.crop(detected.rect('header')),detected)
+                if (not lines or any(line.score<.92 for line in lines)
+                        or not header_matches(''.join(line.text for line in lines),detected)
+                        or not calibration_send_matches(self._sidebar_ocr,image,detected)):
+                    raise DesktopTemporarilyHidden('窗口缩放后标题或发送按钮未能核实，等待清晰画面')
             previous=detected
         if self.cancelled.is_set():raise DesktopUnavailable('助手已暂停')
         self.calibration=previous
@@ -603,7 +613,10 @@ class WindowsDesktop:
         if not valid() or not U.IsWindowVisible(b.hwnd):return False
         if not self.is_foreground():U.SetForegroundWindow(b.hwnd)
         if not self.is_foreground() and b.window_kind=='detached' and valid():
-            self._activate_idle_editor(valid)
+            checked=self._activate_idle_editor(valid)
+            if checked and not self.is_foreground() and valid():
+                own_generation=self._click_idle_caption(valid)
+                if own_generation is not None:generation=own_generation
         acquired=self.is_foreground() and valid()
         if acquired and original and original!=b.hwnd:
             import win32process
@@ -619,7 +632,11 @@ class WindowsDesktop:
         from .vision import Vision
         if not hasattr(self,'_wake_vision'):self._wake_vision=Vision()
         b=self.calibration
-        if U.GetLastActivePopup(b.hwnd)!=b.hwnd or not win32gui.IsWindowEnabled(b.hwnd):return
+        self._wake_caption=None
+        caption_points=[]
+        self.wake_reason='等待目标微信允许激活'
+        if U.GetLastActivePopup(b.hwnd)!=b.hwnd or not win32gui.IsWindowEnabled(b.hwnd):
+            self.wake_reason='微信有弹窗或窗口不可操作';return
         for _ in range(2):
             if not valid():return
             image=self.capture();b=self.calibration
@@ -627,7 +644,12 @@ class WindowsDesktop:
             # Activation must precede go_to_latest: a detached window left in
             # history cannot scroll until foreground. No text is entered here;
             # Engine._frame still requires latest position before any edit/send.
-            if not frame.safe or frame.group!=b.target_group or not frame.draft_empty:return
+            if not frame.safe or frame.group!=b.target_group:
+                self.wake_reason=getattr(frame,'reason','') or '后台微信标题或布局尚未核实';return
+            if not frame.draft_empty:
+                self.wake_reason='后台输入框未能确认空白，保留草稿';return
+            from .layout import idle_caption_point
+            caption_points.append(idle_caption_point(image,self._dpi_scale()))
         info=self._bound_details()
         left,top=info['rect'][:2]
         x1,y1,x2,y2=b.rect('input')
@@ -638,6 +660,58 @@ class WindowsDesktop:
         win32gui.SendMessageTimeout(b.hwnd,0x201,1,point,2,500)
         # Release the same window's button even if focus changed on button-down.
         win32gui.SendMessageTimeout(b.hwnd,0x202,0,point,2,500)
+        if caption_points[0] is not None and caption_points[0]==caption_points[1]:
+            self._wake_caption=(*caption_points[0],b.width,b.height,time.monotonic())
+        self.wake_reason='微信未接受后台窗口激活'
+        return True
+
+    def _click_idle_caption(self,valid):
+        """Opt-in idle fallback: normal click on a verified native caption.
+
+        Never uses Alt, thread-input attachment or an editor shortcut. Human
+        input after the timestamped click cancels the idle credit/transaction.
+        """
+        import win32gui
+        b=self.calibration;info=self._bound_details();idle_credit=self.idle_for()
+        left,top,right,bottom=info['rect']
+        point=W.POINT((left+right)//2,top+round(16*self._dpi_scale()))
+        packed=((point.y&0xffff)<<16)|(point.x&0xffff)
+        def caption():
+            result=win32gui.SendMessageTimeout(b.hwnd,0x84,0,packed,2,500)
+            hit=result[-1] if isinstance(result,tuple) else result
+            if hit==2:return True
+            proof=getattr(self,'_wake_caption',None)
+            return (hit==1 and proof is not None and proof[:4]==(point.x-left,point.y-top,right-left,bottom-top)
+                    and 0<=time.monotonic()-proof[4]<=8)
+        def guarded():
+            return (valid() and self._bound_details()['rect']==info['rect']
+                    and U.GetLastActivePopup(b.hwnd)==b.hwnd and win32gui.IsWindowEnabled(b.hwnd)
+                    and not any(U.GetAsyncKeyState(key)&0x8000 for key in (1,2,4,16,17,18)))
+        if not guarded():return None
+        if not caption():
+            self.wake_reason='未能确认微信标题栏，等待窗口可交互';return None
+        if not guarded():return None
+        win32gui.SetWindowPos(b.hwnd,0,0,0,0,0,0x13)  # no move/resize/activate, never topmost
+        if not guarded() or U.GetAncestor(U.WindowFromPoint(point),2)!=b.hwnd:return None
+        if not caption():return None
+        if not U.SetCursorPos(point.x,point.y) or not guarded():return None
+        own_generation=K.GetTickCount64()&0xffffffff
+        events=(INPUT*2)()
+        events[0].value.mouse.flags=2;events[1].value.mouse.flags=4
+        for event in events:event.value.mouse.time=own_generation
+        sent=U.SendInput(2,events,ctypes.sizeof(INPUT))
+        if sent!=2:
+            if sent==1:U.SendInput(1,(INPUT*1)(events[1]),ctypes.sizeof(INPUT))
+            return None
+        # Activation can be delivered asynchronously by Qt.
+        for _ in range(8):
+            if self.cancelled.is_set() or self.input_generation()!=own_generation:return None
+            if self.is_foreground():break
+            self.cancelled.wait(.025)
+        if (not self.is_foreground() or self._bound_details()['rect']!=info['rect']
+                or self.input_generation()!=own_generation):return None
+        self.navigation.note(own_generation,idle_credit)
+        return own_generation
 
     def park_editor_pointer(self,idle_seconds):
         """Move an idle pointer halo away; the caller must take a fresh draft reading."""
@@ -972,6 +1046,16 @@ class WindowsDesktop:
         result=matches_draft(image.crop(self.calibration.rect('input')),prepared,self._dpi_scale())
         self.assert_input_focus()
         return result
+
+    def sticker_preview_fits(self,prepared):
+        """Refuse an uncheckable attachment before changing the editor."""
+        import io
+        from PIL import Image
+        x1,y1,x2,y2=self.calibration.rect('input')
+        scale=self._dpi_scale()
+        with Image.open(io.BytesIO(prepared.verified_bytes())) as source:
+            thumb=source.copy();thumb.thumbnail((round(120*scale)+1,round(120*scale)+1))
+        return x2-x1>=max(40,thumb.width) and y2-y1>=max(40,round(thumb.height*.7))
 
     def click_send(self) -> None:
         self.assert_input_focus()

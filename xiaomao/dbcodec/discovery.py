@@ -87,30 +87,6 @@ def discover_accounts(roots=None):
     return sorted(accounts.values(), key=lambda x: x["modified"], reverse=True)
 
 
-def _message_handles(pid, by_directory):
-    try:
-        return [Path(item.path) for item in psutil.Process(pid).open_files()]
-    except (psutil.Error, OSError):
-        if os.name!='nt':return []
-    # psutil may enumerate successfully, then abort the whole result while
-    # stat-ing an unrelated deleted NTFS temporary handle. Reuse the same
-    # read-only handle enumeration, filtering to exact known message folders
-    # BEFORE any filesystem query. No inaccessible handle is opened or read.
-    try:
-        from psutil import _pswindows as backend
-        raw=backend.cext.proc_open_files(pid)
-        result=[]
-        for value in raw:
-            path=Path(backend.convert_dos_path(value))
-            if not re.fullmatch(r'message_\d+\.db(?:-wal|-shm)?',path.name,re.I):continue
-            if os.path.normcase(os.path.abspath(path.parent)) not in by_directory:continue
-            try:
-                if path.is_file():result.append(path)
-            except OSError:continue
-        return result
-    except (psutil.Error,OSError,AttributeError,ImportError):return []
-
-
 def active_account_ids(accounts, processes):
     """Match message DB handles owned by current-user WeChat processes.
 
@@ -118,16 +94,5 @@ def active_account_ids(accounts, processes):
     accounts, so they are deliberately not login evidence. Failure to enumerate
     handles means unknown; never fall back to the most recently modified folder.
     """
-    by_directory = {
-        os.path.normcase(os.path.abspath(Path(a["path"]) / "db_storage/message")): a["id"]
-        for a in accounts
-    }
-    active = set()
-    for process in processes:
-        for path in _message_handles(process['pid'],by_directory):
-            if not re.fullmatch(r"message_\d+\.db(?:-wal|-shm)?", path.name, re.I):
-                continue
-            account_id = by_directory.get(os.path.normcase(os.path.abspath(path.parent)))
-            if account_id:
-                active.add(account_id)
-    return active
+    from .account_probe import active_accounts
+    return active_accounts(accounts,processes)

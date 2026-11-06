@@ -491,7 +491,7 @@ class GlassView(tk.Frame):
         self.watch_table=ttk.Treeview(watch_area,columns=('kind','state'),show='tree',height=2,selectmode='browse',style='Watch.Treeview')
         self.watch_table.bind('<<TreeviewSelect>>',self._watch_selected)
         self.watch_table.tag_configure('even',background='#F4F7F6')
-        for key,width in [('#0',118),('kind',42),('state',76)]:
+        for key,width in [('#0',118),('kind',62),('state',76)]:
             self.watch_table.column(key,width=width,minwidth=32,stretch=key=='#0')
         self.watch_table.pack(side='left',fill='both',expand=True)
         _scroll_when_needed(watch_area,self.watch_table)
@@ -809,15 +809,21 @@ class GlassView(tk.Frame):
             return {'auto':'回复中','observe':'观察中','paused':'暂停'}.get(mode_for_room,'已选择')
         rows=tuple((n,{'group':'群聊','private':'个人'}.get(cfg.conversation_targets.get(n,{}).get('kind'),'会话'),
                     watch_state(n)) for n in names)
-        if rows!=self._watch_rows:
+        rule_key=tuple((n,live.get(n,{}).get('reply_mode'),repr(cfg.conversation_rules),cfg.reply_mode) for n in names)
+        if rows!=self._watch_rows or rule_key!=getattr(self,'_watch_rule_key',None):
             self._watch_rows=rows
+            self._watch_rule_key=rule_key
             wanted={r[0] for r in rows}
             for old in self.watch_table.get_children():
                 if old not in wanted:self.watch_table.delete(old)
             if self.queue_group not in wanted:self.queue_group=None
             for index,(title,kind,status) in enumerate(rows):
                 pic=glyph(self,'persona' if kind=='个人' else 'people','#496D7D',18)
-                options=dict(text=' '+title,image=pic,values=(kind,status),tags=('even',) if index%2==0 else ())
+                from .reply_preferences import REPLY_MODES
+                target=cfg.conversation_targets.get(title,{})
+                rule=cfg.conversation_rules.get(target.get('account','')+'/'+target.get('id',''),{})
+                reply_mode=live.get(title,{}).get('reply_mode',rule.get('reply_mode',cfg.reply_mode))
+                options=dict(text=' '+title,image=pic,values=('仅点名' if reply_mode=='mentions' else REPLY_MODES[reply_mode],status),tags=('even',) if index%2==0 else ())
                 if self.watch_table.exists(title):
                     self.watch_table.item(title,**options);self.watch_table.move(title,'',index)
                 else:self.watch_table.insert('','end',iid=title,**options)

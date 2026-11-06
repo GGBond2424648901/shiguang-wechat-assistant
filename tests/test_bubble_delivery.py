@@ -245,13 +245,14 @@ def test_deferred_source_keeps_original_deadline(delivery):
     assert not feed.sent and not engine.tasks and not calls
 
 
-@pytest.mark.parametrize('media_state',['ready','changed','cooldown','missing_before_text'])
+@pytest.mark.parametrize('media_state',['ready','changed','cooldown','missing_before_text','short_editor'])
 def test_optional_gif_follows_verified_text_without_regeneration(delivery, media_state):
     engine, feed, _, clock, store = delivery
     library(engine.settings.root)
     engine.stickers = StickerLibrary(engine.settings.root)
     engine.desktop.type_sticker = feed.stage_sticker
     engine.desktop.verify_sticker_input = lambda prepared: True
+    if media_state=='short_editor':engine.desktop.sticker_preview_fits=lambda prepared:False
     calls = []
     engine.model.reply_plan = lambda *a,**kw: calls.append(1) or ReplyPlan(text='你做到了！真开心。',sticker='s_0')
     question(engine, '刚拿到第一名')

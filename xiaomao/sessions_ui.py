@@ -10,6 +10,8 @@ import unicodedata
 from .config import Settings,validate_send_pacing
 from .contacts import search_directory, visual_name_key
 from .selection import load_directory
+from .reply_preferences import REPLY_MODES, STICKER_FREQUENCIES
+from .reply_rules_ui import ReplyRulesEditor
 from .workspace_ui import BG, FONT, INK, LINE, MUTED, NAVY, PAPER, PEACH, button, card, glyph, label
 
 
@@ -92,14 +94,22 @@ class SessionsPage(tk.Frame):
         self.canvas.bind('<Configure>', self._resize)
         self.saved = card(self.body, pad=14)
         self.rules = card(self.body, pad=14)
+        self.defaults = card(self.body, pad=14)
+        self.rule_editor=ReplyRulesEditor(self.rules,panel,on_saved=self._rules_saved)
+        self.rule_editor.pack(fill='x')
         label(self.saved, '已保存的会话', 16, bold=True).pack(anchor='w', pady=(0, 10))
         self.rows = tk.Frame(self.saved, bg=PAPER)
         self.rows.pack(fill='x', anchor='n')
         self.add = button(self.saved, '批量添加会话', panel.choose_contact, primary=True,icon_name='add')
         self.add.pack(side='bottom', anchor='w', pady=(12, 0))
-        label(self.saved, '↑↓ 选行　Enter 设为主要　Delete 移除', 9, color=MUTED).pack(side='bottom', anchor='w', pady=(8, 0))
-        label(self.rules, '回复规则', 16, bold=True).pack(anchor='w')
-        separator(self.rules)
+        label(self.saved, '点击会话编辑独立规则 · 不切换微信窗口', 9, color=MUTED).pack(side='bottom', anchor='w', pady=(8, 0))
+        label(self.defaults, '默认规则与全局发送节奏', 14, bold=True).pack(anchor='w')
+        label(self.defaults, '会话的独立设置优先；发送额度由全部会话共用', 9, color=MUTED).pack(anchor='w',pady=(3,8))
+        default_body=tk.Frame(self.defaults,bg=PAPER);default_body.pack(fill='x')
+        default_body.columnconfigure(0,weight=1,uniform='defaults')
+        default_body.columnconfigure(1,weight=1,uniform='defaults')
+        default_mode=tk.Frame(default_body,bg=PAPER);default_mode.grid(row=0,column=0,sticky='nw',padx=(0,12))
+        default_pacing=tk.Frame(default_body,bg=PAPER);default_pacing.grid(row=0,column=1,sticky='nsew')
         self.widgets = []
         style = ttk.Style(self)
         style.configure('Session.TCheckbutton', font=(FONT, 12), padding=(2, 4))
@@ -107,22 +117,21 @@ class SessionsPage(tk.Frame):
         style.configure('Rate.TEntry', padding=6)
         style.map('Rate.TEntry', bordercolor=[('invalid','#AE5947'),('focus','#488397')],
                   fieldbackground=[('invalid','#FFF5F1'),('focus','#F4FAFA')])
-        monitor = ttk.Checkbutton(self.rules, text='同时监听已选会话', variable=self.monitor_all,
+        monitor = ttk.Checkbutton(default_mode, text='同时监听已选会话', variable=self.monitor_all,
                                   style='Session.TCheckbutton')
         monitor.pack(anchor='w', pady=4)
         self.widgets.append(monitor)
-        separator(self.rules)
+        separator(default_mode)
         for key, name in MODES:
-            radio = ttk.Radiobutton(self.rules, value=key, variable=self.mode, text=name,
+            radio = ttk.Radiobutton(default_mode, value=key, variable=self.mode, text=name,
                                     style='Session.TRadiobutton')
             radio.pack(anchor='w', pady=4)
             self.widgets.append(radio)
-        separator(self.rules)
-        label(self.rules, '发送节奏', 11, bold=True).pack(anchor='w')
-        self.pacing = ttk.Combobox(self.rules, state='readonly', textvariable=self.rate, width=12)
+        label(default_pacing, '发送节奏', 11, bold=True).pack(anchor='w')
+        self.pacing = ttk.Combobox(default_pacing, state='readonly', textvariable=self.rate, width=12)
         self.pacing.configure(values=[*self.rates,CUSTOM_RATE])
         self.pacing.pack(fill='x', pady=(4, 5))
-        editor=tk.Frame(self.rules,bg=PAPER)
+        editor=tk.Frame(default_pacing,bg=PAPER)
         editor.pack(fill='x')
         self.rate_inputs=[]
         for index,(name,var) in enumerate(zip(RATE_FIELDS,self.rate_values)):
@@ -136,17 +145,17 @@ class SessionsPage(tk.Frame):
             field.bind('<FocusIn>',lambda e:self._reveal(e.widget))
             self.rate_inputs.append(field)
             var.trace_add('write', lambda *_: self._field_changed())
-        self.rate_note = label(self.rules, '', 9, color=MUTED)
+        self.rate_note = label(default_pacing, '', 9, color=MUTED)
         self.rate_note.pack(fill='x')
         self.rate.trace_add('write', lambda *_: self._profile_changed())
-        separator(self.rules)
-        sticker = ttk.Checkbutton(self.rules, text='启用情境表情', variable=self.stickers,
+        separator(default_mode)
+        sticker = ttk.Checkbutton(default_mode, text='启用情境表情', variable=self.stickers,
                                   style='Session.TCheckbutton')
         sticker.pack(anchor='w', pady=3)
         self.widgets.append(sticker)
-        self.apply = button(self.rules, '保存并应用', self.save, primary=True,icon_name='save')
-        self.apply.pack(side='bottom', fill='x', pady=(8, 0))
-        self.message = label(self.rules, textvariable=self.note, size=9, color=MUTED)
+        self.apply = button(self.defaults, '保存监听范围与默认规则', self.save, primary=True,icon_name='save')
+        self.apply.pack(side='bottom', anchor='e', pady=(8, 0))
+        self.message = label(self.defaults, textvariable=self.note, size=9, color=MUTED)
         self.message.pack(side='bottom', fill='x', pady=(6, 0))
         self.wheel_tag = f'SessionScroll{self.winfo_id()}'
         self.bind_class(self.wheel_tag, '<MouseWheel>', self._wheel)
@@ -206,9 +215,10 @@ class SessionsPage(tk.Frame):
         self._wide=wide
         self.body.columnconfigure(0, weight=7 if wide else 1, uniform='cards' if wide else '')
         self.body.columnconfigure(1, weight=6 if wide else 0, uniform='cards' if wide else '')
-        self.body.rowconfigure(0, minsize=max(0, event.height-3) if wide else 0)
+        self.body.rowconfigure(0, minsize=0)
         self.saved.grid(row=0, column=0, sticky='nsew', padx=(0, 10 if wide else 0))
         self.rules.grid(row=0 if wide else 1, column=1 if wide else 0, sticky='nsew', pady=(0 if wide else 8, 0))
+        self.defaults.grid(row=1 if wide else 2,column=0,columnspan=2 if wide else 1,sticky='ew',pady=(10,0))
         text_width = width*6//13-50 if wide else width-50
         self.message.configure(wraplength=max(150, text_width))
         self.rate_note.configure(wraplength=max(150, text_width))
@@ -287,7 +297,8 @@ class SessionsPage(tk.Frame):
         cfg = self.panel.settings
         current_rate = (cfg.min_interval, cfg.hourly_limit, cfg.minute_limit, cfg.pacing_jitter)
         current = (tuple(cfg.saved_groups), cfg.group, cfg.monitor_all_groups, cfg.reply_mode,
-                   current_rate, cfg.stickers_enabled, dict(cfg.conversation_targets),cfg.natural_pacing)
+                   current_rate, cfg.stickers_enabled, dict(cfg.conversation_targets),cfg.natural_pacing,
+                   cfg.conversation_rules,cfg.sticker_frequency)
         if self.baseline == current:
             return
         before = self.baseline
@@ -349,13 +360,17 @@ class SessionsPage(tk.Frame):
             role='群聊' if group else '个人'
             tags=[role]
             if index==0:tags.append('主会话')
+            target=cfg.conversation_targets.get(name,{})
+            rule=cfg.conversation_rules.get(target.get('account','')+'/'+target.get('id',''),{})
+            tags.append(REPLY_MODES[rule.get('reply_mode',cfg.reply_mode)])
+            tags.append(STICKER_FREQUENCIES[rule.get('sticker_frequency',cfg.sticker_frequency)])
             if name not in cfg.saved_groups:tags.append('待保存')
             elif cfg.binding_for(name):
                 tags.append('独立窗口' if cfg.binding_for(name).window_kind=='detached' else '主窗口')
             meta=label(row,' · '.join(tags),9,color=MUTED)
             meta.grid(row=1,column=1,sticky='w')
             actions=tk.Frame(row,bg=face)
-            actions.grid(row=0,column=2,rowspan=2,sticky='e',padx=(5,0))
+            actions.grid(row=2,column=1,sticky='w',pady=(7,0))
             calibrate=button(actions,'校准',lambda n=name:self.panel.calibrate(n),compact=True)
             calibrate.pack(side='left',padx=(0,4))
             if self.busy or name not in cfg.saved_groups:calibrate.configure(state='disabled')
@@ -366,8 +381,8 @@ class SessionsPage(tk.Frame):
             remove=button(actions,'移除',lambda n=name:self.remove(n),compact=True)
             remove.pack(side='left')
             if self.busy or len(self.names)==1:remove.configure(state='disabled')
-            row.bind('<Configure>',lambda e,w=title,a=actions:w.configure(
-                wraplength=max(48,e.width-a.winfo_reqwidth()-85)))
+            row.bind('<Configure>',lambda e,w=title,m=meta:[w.configure(wraplength=max(48,e.width-85)),
+                m.configure(wraplength=max(48,e.width-85))])
             for widget in (row,title,avatar,meta):
                 widget.configure(cursor='hand2')
                 widget.bind('<Button-1>',lambda _,n=name:self._pick_row(n))
@@ -386,12 +401,16 @@ class SessionsPage(tk.Frame):
     def _pick_row(self,name,*,focus=True):
         if name not in self.row_widgets:
             return
+        if not self.rule_editor.select(name):return
         self.selected_name=name
         for key,row in self.row_widgets.items():
             row.configure(highlightbackground='#8BA7B4' if key==name else LINE)
         if focus:
             self.row_widgets[name].focus_set()
             self._reveal(self.row_widgets[name])
+
+    def _rules_saved(self):
+        self.refresh_scope()
 
     def _move_row(self,name,step):
         index=max(0,min(len(self.names)-1,self.names.index(name)+step))

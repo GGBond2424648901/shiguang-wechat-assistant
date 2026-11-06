@@ -73,6 +73,9 @@ def main():
         folder=Path(folder);brand=folder/'brand';create_assets(brand)
         targets={n:dict(account='demo',id='demo'+str(i)+('@chatroom' if i<2 else ''),kind='group' if i<2 else 'private') for i,n in enumerate(groups)}
         cfg=Settings(folder,group=groups[0],group_names=groups,monitor_all_groups=True,conversation_targets=targets,reply_mode='natural')
+        cfg.sticker_frequency='expressive'
+        cfg=cfg.with_conversation_rules(groups[1],{'reply_mode':'mentions','sticker_frequency':'occasional'})
+        cfg=cfg.with_conversation_rules(groups[2],{'reply_mode':'all','sticker_frequency':'requested'})
         cfg.window_bindings={'demo/'+targets[n]['id']:asdict(Calibration(i+1,1,900,700,n,default_regions(),True,n,targets[n]['kind'],n,'detached')) for i,n in enumerate(groups)}
         cfg.save()
         shelf=StickerShelf(folder)
@@ -87,6 +90,7 @@ def main():
         with patch('xiaomao.gui.ControlClient',DemoClient),patch('xiaomao.workspace_ui.ASSETS',brand):
             window=tk.Tk();panel=Panel(window,folder);window.geometry('1200x800+30+30')
             pump(window);panel.feedback.dismiss();shot(window,'workspace')
+            panel.view.select('sessions');panel.feedback.dismiss();shot(window,'sessions')
             panel.view.select('stickers');panel.feedback.dismiss();shot(window,'stickers')
             panel.view.select('settings');pump(window)
             page=panel.view.pages['settings'];page.save_button.invoke();pump(window,.8)
@@ -97,7 +101,7 @@ def main():
                 assert page.save_button.winfo_rootx()+page.save_button.winfo_width()<=window.winfo_rootx()+window.winfo_width()
                 assert panel.feedback.winfo_x()>=0
             panel.close()
-    print('Captured 3 native previews with fictional data; responsive controls passed')
+    print('Captured 4 native previews with fictional data; responsive controls passed')
 
 
 if __name__=='__main__':main()

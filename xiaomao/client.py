@@ -29,7 +29,7 @@ class ControlClient:
             raise ControlUnavailable("助手尚未运行，或本机控制信息无效") from None
 
     def request(self, operation: str, payload=None) -> dict:
-        if operation not in ("status", "pending", "observe", "enable", "pause", "stop", "reply_latest", "companion_preview", "companion_once","reload_windows","stop_if_idle","queue_text","companion_configure","enable_selected"):
+        if operation not in ("status", "pending", "observe", "enable", "pause", "stop", "reply_latest", "companion_preview", "companion_once","reload_windows","stop_if_idle","queue_text","companion_configure","enable_selected","configure_reply_rules","configure_reply_defaults"):
             raise ControlUnavailable("不支持这个控制操作")
         url, token = self._endpoint()
         try:
@@ -58,6 +58,10 @@ class ControlClient:
     def enable_selected(self,group,scope):
         return self.request('enable_selected',dict(group=group,scope=scope))
     def reload_windows(self):return self.request('reload_windows')
+    def configure_reply_rules(self,group,scope,preferences):
+        return self.request('configure_reply_rules',dict(group=group,scope=scope,preferences=preferences))
+    def configure_reply_defaults(self,preferences):
+        return self.request('configure_reply_defaults',dict(preferences=preferences))
     def queue_text(self, group, text, request_id):
         return self.request('queue_text',dict(group=group,text=text,request_id=request_id))
 

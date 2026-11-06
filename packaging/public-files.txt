@@ -27,6 +27,8 @@ pyproject.toml
 requirements.lock
 tests/conftest.py
 tests/test_account_handles.py
+tests/test_account_probe.py
+tests/test_resize_recovery.py
 tests/test_background_compaction.py
 tests/test_bubble_delivery.py
 tests/test_burst_context.py
@@ -100,6 +102,7 @@ xiaomao/credentials.py
 xiaomao/dafeiyu.py
 xiaomao/database.py
 xiaomao/dbcodec/__init__.py
+xiaomao/dbcodec/account_probe.py
 xiaomao/dbcodec/config_scan.py
 xiaomao/dbcodec/crypto.py
 xiaomao/dbcodec/discovery.py
@@ -121,6 +124,8 @@ xiaomao/policy.py
 xiaomao/presets.py
 xiaomao/privacy.py
 xiaomao/resident.py
+xiaomao/reply_preferences.py
+xiaomao/reply_rules_ui.py
 xiaomao/selection.py
 xiaomao/sessions_ui.py
 xiaomao/settings_ui.py
@@ -136,6 +141,11 @@ xiaomao/vision.py
 xiaomao/wechat_voice.py
 xiaomao/windows.py
 xiaomao/workspace_ui.py
+docs/screenshots/sessions.png
+tests/test_reply_preferences.py
+tests/test_conversation_rules.py
+tests/test_sticker_frequency.py
+tests/test_reply_rules_ui.py
 停止小猫助手.cmd
 启动小猫助手.cmd
 启动小猫助手.vbs

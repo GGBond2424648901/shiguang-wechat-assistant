@@ -21,6 +21,7 @@ class Resident:
         self.lock=threading.RLock()
         self.cycle_lock=threading.Lock()
         self.reload_request=None
+        self.rules_pending=set()
         self.index=self.turns=0
         self.navigation=NavigationActivity()
         self.window_turns={}
@@ -95,6 +96,9 @@ class Resident:
             states=[engine.status() for engine in self.engines]
             windows={}
             for engine,state in zip(self.engines,states):
+                state['reply_mode']=engine.settings.reply_mode
+                state['sticker_frequency']=engine.settings.sticker_frequency
+                state['rules_pending']=engine.settings.memory_scope in self.rules_pending
                 b=engine.settings.binding
                 state['window_kind']=b.window_kind if b else None
                 key=(b.pid,b.hwnd,b.target_group if b.window_kind=='detached' else '') if b else None
@@ -114,10 +118,66 @@ class Resident:
                 'saved_groups':list(settings.saved_groups),'monitor_all_groups':settings.monitor_all_groups,
                 'group_names':list(settings.allowed_groups),'pending_count':sum(s['pending_count'] for s in states),
                 'window_reload_pending':reload_pending,'idle_wake':settings.idle_wake,'can_stop_if_idle':True,
+                'can_configure_reply_rules':True,
                 'last_observed':max((s['last_observed'] for s in states if s['last_observed'] is not None),default=None),
                 'groups':[{'name':s['group'],'mode':s['mode'],'reason':s['reason'],'calibrated':s['calibrated'],
                            'window_kind':s['window_kind'],'window_state':s['window_state'],'last_result':s.get('last_result'),
+                           'reply_mode':s['reply_mode'],'sticker_frequency':s['sticker_frequency'],
+                           'rules_pending':s['rules_pending'],
                            'pending_count':s['pending_count'],'companion':s.get('companion')} for s in states]}
+
+    def configure_reply_rules(self,group,scope,preferences):
+        return self._configure_rules(preferences,group,scope)
+
+    def configure_reply_defaults(self,preferences):
+        return self._configure_rules(preferences)
+
+    def _configure_rules(self,preferences,group=None,scope=None):
+        from .reply_preferences import validate_rule_changes
+        preferences=validate_rule_changes(preferences,allow_inherit=group is not None)
+        with self.lock:
+            saved=Settings.load(self.settings.root)
+            if group is not None:
+                for cfg in (saved,self.settings):
+                    target=cfg.conversation_targets.get(group,{})
+                    if group not in cfg.saved_groups or scope!=target.get('account','')+'/'+target.get('id',''):
+                        raise ValueError('该会话身份已改变，请重新选择')
+                fresh=saved.with_conversation_rules(group,preferences)
+            else:fresh=replace(saved,**preferences)
+            # Persist first. Failed writes must not claim success or affect the worker.
+            fresh.save()
+            changes={k:getattr(fresh,k) for k in ('reply_mode','sticker_frequency','conversation_rules')}
+            self.settings=replace(self.settings,**changes)
+            if self.reload_request:self.reload_request=replace(self.reload_request,**changes)
+            self.rules_pending.update(e.settings.memory_scope for e in self.engines)
+        if self.cycle_lock.acquire(blocking=False):
+            try:self._apply_reply_rules()
+            finally:self.cycle_lock.release()
+        return self.status()
+
+    def _apply_reply_rules(self):
+        with self.lock:
+            for e in self.engines:
+                scope=e.settings.memory_scope
+                if scope not in self.rules_pending:continue
+                with e.lock:
+                    if any(t.continuation_of or t.state in ('staged','sending','awaiting_receipt','unknown') for t in e.tasks):continue
+                    desired=self.settings.for_group(e.settings.group)
+                    cfg=replace(e.settings,reply_mode=desired.reply_mode,sticker_frequency=desired.sticker_frequency,
+                                conversation_rules=self.settings.conversation_rules)
+                    policy=TriggerPolicy(cfg.assistant_name,cfg.at_display_name,cfg.wake_aliases,cfg.reply_mode)
+                    # Tightening to mentions must not send an unstarted ordinary reply.
+                    # Operator sends and already-started multi-bubble turns retain their identity.
+                    if cfg.reply_mode=='mentions' and e.settings.reply_mode!='mentions':
+                        for task in list(e.tasks):
+                            if (task.state in ('candidate','generated') and task.messages and not task.continuation_of
+                                    and not any(policy.addressed(m) for m in task.messages)):
+                                e._retire(task,'skipped','reply_rule_changed')
+                    e.settings,e.policy=cfg,policy
+                    if hasattr(e.model,'settings'):e.model.settings=cfg
+                    if e.companion:e.companion.settings=cfg
+                    self.rules_pending.discard(scope)
+            self.rules_pending.intersection_update(e.settings.memory_scope for e in self.engines)
 
     def pending(self):
         with self.lock:
@@ -206,6 +266,9 @@ class Resident:
                 logging.getLogger(__name__).warning('Window update waiting: %s',type(error).__name__)
                 return
             for engine,cfg,desktop,source in routes:
+                if (engine.settings.memory_scope in self.rules_pending or
+                        any(t.state in ('staged','sending','awaiting_receipt','unknown') for t in engine.tasks)):
+                    cfg=replace(cfg,reply_mode=engine.settings.reply_mode,sticker_frequency=engine.settings.sticker_frequency)
                 if source:source.hub.settings=fresh
                 if engine in added:
                     if self.requested_mode=='paused':engine.pause()
@@ -221,7 +284,7 @@ class Resident:
                         engine.hidden_since=engine.hidden_last_clock=None
                         engine.hidden_reset_required=False
                 engine.message_source=source
-                if engine.settings.at_display_name!=cfg.at_display_name:
+                if engine.settings.at_display_name!=cfg.at_display_name or engine.settings.reply_mode!=cfg.reply_mode:
                     engine.policy=TriggerPolicy(cfg.assistant_name,cfg.at_display_name,cfg.wake_aliases,cfg.reply_mode)
                 engine.settings=cfg
                 if hasattr(engine.model,'settings'):engine.model.settings=cfg
@@ -366,6 +429,7 @@ class Resident:
         try:
             if self.stop_event.is_set():return
             self._apply_window_reload()
+            self._apply_reply_rules()
             self._check_reopened_windows()
             start=self.index
             ordered=self.engines[start:]+self.engines[:start]
