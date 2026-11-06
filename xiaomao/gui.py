@@ -354,6 +354,21 @@ class Panel:
             self.view.render();self.show_status(result);done()
         self.work(save,saved,failed,label='应用监听设置')
 
+    def apply_pacing_settings(self,rate,done,failed):
+        rate=tuple(rate)
+        def save():
+            from .config import validate_send_pacing
+            validate_send_pacing(*rate)
+            original=Settings.load(self.directory)
+            minimum,hour,minute,jitter=rate
+            updated=replace(original,min_interval=minimum,hourly_limit=hour,
+                            minute_limit=minute,pacing_jitter=jitter,natural_pacing=True)
+            return apply_saved_settings(self.client,original,updated)
+        def saved(result):
+            self.settings=Settings.load(self.directory)
+            self.view.render();self.show_status(result);done()
+        self.work(save,saved,failed,label='保存发送节奏')
+
     def test_model(self):
         from .domain import Message
         if self.testing_model:

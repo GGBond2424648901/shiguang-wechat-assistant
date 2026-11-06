@@ -28,6 +28,13 @@ def test_export_is_self_contained_neutral_and_rebuildable(tmp_path,monkeypatch):
     assert not (target/'config/settings.json').exists()
     assert (target/'config/persona.md').read_bytes()==(target/'xiaomao/_vendor/dafeiyu/persona-wechat.md').read_bytes()
     assert (target/'xiaomao/ui_assets/表情包收集说明.txt').is_file()
+    # Public regression tests must carry their local fixture/helper imports.
+    import ast
+    for test in (target/'tests').glob('test_*.py'):
+        tree=ast.parse(test.read_text(encoding='utf-8'))
+        for node in ast.walk(tree):
+            if isinstance(node,ast.ImportFrom) and node.module and node.module.startswith('test_'):
+                assert (target/'tests'/(node.module+'.py')).is_file(), (test.name,node.module)
     monkeypatch.setattr(module,'ROOT',target);monkeypatch.setattr(module,'MANIFEST',target/'packaging/public-files.txt')
     module.export(tmp_path/'again')
     assert (tmp_path/'again/xiaomao/ui_assets/app.png').read_bytes()==(target/'xiaomao/ui_assets/app.png').read_bytes()

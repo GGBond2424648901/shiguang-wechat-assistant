@@ -1059,15 +1059,31 @@ class WindowsDesktop:
         self.assert_input_focus()
         image=self.capture()
         self.assert_input_focus()
-        result=matches_draft(image.crop(self.calibration.rect('input')),prepared,self._dpi_scale())
+        result=matches_draft(image.crop(self._sticker_preview_rect()),prepared,self._dpi_scale())
         self.assert_input_focus()
         return result
+
+    def _sticker_preview_rect(self):
+        """Read the left editor column, including the space beside Send.
+
+        The calibrated text crop intentionally stops above the footer. WeChat
+        scrolls a pasted GIF to its caret near the editor bottom, so that crop
+        can hide most of a perfectly visible preview. This never changes any
+        click coordinates and never includes the conversation or Send button.
+        """
+        x1,y1,x2,y2=self.calibration.rect('input')
+        send_left=self.calibration.rect('send')[0]
+        scale=self._dpi_scale()
+        right=min(x2,x1+round(180*scale),send_left-round(8*scale))
+        bottom=self.calibration.height-round(8*scale)
+        if right-x1<40 or bottom<=y2:return x1,y1,x2,y2
+        return x1,y1,right,bottom
 
     def sticker_preview_fits(self,prepared):
         """Refuse an uncheckable attachment before changing the editor."""
         import io
         from PIL import Image
-        x1,y1,x2,y2=self.calibration.rect('input')
+        x1,y1,x2,y2=self._sticker_preview_rect()
         scale=self._dpi_scale()
         with Image.open(io.BytesIO(prepared.verified_bytes())) as source:
             thumb=source.copy();thumb.thumbnail((round(120*scale)+1,round(120*scale)+1))

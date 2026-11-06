@@ -14,6 +14,7 @@ import json
 class CompanionRuntime:
     def __init__(self,settings,store,model,clock,*,executor=None):
         self.settings,self.store,self.model,self.clock=settings,store,model,clock
+        self.proactive_generate=getattr(model,'proactive',lambda *args:None)
         self.notes=CompanionStore(settings.runtime,settings.memory_scope)
         self.planner=Planner(CompanionPreferences(**self.notes.data['preferences']),self.notes.data['planner'],boot_at=clock())
         self.executor=executor or ThreadPoolExecutor(max_workers=1,thread_name_prefix='xiaoling-companion')
@@ -22,6 +23,7 @@ class CompanionRuntime:
         self.last_reflection_revision=-1;self.evidence_retry_at=0
         self.once=None;self.once_state='尚未排程'
         self.account_daily_max=3
+        self.save()
 
     @property
     def profile(self):
@@ -34,12 +36,13 @@ class CompanionRuntime:
         with self.lock:
             if preferences==self.planner.preferences:return
             self.notes.data['preferences']=asdict(preferences)
-            self.planner.preferences=preferences
-            self.suspend()
+            if self.once:self.once=None;self.once_state='已取消，未发送'
+            self.planner.configure(preferences,self.clock())
+            self.save()
 
     def observe(self,message,baseline=False):
         with self.lock:
-            revision=self.planner.state['revision']
+            previous=self.planner.state.copy()
             self.planner.observe(message,baseline)
             queued=False;evidence_changed=False
             if message.direction=='in' and message.kind=='text' and message.message_id and not message.quoted and message.quality>=.92:
@@ -52,17 +55,18 @@ class CompanionRuntime:
                     item=replace(message,text=message.text[:2000],image_data=b'',media_raw='',media_key='')
                     pending.append(ConversationMemory._encode_message(item))
                     self.notes.data['evidence_pending']=pending[-256:];queued=True
-            if revision!=self.planner.state['revision'] or queued or evidence_changed:self.save()
+            if previous!=self.planner.state or queued or evidence_changed:self.save()
 
     def replied(self,identity,now):
         with self.lock:self.planner.replied(identity,now);self.save()
 
-    def suspend(self):
+    def suspend(self,*,preserve_timers=False):
         with self.lock:
             if self.once:self.once=None;self.once_state='已取消，未发送'
             self.planner.state['revision']+=1
-            self.planner.state['followup_at']=0
-            self.planner.end_sequence()
+            if not preserve_timers:
+                self.planner.state['followup_at']=0
+                self.planner.end_sequence()
             self.save()
 
     def valid(self,candidate,*,continuing=False):
@@ -75,12 +79,18 @@ class CompanionRuntime:
             self.planner.delivered(candidate,self.clock());self.save()
             self.store.proactive_result(candidate.id,'sending')
 
+    def progress(self,candidate):
+        with self.lock:
+            if candidate.kind=='requested':self.once_state='部分消息已确认，仍在发送后续内容'
+            self.planner.reason='部分主动消息已确认，等待其余发送回执'
+
     def finish(self,candidate,state):
         with self.lock:
             if candidate.kind=='requested':
-                self.once_state={'verified':'已发送并确认','unknown':'发送结果未知，不会重发','skipped':'已取消，未发送'}.get(state,state)
+                self.once_state={'verified':'已发送并确认','unknown':'发送结果未知，不会重发',
+                    'partial':'仅部分消息已确认，其余未发送','skipped':'已取消，未发送'}.get(state,state)
             self.store.proactive_result(candidate.id,state)
-            if state in ('verified','unknown'):
+            if state in ('verified','unknown','partial'):
                 # A new inbound during receipt readback already answered this turn.
                 if self.planner.state['revision']==candidate.revision:
                     if state=='verified':self.planner.confirmed(candidate,self.clock())
@@ -111,10 +121,18 @@ class CompanionRuntime:
 
     def status(self):
         with self.lock:
+            now=self.clock()
+            due=self.planner.due_at
+            if quiet_now(now,self.planner.preferences):due=0
+            elif due:due=max(due,now,self.planner.boot_at+60)
+            s,p=self.planner.state,self.planner.preferences
+            next_stage=('轻轻追问' if s['checkin_at'] else '自然收尾' if s['signoff_at'] else '') if s['unanswered'] else (
+                '聊后续话' if p.followup and p.followup_probability and s['followup_at'] and
+                    (not p.idle or not p.idle_probability or s['followup_at']<=s['next_idle']) else '空闲话题')
             return {'enabled':self.planner.preferences.enabled,'daily_max':self.planner.preferences.daily_max,
-                'reason':self.error or self.planner.reason,'next_candidate_at':self.planner.due_at,
+                'reason':self.error or self.planner.reason,'next_candidate_at':due,
                 'unanswered':self.planner.state['unanswered'],'facts':len(self.notes.data['facts']),
-                'next_stage':('轻轻追问' if self.planner.state['checkin_at'] else '自然收尾' if self.planner.state['signoff_at'] else ''),
+                'next_stage':next_stage if due else '',
                 'diaries':len(self.notes.data['diary']),'busy':bool(self.future),
                 'once_state':self.once_state,'once_due_at':self.once[2] if self.once else None,
                 'preview_state':self.preview_state,'preview':self.preview_text}
@@ -139,7 +157,7 @@ class CompanionRuntime:
         with self.lock:
             if self.closed or self.future or self.once:raise ValueError('正在处理陪伴任务，请稍后预览')
             now=self.clock();c=Candidate('preview','idle',now,now+120,self.planner.state['revision'],local_day(now))
-            self.future=self.executor.submit(self.model.proactive,self.enrich(context),c,self.profile)
+            self.future=self.executor.submit(self.proactive_generate,self.enrich(context),c,self.profile)
             self.job=('preview',epoch,c,[]);self.preview_state='生成中，仅预览不发送';self.preview_text=''
 
     def tick(self,context,*,epoch,eligible,memory=None):
@@ -155,7 +173,7 @@ class CompanionRuntime:
                     self.once=None;self.once_state='已取消，未发送';return
                 if now<due:return
                 self.once=None;self.once_state='正在生成主动消息'
-                self.future=self.executor.submit(self.model.proactive,self.enrich(context),candidate,self.profile)
+                self.future=self.executor.submit(self.proactive_generate,self.enrich(context),candidate,self.profile)
                 self.job=('proactive',epoch,candidate,[]);return
             if self.future and self.future.done():
                 future,job=self.future,self.job;self.future=self.job=None
@@ -168,7 +186,8 @@ class CompanionRuntime:
                     result=None
                 else:self.error=''
                 if kind=='preview':
-                    self.preview_text=result or ''
+                    from .stickers import ReplyPlan
+                    self.preview_text=(result.text+('（配一张表情，仅预览）' if result.sticker else '')) if isinstance(result,ReplyPlan) else result or ''
                     self.preview_state='仅预览，未发送' if result else '选择保持安静，未发送'
                 elif kind=='reflection' and result and job_epoch==epoch:
                     facts,diary=accept_reflection(result,sources,self.notes.data['facts'],now)
@@ -199,13 +218,12 @@ class CompanionRuntime:
                 # Never immediately start another job in the same completion poll.
                 return
             if self.future or not eligible:return
-            stage_times=(self.planner.state['checkin_at'],self.planner.state['signoff_at'])
+            previous=self.planner.state.copy()
             candidate=self.planner.decide(now)
+            if previous!=self.planner.state:self.save()
             if candidate:
-                self.save()
-                self.future=self.executor.submit(self.model.proactive,self.enrich(context),candidate,self.profile)
+                self.future=self.executor.submit(self.proactive_generate,self.enrich(context),candidate,self.profile)
                 self.job=('proactive',epoch,candidate,[]);return
-            if stage_times!=(self.planner.state['checkin_at'],self.planner.state['signoff_at']):self.save()
             if now>=self.evidence_retry_at and (now>=self.next_maintenance or len(self.notes.data['evidence_pending'])>=48) and memory:
                 self.next_maintenance=now+300
                 try:

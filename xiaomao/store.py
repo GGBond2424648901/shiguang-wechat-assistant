@@ -44,7 +44,8 @@ class StateStore:
 
     def reserve_proactive(self,task_id,scope,day,now,per_day_max,*,account_max=3):
         from .companion import local_day
-        if day!=local_day(now) or not 1<=per_day_max<=3 or not 1<=account_max<=24:return False
+        if (day!=local_day(now) or type(per_day_max) is not int or not 1<=per_day_max<=24
+                or type(account_max) is not int or not 1<=account_max<=192):return False
         scoped=self.fingerprint(scope)
         account=self.fingerprint(scope.split('/')[0] if '/' in scope else 'legacy-account')
         with self.lock,self.db:
@@ -52,16 +53,16 @@ class StateStore:
             if self.db.execute('SELECT 1 FROM proactive WHERE id=?',(task_id,)).fetchone():return False
             latest=self.db.execute('SELECT max(at) FROM proactive WHERE account=?',(account,)).fetchone()[0]
             if latest is not None and now<latest:return False
-            used="state IN ('reserved','sending','verified','unknown')"
+            used="state IN ('reserved','sending','verified','unknown','partial')"
             if self.db.execute(f'SELECT count(*) FROM proactive WHERE account=? AND day=? AND {used}',(account,day)).fetchone()[0]>=account_max:return False
             if self.db.execute(f'SELECT count(*) FROM proactive WHERE scope=? AND day=? AND {used}',(scoped,day)).fetchone()[0]>=per_day_max:return False
             self.db.execute('INSERT INTO proactive VALUES(?,?,?,?,?,?)',(task_id,scoped,account,day,now,'reserved'))
             return True
 
     def proactive_result(self,task_id,state):
-        if state not in ('reserved','sending','verified','unknown','skipped','silent'):raise ValueError('主动状态无效')
+        if state not in ('reserved','sending','verified','unknown','skipped','silent','partial'):raise ValueError('主动状态无效')
         with self.lock,self.db:
-            self.db.execute('UPDATE proactive SET state=? WHERE id=? AND state NOT IN (\'verified\',\'unknown\')',(state,task_id))
+            self.db.execute('UPDATE proactive SET state=? WHERE id=? AND state NOT IN (\'verified\',\'unknown\',\'partial\')',(state,task_id))
 
     def load_context(self,group,now):
         if os.name!='nt':return []

@@ -141,3 +141,32 @@ def test_short_editor_can_verify_scrolled_bottom_of_sticker(tmp_path):
     frame=Image.open(prepared.path).convert('RGB').resize((150,150),Image.Resampling.LANCZOS)
     draft=Image.new('RGB',(600,124),(237,237,237));draft.paste(frame.crop((0,34,150,150)),(10,0))
     assert matches_draft(draft,prepared,1.25)
+
+
+def test_manual_text_crop_does_not_hide_sticker_below_send_footer(tmp_path):
+    """A short text/OCR crop must not reject a GIF visible at editor bottom."""
+    from xiaomao.config import Calibration
+    from xiaomao.windows import WindowsDesktop
+    from xiaomao.stickers import StickerLibrary
+    import hashlib,json
+    entries=library(tmp_path);path=tmp_path/entries[0]['path']
+    art=Image.new('RGB',(200,200),'white');draw=ImageDraw.Draw(art)
+    for y in range(0,200,8):draw.rectangle((8,y,192,y+6),fill=(y,100,200-y))
+    art.save(path);entries[0].update(sha256=hashlib.sha256(path.read_bytes()).hexdigest(),animated=False)
+    (path.parent/'catalog.json').write_text(json.dumps({'items':entries[:1]}),encoding='utf-8')
+    lib=StickerLibrary(tmp_path);prepared=lib.prepare(lib.items[0]);original=prepared.path.read_bytes()
+    binding=Calibration(1,1,766,809,'测试群',{
+        'header':[.02,.03,.7,.15],'messages':[.01,.22,.98,.75],
+        'input':[.02,676/809,.96,732/809],'send':[.80,738/809,.96,779/809]},
+        True,target_group='测试群',window_kind='detached',manual_regions=True)
+    desktop=WindowsDesktop(binding);desktop._dpi_scale=lambda:1.25
+    desktop.assert_input_focus=lambda:None
+    frame=Image.open(prepared.path).convert('RGB').resize((150,150),Image.Resampling.LANCZOS)
+    visible=Image.new('RGB',(766,809),(237,237,237));visible.paste(frame,(20,649))
+    desktop.capture=lambda:visible
+    assert desktop.sticker_preview_fits(prepared)
+    assert desktop.verify_sticker_input(prepared)
+    assert prepared.path.read_bytes()==original  # No flattened/downscaled transport.
+    wrong=Image.new('RGB',(766,809),(237,237,237));wrong.paste(frame,(20,460))
+    desktop.capture=lambda:wrong
+    assert not desktop.verify_sticker_input(prepared)  # Same art in chat is not a draft.

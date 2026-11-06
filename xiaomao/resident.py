@@ -185,8 +185,8 @@ class Resident:
             # must not hide a later group's work from its dashboard filter.
             return [{**task,'group':engine.settings.group} for engine in self.engines for task in engine.pending()]
 
-    def _control(self,operation,*args):
-        for engine in self.engines:getattr(engine,operation)(*args)
+    def _control(self,operation,*args,**kwargs):
+        for engine in self.engines:getattr(engine,operation)(*args,**kwargs)
         return self.status()
 
     def observe(self):
@@ -327,9 +327,9 @@ class Resident:
                 with self.lock:self._discovering=False
         threading.Thread(target=discover,name='wechat-window-discovery',daemon=True).start()
 
-    def stop(self):
+    def stop(self,*,preserve_companion=False):
         with self.lock:
-            result=self._control('stop')
+            result=self._control('stop',preserve_companion=True) if preserve_companion else self._control('stop')
             self.stop_event.set()
             return result
 
@@ -341,7 +341,7 @@ class Resident:
             with self.lock:
                 if any(e.tasks for e in self.engines):
                     raise ValueError('仍有待发或待确认回复，已保留队列，请稍后保存')
-                return self.stop()
+                return self.stop(preserve_companion=True)
         finally:self.cycle_lock.release()
 
     def reply_latest(self):

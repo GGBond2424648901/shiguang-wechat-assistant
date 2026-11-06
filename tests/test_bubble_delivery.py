@@ -326,7 +326,8 @@ def test_one_proactive_reservation_covers_only_its_original_turn(delivery, monke
         assert feed.sent == (PARTS if interrupt == 'none' else PARTS[:2] if interrupt == 'unknown' else PARTS[:1])
         assert calls_to_runtime == ['begin_send','finish']
         assert not calls and runtime.planner.state['followup_at'] == 0
-        assert store.db.execute('SELECT state FROM proactive').fetchall()[0][0] == 'verified'
+        expected='verified' if interrupt=='none' else 'unknown' if interrupt=='unknown' else 'partial'
+        assert store.db.execute('SELECT state FROM proactive').fetchall()[0][0] == expected
     finally:
         runtime.close()
 

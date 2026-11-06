@@ -33,6 +33,18 @@ def main():
     from xiaomao.config import Settings,Calibration
     from xiaomao.gui import Panel,default_regions
     from xiaomao.sticker_import import StickerShelf,inspect_picture,annotation
+    from xiaomao.credentials import CredentialSummary
+    from xiaomao.companion import CompanionPreferences
+    from xiaomao.companion_store import CompanionStore
+
+    class DemoKeys:
+        MAX_KEYS=8
+        def __init__(self,*args):pass
+        def list_keys(self):return (CredentialSummary('demo-primary','DEMO'),CredentialSummary('demo-backup','TEST'))
+        @property
+        def count(self):return 2
+        @property
+        def available(self):return True
 
     groups=('读书分享','摄影交流','小夏')
     class DemoClient:
@@ -42,7 +54,10 @@ def main():
                         reason='数据库后台监听中',pending_count=0,counts={'verified':12},receive_mode='database',
                         calibrated=True,window_reload_pending=False,can_stop_if_idle=True,reply_mode='natural',
                         groups=[dict(name=n,mode=self.mode,pending_count=0,reason='数据库后台监听中',
-                                     calibrated=True,window_kind='detached',window_state='在后台') for n in groups])
+                                     calibrated=True,window_kind='detached',window_state='在后台',
+                                     companion=dict(enabled=True,daily_max=3,reason='安静陪伴，等待合适话题',
+                                         next_stage='空闲话题',next_candidate_at=time.time()+1200,
+                                         preview='刚才那张日落，颜色还挺好看的',preview_state='仅预览，未发送')) for n in groups])
         def start(self,initial_mode=None):
             if initial_mode:self.mode=initial_mode
             return self.status()
@@ -72,12 +87,17 @@ def main():
     with tempfile.TemporaryDirectory() as folder:
         folder=Path(folder);brand=folder/'brand';create_assets(brand)
         targets={n:dict(account='demo',id='demo'+str(i)+('@chatroom' if i<2 else ''),kind='group' if i<2 else 'private') for i,n in enumerate(groups)}
-        cfg=Settings(folder,group=groups[0],group_names=groups,monitor_all_groups=True,conversation_targets=targets,reply_mode='natural')
+        cfg=Settings(folder,group=groups[0],group_names=groups,monitor_all_groups=True,conversation_targets=targets,
+                     reply_mode='natural',min_interval=4,pacing_jitter=4,minute_limit=10,hourly_limit=180)
         cfg.sticker_frequency='expressive'
         cfg=cfg.with_conversation_rules(groups[1],{'reply_mode':'mentions','sticker_frequency':'occasional'})
         cfg=cfg.with_conversation_rules(groups[2],{'reply_mode':'all','sticker_frequency':'requested'})
         cfg.window_bindings={'demo/'+targets[n]['id']:asdict(Calibration(i+1,1,900,700,n,default_regions(),True,n,targets[n]['kind'],n,'detached')) for i,n in enumerate(groups)}
         cfg.save()
+        for name in groups:
+            notes=CompanionStore(cfg.runtime,cfg.for_group(name).memory_scope)
+            notes.data['preferences']=asdict(CompanionPreferences(enabled=True,daily_max=3))
+            notes.save()
         shelf=StickerShelf(folder)
         for index,(category,color,meaning) in enumerate((('开心','#F6B18C','开心回应'),('回应','#B5D4E6','表示收到'),('安慰','#C4DBBB','温柔安慰'))*2):
             art=Image.new('RGB',(160,160),'#F5F2EB');draw=ImageDraw.Draw(art)
@@ -87,7 +107,7 @@ def main():
             draw.rectangle((70,130,90+index,136),fill='#1B3044')
             path=folder/f'sample-{index}.png';art.save(path)
             shelf.commit(inspect_picture(path),dict(category=category,meaning=meaning,tags=['日常',category],source='原创合成演示'))
-        with patch('xiaomao.gui.ControlClient',DemoClient),patch('xiaomao.workspace_ui.ASSETS',brand):
+        with patch('xiaomao.gui.ControlClient',DemoClient),patch('xiaomao.workspace_ui.ASSETS',brand),patch('xiaomao.settings_ui.CredentialStore',DemoKeys):
             window=tk.Tk();panel=Panel(window,folder);window.geometry('1200x800+30+30')
             pump(window);panel.feedback.dismiss();shot(window,'workspace')
             panel.view.select('sessions');panel.feedback.dismiss();shot(window,'sessions')
@@ -103,8 +123,14 @@ def main():
                 window.geometry(size);pump(window)
                 assert page.save_button.winfo_rootx()+page.save_button.winfo_width()<=window.winfo_rootx()+window.winfo_width()
                 assert panel.feedback.winfo_x()>=0
+            window.geometry('1360x1160');pump(window)
+            page.open_pacing();pump(window);page.canvas.yview_moveto(0);pump(window)
+            panel.feedback.dismiss();shot(window,'settings-pacing')
+            page.pacing_editor.close()
+            window.geometry('1360x960');pump(window)
+            panel.view.select('companion');pump(window,2);panel.feedback.dismiss();shot(window,'companion')
             panel.close()
-    print('Captured 5 native previews with fictional data; responsive controls passed')
+    print('Captured 7 native previews with fictional data; responsive controls passed')
 
 
 if __name__=='__main__':main()

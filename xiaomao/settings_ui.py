@@ -13,6 +13,9 @@ class SettingsPage(tk.Frame):
         self.scope=None
         self.key_count=0
         self.key_busy=False
+        self.key_rows=()
+        self.key_delete_buttons={}
+        self.pacing_editor=None
         self.key_mode=tk.StringVar(self,value='append')
         self.key_entries=[]
         self.key_status=tk.StringVar(self)
@@ -28,12 +31,72 @@ class SettingsPage(tk.Frame):
 
     def _refresh_count(self):
         try:
-            self.key_count=CredentialStore(self.panel.settings.runtime).count
+            self.key_rows=CredentialStore(self.panel.settings.runtime).list_keys()
+            self.key_count=len(self.key_rows)
         except CredentialError as error:
-            self.key_count=0;self.key_status.set(str(error))
+            self.key_rows=();self.key_count=0;self.key_status.set(str(error))
         else:
             self.key_status.set(f'已加密保存 {self.key_count} 个密钥' if self.key_count else '尚未保存密钥')
         self.panel.secret_state.set(self.key_status.get())
+        self._render_keys()
+
+    def _render_keys(self):
+        for widget in self.key_list.winfo_children():widget.destroy()
+        self.key_delete_buttons={}
+        for index,key in enumerate(self.key_rows):
+            row=tk.Frame(self.key_list,bg=PAPER,height=38)
+            row.pack(fill='x');row.pack_propagate(False)
+            tk.Label(row,text=f'密钥 {index+1}',bg=PAPER,fg=INK,font=(FONT,10),anchor='w'
+                     ).pack(side='left',padx=(0,12))
+            action=_action(row,'删除',lambda key=key:self.delete_key(key))
+            action.configure(takefocus=True,state='normal' if self.key_count>1 and not self.key_busy else 'disabled')
+            action.pack(side='right',pady=3)
+            action.bind('<FocusIn>',lambda event,i=index:self.key_canvas.yview_moveto(i/max(1,self.key_count)))
+            tk.Label(row,text=f'••••  {key.suffix}',bg=PAPER,fg=MUTED,font=(FONT,10),anchor='w'
+                     ).pack(side='left',fill='x',expand=True)
+            self.key_delete_buttons[key.identifier]=action
+            for child in (row,*row.winfo_children()):child.bind('<MouseWheel>',self._key_wheel)
+            self._tag_controls(row)
+        if not self.key_rows:
+            tk.Label(self.key_list,text='保存后将在这里显示安全编号与末四位',bg=PAPER,fg=MUTED,
+                     font=(FONT,9),anchor='w').pack(fill='x',pady=5)
+        self.key_canvas.configure(height=min(3,max(1,self.key_count))*38)
+        if self.key_count>3:self.key_scroll.pack(side='right',fill='y')
+        else:self.key_scroll.pack_forget()
+
+    def _key_wheel(self,event):
+        if self.key_count>3 and event.delta:
+            self.key_canvas.yview_scroll(-1 if event.delta>0 else 1,'units')
+            return 'break'
+
+    def _key_busy(self,busy):
+        self.key_busy=busy
+        for button in self.key_action_buttons:button.configure(state='disabled' if busy else 'normal')
+        for button in self.key_delete_buttons.values():
+            button.configure(state='disabled' if busy or self.key_count<=1 else 'normal')
+        self._entry_state()
+
+    def delete_key(self,key):
+        if self.key_busy:return
+        if self.key_count<=1:
+            self.panel.notice.set('请至少保留一个密钥；可先追加新密钥，再删除旧密钥')
+            return
+        if not messagebox.askokcancel('删除已保存的密钥？',
+                f'将删除末四位为 {key.suffix} 的密钥。其余密钥继续保留。',
+                parent=self.winfo_toplevel(),icon='warning'):
+            self.panel.notice.set('已取消删除，已保存的密钥保持不变')
+            return
+        runtime=self.panel.settings.runtime
+        self._key_busy(True)
+        def remove():
+            try:CredentialStore(runtime).remove_key(key.identifier)
+            except CredentialError as error:raise ValueError(str(error)) from None
+        def done(_):
+            self._key_busy(False);self._refresh_count()
+            self.panel.notice.set(f'密钥已删除，仍保留 {self.key_count} 个密钥。')
+        def failed(error):
+            self._key_busy(False);self._refresh_count();self.panel.notice.set(error)
+        self.panel.work(remove,done,failed,label='删除加密密钥')
 
     def on_show(self):
         self._refresh_count()
@@ -113,7 +176,7 @@ class SettingsPage(tk.Frame):
             self.panel.notice.set('已取消替换，原密钥保持不变')
             return
         runtime=self.panel.settings.runtime
-        self.key_busy=True;self.key_save.configure(state='disabled');self._entry_state()
+        self._key_busy(True)
         def save():
             try:
                 store=CredentialStore(runtime)
@@ -123,17 +186,17 @@ class SettingsPage(tk.Frame):
             except CredentialError as error:
                 raise ValueError(str(error)) from None
         def done(count):
-            self.key_busy=False;self.key_save.configure(state='normal')
+            self._key_busy(False)
             self.key_mode.set('append')
             for entry,value in zip(self.key_entries,snapshot):
                 if entry.get()==value:entry.delete(0,'end')
-            self.key_count=count;self.key_status.set(f'已加密保存 {count} 个密钥')
+            self._refresh_count()
             self._entry_state()
             self.panel.secret_state.set(self.key_status.get())
             self.panel.notice.set(self.key_status.get()+'，后续模型调用将使用当前列表。')
             if after:after()
         def failed(error):
-            self.key_busy=False;self.key_save.configure(state='normal');self._entry_state();self.panel.notice.set(error)
+            self._key_busy(False);self.panel.notice.set(error)
         self.panel.work(save,done,failed,label='保存加密密钥')
 
     def save(self):
@@ -150,10 +213,20 @@ class SettingsPage(tk.Frame):
         self.save_keys()
 
     def open_pacing(self):
-        view=self.panel.view
-        view.select('sessions')
-        if view.page=='sessions':
-            view.pages['sessions'].pacing.focus_set()
+        if self.pacing_editor is not None:
+            self.pacing_editor.entries[0].focus_set()
+            return
+        from .config import Settings
+        from .pacing_ui import PacingEditor
+        try:cfg=Settings.load(self.panel.directory)
+        except ValueError as error:
+            self.panel.notice.set(str(error));return
+        def close():
+            self.pacing_editor.destroy();self.pacing_editor=None
+            self.refresh_scope()
+        self.pacing_editor=PacingEditor(self.pacing_host,self.panel,cfg,close)
+        self.pacing_editor.pack(fill='x',pady=(4,8))
+        self._tag_controls(self.pacing_editor)
 
     def _build(self):
         self.grid_rowconfigure(0,weight=1)
@@ -199,6 +272,19 @@ class SettingsPage(tk.Frame):
                  ).pack(side='left',fill='x',expand=True)
         self.add_button=_action(key_heading,'输入栏',self._add_entry,icon_name='add')
         self.add_button.pack(side='right')
+        saved=tk.Frame(model,bg=PAPER);saved.pack(fill='x',padx=16)
+        self.key_scroll=ttk.Scrollbar(saved)
+        self.key_canvas=tk.Canvas(saved,height=38,width=1,bg=PAPER,highlightthickness=0,
+                                  yscrollcommand=self.key_scroll.set,yscrollincrement=38)
+        self.key_canvas.pack(side='left',fill='x',expand=True)
+        self.key_scroll.configure(command=self.key_canvas.yview)
+        self.key_list=tk.Frame(self.key_canvas,bg=PAPER)
+        key_window=self.key_canvas.create_window(0,0,anchor='nw',window=self.key_list)
+        self.key_canvas.bind('<Configure>',lambda e:self.key_canvas.itemconfigure(key_window,width=e.width))
+        self.key_list.bind('<Configure>',lambda e:self.key_canvas.configure(scrollregion=self.key_canvas.bbox('all')))
+        self.key_canvas.bind('<MouseWheel>',self._key_wheel)
+        tk.Label(model,text='只显示末四位 · 至少保留一个密钥，可先追加再删除。',fg=MUTED,bg=PAPER,
+                 anchor='w',justify='left',wraplength=300,font=(FONT,9)).pack(fill='x',padx=16,pady=(5,9))
         scrollbox=tk.Frame(model,bg=PAPER);scrollbox.pack(fill='x',padx=16)
         self.input_scroll=ttk.Scrollbar(scrollbox)
         self.input_canvas=tk.Canvas(scrollbox,height=34,width=1,bg=PAPER,highlightthickness=0,
@@ -210,12 +296,14 @@ class SettingsPage(tk.Frame):
         self.key_inputs.bind('<Configure>',lambda e:self.input_canvas.configure(scrollregion=self.input_canvas.bbox('all')))
         self._add_entry()
         key_actions=tk.Frame(model,bg=PAPER);key_actions.pack(fill='x',padx=16,pady=(12,5))
+        self.key_action_buttons=[]
         for col,(name,command) in enumerate((('追加密钥',lambda:self._commit_mode('append')),
                                               ('替换密钥',lambda:self._commit_mode('replace')),
                                               ('测试连接',self._test))):
             button=_action(key_actions,name,command);button.configure(padx=4)
             button.grid(row=0,column=col,sticky='ew',padx=(0,5 if col<2 else 0))
             key_actions.columnconfigure(col,weight=1,uniform='keys')
+            self.key_action_buttons.append(button)
             if col==0:self.key_save=button
         tk.Label(model,text='追加会保留已保存的密钥。替换会用本次输入覆盖整组密钥。',fg=MUTED,bg=PAPER,
                  anchor='w',justify='left',wraplength=300,font=(FONT,9)).pack(fill='x',padx=16,pady=(3,10))
@@ -270,6 +358,8 @@ class SettingsPage(tk.Frame):
         tk.Label(pacing,textvariable=self.rate_text,bg='#F2F5F4',fg=INK,
                  font=(FONT,9)).pack(side='left',expand=True,padx=5)
         _action(pacing,'调整发送节奏',self.open_pacing,icon_name='clock').pack(side='right',padx=5,pady=4)
+        self.pacing_host=tk.Frame(wechat,bg=PAPER)
+        self.pacing_host.pack(fill='x',padx=16)
         flow=self.flow=_card(self.body)
         inner=tk.Frame(flow,bg=PAPER);inner.pack(fill='x',padx=14,pady=9)
         _action(inner,'查看队列',lambda:self.panel.view.select('pending'),icon_name='list').pack(side='right',padx=3)

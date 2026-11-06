@@ -123,6 +123,7 @@ class Engine:
             from .companion_runtime import CompanionRuntime
             try:
                 self.companion=CompanionRuntime(settings,store,model,clock)
+                self.companion.proactive_generate=self._generate_proactive
                 for message in self.memory.messages:self.companion.observe(message,baseline=True)
             except Exception:
                 if self.companion:self.companion.close()
@@ -145,7 +146,9 @@ class Engine:
             else:
                 task.state = "skipped"
                 self.store.update(task.id, "skipped", "paused")
-            if task.proactive and not task.continuation_of:self._companion_call('finish',task.proactive,task.state)
+            if task.proactive:
+                outcome='partial' if task.state=='skipped' and task.continuation_of else task.state
+                self._companion_call('finish',task.proactive,outcome)
             task.messages.clear()
             task.context.clear()
             task.reply = ""
@@ -154,7 +157,7 @@ class Engine:
             task.remaining_text=()
         self.tasks.clear()
 
-    def pause(self, reason="用户已暂停") -> dict:
+    def pause(self, reason="用户已暂停",*,preserve_companion=False) -> dict:
         self.cancelled.set()
         with self.lock:
             self.mode, self.reason = "paused", reason
@@ -163,15 +166,15 @@ class Engine:
             self.hidden_last_clock=None
             self.hidden_reset_required=False
             self._cancel_tasks()
-            self._companion_call('suspend')
+            self._companion_call('suspend',preserve_timers=True) if preserve_companion else self._companion_call('suspend')
             self.latest_requested=False
             self.latest_candidate=None
             self.bottom_recovery_attempts=0
             self.bottom_retry_at=0
         return self.status()
 
-    def observe(self) -> dict:
-        self.pause("正在切换到观察模式")
+    def observe(self,*,preserve_companion=False) -> dict:
+        self.pause("正在切换到观察模式",preserve_companion=preserve_companion)
         with self.lock:
             self.mode, self.reason = "observe", "正在后台观察目标群，首帧仅建立基线"
             self.tracker = SequenceTracker()
@@ -190,14 +193,14 @@ class Engine:
             raise ValueError("请先校准窗口并确认消息列表位于底部")
         if not self.settings.model_ready:
             raise ValueError("请先配置模型及有效的加密凭据")
-        self.observe()
+        self.observe(preserve_companion=True)
         with self.lock:
             self.mode, self.reason = "auto", "正在开启后台监听，微信在前台且空闲时发送"
         return self.status()
 
-    def stop(self) -> dict:
+    def stop(self,*,preserve_companion=False) -> dict:
         if self.mode=='stopped':return self.status()
-        self.pause("助手已停止")
+        self.pause("助手已停止",preserve_companion=preserve_companion)
         with self.lock:
             self.mode = "stopped"
         self.stop_event.set()
@@ -371,6 +374,7 @@ class Engine:
                     'model_unavailable':'未发送：模型服务连续失败',
                     'participation_declined':'自然参与：这条消息选择不插话',
                     'media_followup':'这位成员接着发了文字，图片已作为新消息的上下文',
+                    'media_unavailable':'表情未发送：当前素材或预览不可用',
                     'sticker_clipboard_rich':'表情到期未发：保留了原剪贴板的富文本或图元',
                     'sticker_clipboard_busy':'表情到期未发：剪贴板暂不可用',
                     'expired':'未发送：等待超过时限',
@@ -380,9 +384,16 @@ class Engine:
                               'summary':'上一条回复已确认发送' if state=='verified' else
                               ('到期未发送：'+_SEND_WAITS[task.wait_reason] if reason=='expired_'+task.wait_reason
                                else labels.get(reason,'未发送：本条任务已取消'))}
-            if self.companion and not task.continuation_of:
-                if task.proactive:self._companion_call('finish',task.proactive,state)
-                elif state=='verified':self._companion_call('replied',task.id,self.clock())
+            if task.continuation_of and state=='skipped':
+                self.last_result['summary']='前面的消息已确认；'+self.last_result['summary']
+            if self.companion:
+                if task.proactive:
+                    if state=='verified' and (task.remaining_text or task.remaining_stickers):
+                        self._companion_call('progress',task.proactive)
+                    else:
+                        outcome='partial' if state=='skipped' and task.continuation_of else state
+                        self._companion_call('finish',task.proactive,outcome)
+                elif state=='verified' and not task.continuation_of:self._companion_call('replied',task.id,self.clock())
             if task in self.tasks:
                 self.tasks.remove(task)
             task.messages.clear()
@@ -670,6 +681,19 @@ class Engine:
             self.companion.request_once(self.epoch)
         return self.status()
 
+    def _proactive_sticker_ready(self):
+        return (self.settings.stickers_enabled and self.message_source is not None
+            and hasattr(self.desktop,'type_sticker') and hasattr(self.desktop,'verify_sticker_input')
+            and self.store.sticker_ready(self.settings.memory_scope,self.clock(),self.settings.sticker_frequency))
+
+    def _generate_proactive(self,context,candidate,profile):
+        if not hasattr(self.model,'proactive_plan'):
+            return self.model.proactive(context,candidate,profile)
+        choices=[]
+        if self._proactive_sticker_ready():
+            choices=self.stickers.candidates(context,excluded=self.store.recent_stickers(self.settings.memory_scope,self.clock()))
+        return self.model.proactive_plan(context,candidate,profile,choices=choices)
+
     def _companion_tick(self):
         if not self.companion:return
         try:
@@ -679,12 +703,27 @@ class Engine:
                         and bool(self.settings.conversation_targets.get(self.settings.group)),memory=self.memory)
                 if result:
                     candidate,reply=result
+                    from .stickers import ReplyPlan,StickerRequest,StickerUnavailable
+                    prepared=[]
+                    if isinstance(reply,ReplyPlan):
+                        plan=reply
+                        reply=clean_reply(plan.text) if plan.text else ''
+                        if plan.sticker and self._proactive_sticker_ready():
+                            self.stickers.refresh()
+                            try:prepared=self._prepare_sticker_plan(plan,self.stickers.items,StickerRequest())
+                            except (StickerUnavailable,OSError):pass  # Retain a usable text opening.
+                        if not reply and not prepared:
+                            self.companion.finish(candidate,'skipped')
+                            return
                     # Scheduling/generation time is distinct from the send queue.
                     # The candidate still retains its original expiry/revision guard.
                     queued_at=self.clock()
                     identity=self.store.create(self.store.fingerprint('proactive:'+candidate.id),queued_at)
                     self.tasks.append(ReplyTask(identity,queued_at,queued_at,'',reply=reply,
-                        context=self._context_snapshot(),proactive=candidate))
+                        context=self._context_snapshot(),proactive=candidate,
+                        sticker=prepared[0] if prepared and not reply else None,
+                        remaining_stickers=prepared if reply else prepared[1:]))
+                    if prepared and not reply:self.tasks[-1].reply=prepared[0].description
         except Exception:
             logging.getLogger(__name__).warning('可选陪伴任务未完成，普通回复继续')
 
@@ -903,9 +942,9 @@ class Engine:
         return prepared
 
     def _sticker_unavailable(self,task,reason):
-        if task.continuation_of:
+        if task.continuation_of or task.proactive:
             self._retire(task,'skipped','media_unavailable')
-            self.reason='剩余表情暂不可用，已保留之前的发送回执'
+            self.reason='剩余表情暂不可用，已保留之前的发送回执' if task.continuation_of else '本次主动表情暂不可用，保持安静'
         else:
             task.sticker=None;task.reply='';task.sticker_failed=True;task.state='candidate'
             task.raw_bubble=None
@@ -1385,9 +1424,14 @@ class Engine:
                 stickers=list(task.remaining_stickers)
                 position=self.tasks.index(task)
                 self._retire(task,'verified')
-                if epoch!=self.epoch or self.cancelled.is_set() or self.mode!='auto':return True
+                if epoch!=self.epoch or self.cancelled.is_set() or self.mode!='auto':
+                    if task.proactive and (text or stickers):self._companion_call('finish',task.proactive,'partial')
+                    return True
                 self.reason='回复已由微信数据库确认，继续后台监听'
-                if not (text or stickers) or not 0<=self.clock()-task.created<self.settings.expiry_seconds:return True
+                if not (text or stickers):return True
+                if not 0<=self.clock()-task.created<self.settings.expiry_seconds:
+                    if task.proactive:self._companion_call('finish',task.proactive,'partial')
+                    return True
                 # Only one successor exists at a time. It keeps the original
                 # source deadline, queue position and member, but earns its own
                 # send attempt and new text/hash receipt.
@@ -1404,6 +1448,7 @@ class Engine:
                         continuation_of=task.continuation_of or task.id,remaining_text=rest_text,
                         sticker=sticker,sticker_requested=task.sticker_requested,sticker_source_id=task.sticker_source_id,
                         remaining_stickers=stickers))
+                elif task.proactive:self._companion_call('finish',task.proactive,'partial')
                 return True
             return False
 

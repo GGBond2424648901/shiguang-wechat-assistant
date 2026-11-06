@@ -1,5 +1,6 @@
 """当前 Windows 用户范围的 DPAPI 凭据。密钥和顺序作为一个密文原子保存。"""
 from contextlib import contextmanager
+from dataclasses import dataclass
 from pathlib import Path
 import hashlib
 import json
@@ -10,6 +11,12 @@ from .privacy import atomic_private_write, private_dir
 
 class CredentialError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class CredentialSummary:
+    identifier: str
+    suffix: str
 
 
 class CredentialStore:
@@ -59,6 +66,16 @@ class CredentialStore:
     def get_key(self) -> str:
         return self.get_keys()[0]
 
+    @classmethod
+    def _identifier(cls, key):
+        # A content identity stays attached to the same secret when another
+        # editor adds, removes, or reorders entries. Never pass secrets to UI.
+        return hashlib.sha256(cls.ENTROPY + b':identity:' + key.encode()).hexdigest()
+
+    def list_keys(self) -> tuple[CredentialSummary, ...]:
+        keys = self.get_keys() if self.path.exists() else ()
+        return tuple(CredentialSummary(self._identifier(key), key[-4:]) for key in keys)
+
     @contextmanager
     def _edit(self):
         if os.name != 'nt':
@@ -104,6 +121,16 @@ class CredentialStore:
         with self._edit():
             existing = self.get_keys() if self.path.exists() else ()
             self._store((*existing, *additions))
+
+    def remove_key(self, identifier: str) -> None:
+        with self._edit():
+            existing = self.get_keys() if self.path.exists() else ()
+            remaining = tuple(key for key in existing if self._identifier(key) != identifier)
+            if len(remaining) == len(existing):
+                raise CredentialError('密钥列表已变化，请刷新后重试')
+            if not remaining:
+                raise CredentialError('请至少保留一个密钥；可先追加新密钥，再删除旧密钥')
+            self._store(remaining)
 
     @property
     def count(self) -> int:

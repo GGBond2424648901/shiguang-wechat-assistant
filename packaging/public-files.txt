@@ -2,6 +2,8 @@ LICENSE
 NOTICE.md
 README.md
 docs/screenshots/feedback.png
+docs/screenshots/settings-pacing.png
+docs/screenshots/companion.png
 docs/screenshots/stickers.png
 docs/screenshots/workspace.png
 docs/third-party/whale-persona-MIT.txt
@@ -129,6 +131,17 @@ xiaomao/reply_rules_ui.py
 xiaomao/selection.py
 xiaomao/sessions_ui.py
 xiaomao/settings_ui.py
+xiaomao/pacing_ui.py
+tests/test_key_management.py
+tests/test_pacing_settings.py
+tests/test_settings_keys_pacing_ui.py
+tests/test_companion_pacing.py
+tests/test_companion.py
+tests/test_companion_runtime.py
+tests/test_resident.py
+tests/test_companion_pacing_ui.py
+tests/test_companion_restart_integration.py
+tests/test_proactive_stickers.py
 xiaomao/sticker_import.py
 xiaomao/sticker_ui.py
 xiaomao/sticker_detail_ui.py

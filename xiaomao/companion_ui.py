@@ -82,6 +82,9 @@ class CompanionPage(tk.Frame):
         self.start = tk.StringVar(self)
         self.end = tk.StringVar(self)
         self.interests = tk.StringVar(self)
+        self.frequency_vars = {kind+'_'+bound+'_minutes':tk.StringVar(self)
+                               for kind in ('idle','followup','checkin','signoff') for bound in ('min','max')}
+        self.probability_vars = {kind+'_probability':tk.StringVar(self) for kind in ('idle','followup')}
         self.metrics = [tk.StringVar(self, '—') for _ in range(3)]
         self.action_buttons = []
 
@@ -215,31 +218,53 @@ class CompanionPage(tk.Frame):
                       cursor='hand2', highlightcolor=INK, highlightbackground=PAPER,
                       highlightthickness=1, relief='flat', borderwidth=0)
         self.enable_toggle.pack(side='right')
-        def field(title):
-            tk.Frame(main, bg=LINE, height=1).pack(fill='x')
-            row = tk.Frame(main, bg=PAPER)
-            row.pack(fill='x', pady=9)
+        def field(title, parent=main):
+            row = tk.Frame(parent, bg=PAPER)
+            row.pack(fill='x', pady=4)
             label(row, title, bold=True).pack(side='left', padx=(0, 8))
             group = tk.Frame(row, bg=PAPER)
             group.pack(side='right', fill='x', expand=True)
             return group
+        def interval(title,kind):
+            row=field(title)
+            for bound in ('min','max'):
+                ttk.Spinbox(row,from_=1,to=1440,width=5,
+                    textvariable=self.frequency_vars[kind+'_'+bound+'_minutes'],font=(FONT,10)).pack(side='left',ipady=2)
+                if bound=='min':label(row,'–',color=MUTED).pack(side='left',padx=4)
+            label(row,'分钟',color=MUTED).pack(side='left',padx=5)
+        def probability(kind):
+            row=field('开口概率')
+            ttk.Spinbox(row,from_=0,to=100,width=5,
+                textvariable=self.probability_vars[kind+'_probability'],font=(FONT,10)).pack(side='left',ipady=2)
+            label(row,'%',color=MUTED).pack(side='left',padx=5)
+        tk.Frame(main,bg=LINE,height=1).pack(fill='x',pady=(3,6))
+        self._check(main,'空闲后，偶尔聊个新话题',self.idle)
+        interval('空闲等待','idle')
+        probability('idle')
+        tk.Frame(main,bg=LINE,height=1).pack(fill='x',pady=6)
+        self._check(main,'聊完后，合适时补一句',self.followup)
+        interval('续话等待','followup')
+        probability('followup')
+        tk.Frame(main,bg=LINE,height=1).pack(fill='x',pady=6)
+        self._check(main,'无人回应时，轻问一次，再自然收尾',self.gentle)
+        interval('开场后追问','checkin')
+        interval('开场后收尾','signoff')
+        label(main,'间隔 1–1440 分钟；每次从区间中随机取值。',size=9,color=MUTED).pack(anchor='w',pady=(2,5))
+        tk.Frame(main,bg=LINE,height=1).pack(fill='x',pady=6)
         quiet = field('安静时段')
         entry(quiet, self.start, 6).pack(side='left', ipady=3)
         label(quiet, '至', color=MUTED).pack(side='left', padx=5)
         entry(quiet, self.end, 6).pack(side='left', ipady=3)
         daily = field('每日上限')
-        ttk.Spinbox(daily, from_=1, to=3, textvariable=self.limit, width=4,
+        ttk.Spinbox(daily, from_=1, to=24, textvariable=self.limit, width=4,
                     font=(FONT, 10)).pack(side='left', ipady=3)
-        label(daily, '次', color=MUTED).pack(side='left', padx=5)
-        interests = field('兴趣偏好')
-        entry(interests, self.interests).pack(fill='x', ipady=3)
+        label(daily, '次（1–24，含追问与收尾）', color=MUTED,size=9).pack(side='left', padx=5)
         tk.Frame(main, bg=LINE, height=1).pack(fill='x')
         self.advanced_button = button(main, '更多策略与会话偏好  ▾', self.toggle_advanced)
         self.advanced_button.pack(fill='x', pady=8)
         self.advanced = tk.Frame(main, bg=PAPER)
-        self._check(self.advanced, '聊完 2–5 分钟后，合适时补一句', self.followup)
-        self._check(self.advanced, '安静约一小时后，偶尔聊个新话题', self.idle)
-        self._check(self.advanced, '没人接话时，轻问一次，再自然收尾', self.gentle)
+        interests = field('兴趣偏好',self.advanced)
+        entry(interests, self.interests).pack(fill='x', ipady=3)
         label(self.advanced, '人格补充', color=MUTED).pack(anchor='w', pady=(7, 2))
         self.style = textbox(self.advanced, 3)
         self.style.pack(fill='x')
@@ -428,6 +453,8 @@ class CompanionPage(tk.Frame):
         self.start.set(f'{prefs.quiet_start//60:02}:{prefs.quiet_start%60:02}')
         self.end.set(f'{prefs.quiet_end//60:02}:{prefs.quiet_end%60:02}')
         self.interests.set(prefs.interests)
+        for name,var in self.frequency_vars.items():var.set(str(getattr(prefs,name)))
+        for name,var in self.probability_vars.items():var.set(f'{getattr(prefs,name)*100:g}')
         for widget, value in [(self.style, prefs.style),
                               (self.dates, '\n'.join(d['date']+' '+d['label'] for d in prefs.dates))]:
             widget.delete('1.0', 'end')
@@ -450,7 +477,8 @@ class CompanionPage(tk.Frame):
                 from datetime import datetime
                 from .companion import LOCAL
                 due=datetime.fromtimestamp(companion['next_candidate_at'],LOCAL).strftime('%H:%M')
-                lines.append(f"{due} 左右 · {companion['next_stage']}")
+                lines.append(f"下次可尝试 {due} · {companion['next_stage']}")
+                lines.append('届时仍会判断是否合适，可能保持安静。')
             pending = next((g.get('pending_count') for g in state.get('groups', [])
                             if g.get('name') == self.cfg.group), state.get('pending_count'))
             self.queue_size.set('—' if pending is None else f'{pending} 条')
@@ -546,12 +574,20 @@ class CompanionPage(tk.Frame):
         try:
             limit = int(self.limit.get())
         except ValueError:
-            raise ValueError('每日上限请填 1 至 3') from None
+            raise ValueError('每日上限请填 1 至 24') from None
+        try:
+            frequency={name:int(var.get()) for name,var in self.frequency_vars.items()}
+        except ValueError:
+            raise ValueError('等待时间请填 1 至 1440 的整数分钟') from None
+        try:
+            probability={name:float(var.get())/100 for name,var in self.probability_vars.items()}
+        except ValueError:
+            raise ValueError('开口概率请填 0 至 100 的百分比') from None
         return CompanionPreferences(enabled=self.enabled.get(), followup=self.followup.get(),
                                     idle=self.idle.get(), gentle_followups=self.gentle.get(), daily_max=limit,
                                     quiet_start=minutes(self.start.get()), quiet_end=minutes(self.end.get()),
                                     style=self.style.get('1.0', 'end-1c').strip(),
-                                    interests=self.interests.get().strip(), dates=dates)
+                                    interests=self.interests.get().strip(), dates=dates,**frequency,**probability)
 
     def save(self):
         try:
@@ -582,7 +618,7 @@ class CompanionPage(tk.Frame):
         self._run(work, done, message='正在联系本地助手…')
 
     def preview(self):
-        self._command(self.panel.client.companion_preview, '正在生成预览，结果将显示在陪伴状态中')
+        self._command(self.panel.client.companion_preview, '预览已提交，结果显示在右侧；不会发送到微信')
 
     def send_once(self):
         self._command(self.panel.client.companion_once, '主动聊天已排程，暂停助手可取消')
