@@ -165,6 +165,29 @@ def test_close_dialog_escape_cancels_and_missing_tray_disables_background(native
     finally:root.destroy()
 
 
+def test_close_choice_is_small_owned_window_and_leaves_page_visible(native_root):
+    import tkinter as tk
+    from xiaomao.feedback_ui import CloseChoice
+    root=tk.Toplevel(native_root);root.geometry('1000x740+3200+1800')
+    page=tk.Frame(root);page.pack(fill='both',expand=True)
+    original=tk.Entry(page);original.pack();original.insert(0,'未保存的页面内容')
+    root.update();before=root.geometry()
+    try:
+        dialog=CloseChoice(root);root.update()
+        assert dialog.winfo_toplevel() is dialog
+        assert str(dialog.transient())==str(root)
+        assert root.geometry()==before and page.winfo_ismapped()
+        assert original.get()=='未保存的页面内容'
+        assert 400<=dialog.winfo_width()<=520
+        assert 250<=dialog.winfo_height()<=450
+        assert abs(dialog.winfo_rootx()+dialog.winfo_width()/2-root.winfo_rootx()-root.winfo_width()/2)<15
+        root.tk.call(dialog.protocol('WM_DELETE_WINDOW'));root.update()
+        assert dialog.result is None and not dialog.winfo_exists()
+        assert root.winfo_exists() and page.winfo_ismapped()
+        assert root.grab_current() is None
+    finally:root.destroy()
+
+
 @pytest.mark.parametrize('discard',[True,False])
 def test_explicit_exit_confirms_unsaved_session_changes(tmp_path,monkeypatch,discard):
     p,events=panel(tmp_path)

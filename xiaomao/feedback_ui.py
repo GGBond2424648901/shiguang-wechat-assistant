@@ -1,4 +1,4 @@
-"""In-window action feedback. Never activates a window or interrupts typing."""
+"""Passive action feedback and a user-invoked, owned close dialog."""
 import re
 import tkinter as tk
 from time import monotonic
@@ -6,16 +6,20 @@ from tkinter import ttk
 from .workspace_ui import PAPER, GREEN, INK, LINE, button, label
 
 
-class CloseChoice(tk.Frame):
-    """In-window close chooser; cancellation never changes worker state."""
+class CloseChoice(tk.Toplevel):
+    """Small owned window; the underlying page and worker stay unchanged."""
     def __init__(self,root,*,background_available=True):
-        from .workspace_ui import BG,MUTED,card
-        super().__init__(root,bg=BG)
+        from .workspace_ui import MUTED
+        super().__init__(root,bg=PAPER)
+        self.withdraw()
+        self.title('关闭助手')
+        self.transient(root)
+        self.resizable(False,False)
         self.result=None;self._job=None;self._closing=False
         self.previous_focus=root.focus_get()
         self.previous_grab=root.grab_current()
-        self.place(relwidth=1,relheight=1);self.lift()
-        box=self.box=card(self,pad=24,radius=9)
+        box=self.box=tk.Frame(self,bg=PAPER,padx=24,pady=20)
+        box.pack(fill='both',expand=True)
         box.columnconfigure(0,weight=1)
         label(box,'关闭助手',20,bold=True).grid(row=0,column=0,sticky='w')
         label(box,'选择是否继续在后台运行',11,color=MUTED).grid(row=1,column=0,sticky='w',pady=(5,18))
@@ -29,9 +33,18 @@ class CloseChoice(tk.Frame):
         label(box,'结束全部会话的监听、定时任务和后台进程',10,color=MUTED,wraplength=370).grid(row=5,column=0,sticky='w',pady=(5,18))
         self.cancel_button=button(box,'取消',lambda:self.choose(None),compact=True)
         self.cancel_button.grid(row=6,column=0,sticky='e')
-        box.place(relx=.5,rely=.5,anchor='center',width=440,y=12)
-        self._escape=root.bind('<Escape>',lambda _:(self.choose(None),'break')[1],add='+')
+        self.protocol('WM_DELETE_WINDOW',lambda:self.choose(None))
+        self.bind('<Escape>',lambda _:(self.choose(None),'break')[1])
         self.bind('<Destroy>',self._destroyed,add='+')
+        self.update_idletasks()
+        width=max(440,self.winfo_reqwidth());height=self.winfo_reqheight()
+        x=root.winfo_rootx()+(root.winfo_width()-width)//2
+        y=root.winfo_rooty()+(root.winfo_height()-height)//2
+        self.geometry(f'{width}x{height}{x:+d}{y:+d}')
+        self._fade=True
+        try:self.attributes('-alpha',0.)
+        except tk.TclError:self._fade=False
+        self.deiconify()
         self.grab_set()
         (self.background_button if background_available else self.cancel_button).focus_set()
         self.started=monotonic();self._animate()
@@ -39,8 +52,9 @@ class CloseChoice(tk.Frame):
     def _animate(self):
         self._job=None
         fraction=min(1.,(monotonic()-self.started)/.13)
-        self.box.place_configure(y=round(12*(1-fraction)**3))
-        if fraction<1:self._job=self.after(16,self._animate)
+        if self._fade:
+            self.attributes('-alpha',1-(1-fraction)**3)
+            if fraction<1:self._job=self.after(16,self._animate)
 
     def choose(self,value):
         if self._closing:return
@@ -50,7 +64,6 @@ class CloseChoice(tk.Frame):
     def _destroyed(self,event):
         if event.widget is not self:return
         if self._job is not None:self.after_cancel(self._job)
-        self.master.unbind('<Escape>',self._escape)
         if self.grab_current() is self:self.grab_release()
         if self.previous_grab is not None and self.previous_grab.winfo_exists():self.previous_grab.grab_set()
         if self.previous_focus is not None and self.previous_focus.winfo_exists():self.previous_focus.focus_set()
