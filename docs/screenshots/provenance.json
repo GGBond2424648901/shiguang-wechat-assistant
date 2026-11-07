@@ -403,6 +403,185 @@
       ],
       "unchanged_outside_redactions": true,
       "note": "2026-11-06 historical verified WeChat exchange"
+    },
+    {
+      "file": "desktop-appearance.png",
+      "origin": "actual Windows application screenshot",
+      "source_sha256": "d19da5548a7a6b91bd2c7ce0280202345f118523884ad8095c97e68d0d5e6bc4",
+      "output_sha256": "d19da5548a7a6b91bd2c7ce0280202345f118523884ad8095c97e68d0d5e6bc4",
+      "source_size": [
+        1586,
+        992
+      ],
+      "crop": [
+        0,
+        0,
+        1586,
+        992
+      ],
+      "redaction_rectangles": [],
+      "unchanged_outside_redactions": true,
+      "note": "v0.3.0 Electron production renderer on Windows; isolated fictional profile, no cursor or private wallpaper."
+    },
+    {
+      "file": "desktop-close.png",
+      "origin": "actual Windows application screenshot",
+      "source_sha256": "f25afa4dcaa25ee5e72ba1eb463e8e165d3b3678e18b0880f04819f5fab5d8c4",
+      "output_sha256": "f25afa4dcaa25ee5e72ba1eb463e8e165d3b3678e18b0880f04819f5fab5d8c4",
+      "source_size": [
+        595,
+        395
+      ],
+      "crop": [
+        0,
+        0,
+        595,
+        395
+      ],
+      "redaction_rectangles": [],
+      "unchanged_outside_redactions": true,
+      "note": "v0.3.0 Electron production renderer on Windows; isolated fictional profile, no cursor or private wallpaper."
+    },
+    {
+      "file": "desktop-companion.png",
+      "origin": "actual Windows application screenshot",
+      "source_sha256": "bf580e6bdbe27660d9d627c9cd7e16a692d3d46207994fea4623f08eb345d8ed",
+      "output_sha256": "bf580e6bdbe27660d9d627c9cd7e16a692d3d46207994fea4623f08eb345d8ed",
+      "source_size": [
+        1586,
+        992
+      ],
+      "crop": [
+        0,
+        0,
+        1586,
+        992
+      ],
+      "redaction_rectangles": [],
+      "unchanged_outside_redactions": true,
+      "note": "v0.3.0 Electron production renderer on Windows; isolated fictional profile, no cursor or private wallpaper."
+    },
+    {
+      "file": "desktop-import.png",
+      "origin": "actual Windows application screenshot",
+      "source_sha256": "0f750f5d5a778a94ac085c67a73ab11afb7b4268a8747b27f758710d6723b192",
+      "output_sha256": "0f750f5d5a778a94ac085c67a73ab11afb7b4268a8747b27f758710d6723b192",
+      "source_size": [
+        1585,
+        992
+      ],
+      "crop": [
+        0,
+        0,
+        1585,
+        992
+      ],
+      "redaction_rectangles": [],
+      "unchanged_outside_redactions": true,
+      "note": "v0.3.0 Electron production renderer on Windows; isolated fictional profile, no cursor or private wallpaper."
+    },
+    {
+      "file": "desktop-persona.png",
+      "origin": "actual Windows application screenshot",
+      "source_sha256": "211eb8b5e395adfb446c9ee06cf08f8333cfc91fd3fb0a26872f1872ad8191e1",
+      "output_sha256": "211eb8b5e395adfb446c9ee06cf08f8333cfc91fd3fb0a26872f1872ad8191e1",
+      "source_size": [
+        1586,
+        992
+      ],
+      "crop": [
+        0,
+        0,
+        1586,
+        992
+      ],
+      "redaction_rectangles": [],
+      "unchanged_outside_redactions": true,
+      "note": "v0.3.0 Electron production renderer on Windows; isolated fictional profile, no cursor or private wallpaper."
+    },
+    {
+      "file": "desktop-sessions.png",
+      "origin": "actual Windows application screenshot",
+      "source_sha256": "10d286d7e1ae54da4935bd812c167d58cec52a48b8cb1028c89d0284c08b0c67",
+      "output_sha256": "10d286d7e1ae54da4935bd812c167d58cec52a48b8cb1028c89d0284c08b0c67",
+      "source_size": [
+        1487,
+        1058
+      ],
+      "crop": [
+        0,
+        0,
+        1487,
+        1058
+      ],
+      "redaction_rectangles": [],
+      "unchanged_outside_redactions": true,
+      "note": "v0.3.0 Electron production renderer on Windows; isolated fictional profile, no cursor or private wallpaper."
+    },
+    {
+      "file": "desktop-settings.png",
+      "origin": "actual Windows application screenshot",
+      "source_sha256": "281fafde5641c6850d0916625c241ffba082ea6adbe0d9d111611ae10effd6d5",
+      "output_sha256": "281fafde5641c6850d0916625c241ffba082ea6adbe0d9d111611ae10effd6d5",
+      "source_size": [
+        1586,
+        992
+      ],
+      "crop": [
+        0,
+        0,
+        1586,
+        992
+      ],
+      "redaction_rectangles": [],
+      "unchanged_outside_redactions": true,
+      "note": "v0.3.0 Electron production renderer on Windows; isolated fictional profile, no cursor or private wallpaper."
+    },
+    {
+      "file": "desktop-stickers.png",
+      "origin": "actual Windows application screenshot",
+      "source_sha256": "3c5e992dcdadb56b0d1ca693807622ee911e0f0ca0faf70a9c8aa2ee61dee99e",
+      "output_sha256": "3c5e992dcdadb56b0d1ca693807622ee911e0f0ca0faf70a9c8aa2ee61dee99e",
+      "source_size": [
+        1586,
+        992
+      ],
+      "crop": [
+        0,
+        0,
+        1586,
+        992
+      ],
+      "redaction_rectangles": [],
+      "unchanged_outside_redactions": true,
+      "note": "v0.3.0 Electron production renderer on Windows; isolated fictional profile, no cursor or private wallpaper."
+    },
+    {
+      "file": "desktop-workbench.png",
+      "origin": "actual Windows application screenshot",
+      "source_sha256": "133daa2f2aef074d7e160e50cbc1869556ee2c56dac996a00d83943a8a3172ff",
+      "output_sha256": "133daa2f2aef074d7e160e50cbc1869556ee2c56dac996a00d83943a8a3172ff",
+      "source_size": [
+        1487,
+        1058
+      ],
+      "crop": [
+        0,
+        0,
+        1487,
+        1058
+      ],
+      "redaction_rectangles": [],
+      "unchanged_outside_redactions": true,
+      "note": "v0.3.0 Electron production renderer on Windows; isolated fictional profile, no cursor or private wallpaper."
     }
-  ]
+  ],
+  "desktop_capture": {
+    "version": "0.3.0",
+    "capture": "Playwright Electron page screenshot",
+    "source": "production renderer",
+    "data": "fictional QA profile",
+    "cursor_included": false,
+    "private_wallpaper_included": false
+  }
 }

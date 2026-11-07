@@ -32,11 +32,11 @@ class ConversationMemory:
     MAX_MESSAGES = 4096
     SUMMARY_LIMIT = 4000
 
-    def __init__(self, runtime, group, clock=time.time, recent_limit=24):
+    def __init__(self, runtime, group, clock=time.time, recent_limit=24, *, read_only=False):
         if not isinstance(group, str) or not group or not 1 <= recent_limit <= 96:
             raise ValueError('群记忆配置无效')
-        self.directory = private_dir(Path(runtime))
-        salt = secret_bytes(self.directory / 'fingerprint.key')
+        self.directory = Path(runtime) if read_only else private_dir(Path(runtime))
+        salt = secret_bytes(self.directory / 'fingerprint.key', create=not read_only)
         digest = hmac.new(salt, group.encode('utf-8'), hashlib.sha256).hexdigest()
         self.path = self.directory / ('memory-'+digest+'.dpapi')
         self._entropy = b'xiaomao:group-memory:v1:' + digest.encode('ascii')

@@ -48,3 +48,27 @@ def validate_rule_map(rules):
             raise ValueError('会话回复规则身份无效')
         validate_rule_changes(preferences, allow_inherit=False)
 
+
+def persist_preferences(root,preferences,group=None,scope=None):
+    from dataclasses import replace
+    from .client import ControlClient, ControlUnavailable
+    from .config import Settings
+
+    validate_rule_changes(preferences,allow_inherit=group is not None)
+    client=ControlClient(root)
+    try:client.status()
+    except ControlUnavailable:
+        from .windows import worker_scope
+        if worker_scope(root) is not None:
+            raise ControlUnavailable('后台正在运行但暂未连接，未修改设置，请稍后重试')
+        original=cfg=Settings.load(root)
+        if group is not None:
+            target=cfg.conversation_targets.get(group,{})
+            if scope!=target.get('account','')+'/'+target.get('id',''):
+                raise ValueError('会话身份已改变，请重新选择')
+            cfg=cfg.with_conversation_rules(group,preferences)
+        else:cfg=replace(cfg,**preferences)
+        cfg.save(expected=original)
+        return {'offline':True}
+    return (client.configure_reply_rules(group,scope,preferences) if group is not None
+            else client.configure_reply_defaults(preferences))

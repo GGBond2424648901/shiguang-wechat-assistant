@@ -11,9 +11,9 @@ from .privacy import private_dir,secret_bytes,atomic_private_write
 class CompanionStore:
     MAX_BYTES=8*1024*1024
 
-    def __init__(self,runtime,scope):
-        self.directory=private_dir(Path(runtime));self.scope=scope
-        salt=secret_bytes(self.directory/'fingerprint.key')
+    def __init__(self,runtime,scope,*,read_only=False):
+        self.directory=Path(runtime) if read_only else private_dir(Path(runtime));self.scope=scope
+        salt=secret_bytes(self.directory/'fingerprint.key',create=not read_only)
         self.digest=hmac.new(salt,scope.encode(),hashlib.sha256).hexdigest()
         self.path=self.directory/('companion-'+self.digest+'.dpapi')
         self.entropy=b'xiaomao:companion:v1:'+self.digest.encode()

@@ -50,7 +50,7 @@ class ControlClient:
     def pending(self): return self.request("pending")
     def stop(self): return self.request("stop")
     def stop_if_idle(self):return self.request('stop_if_idle')
-    def reply_latest(self):return self.request('reply_latest')
+    def reply_latest(self,**target):return self.request('reply_latest',target)
     def companion_preview(self,**target):return self.request('companion_preview',target)
     def companion_once(self,**target):return self.request('companion_once',target)
     def companion_configure(self,group,scope,preferences):

@@ -232,10 +232,11 @@ EMOTIONS=(('开心','好耶','哈哈','成功','搞定','庆祝','击掌'),('困
 
 
 class StickerLibrary:
-    def __init__(self,root):
+    def __init__(self,root,*,read_only=False):
         from .sticker_import import StickerShelf
         self.root=Path(root).resolve();self.folder=self.root/'assets/sticker_library';self.items=[]
         self.shelf=StickerShelf(self.root)
+        self.read_only=read_only
         self.sources={};self.filenames={};self.preferences={};self.neutral=False
         self._readable=False
         self._stamp=object()
@@ -273,7 +274,7 @@ class StickerLibrary:
         try:
             stamp=self.shelf.database.stat().st_mtime_ns if self.shelf.database.exists() else None
             if stamp==self._stamp:return
-            rows,prefs,neutral=self.shelf.snapshot()
+            rows,prefs,neutral=(self.shelf.snapshot(read_only=True) if self.read_only else self.shelf.snapshot())
             items={s.id:s for s in self._base}
             by_digest={s.sha256:s for s in self._base}
             for row in rows:

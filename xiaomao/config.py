@@ -42,6 +42,14 @@ def configuration_lock(runtime):
             else:fcntl.flock(handle,fcntl.LOCK_UN)
 
 
+SEND_PACING_PRESETS = {
+    '活跃聊天 · 随机4–8秒 / 每分钟10条 / 每小时180条': (4, 180, 10, 4),
+    '快速接话 · 随机5–12秒 / 每分钟6条 / 每小时60条': (5, 60, 6, 7),
+    '日常聊天 · 随机10–17秒 / 每分钟6条 / 每小时60条': (10, 60, 6, 7),
+    '保守模式 · 随机30–37秒 / 每小时6条': (30, 6, 6, 7),
+}
+
+
 def validate_send_pacing(min_interval, hourly_limit, minute_limit, jitter):
     if type(min_interval) not in (int, float) or not 3 <= min_interval <= 3600:
         raise ValueError('最短间隔须为 3 至 3600 秒')

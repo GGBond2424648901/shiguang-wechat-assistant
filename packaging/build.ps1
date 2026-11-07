@@ -1,10 +1,14 @@
 [CmdletBinding()]
 param(
     [string]$Python,
-    [Parameter(Mandatory)][string]$Iscc
+    [Parameter(Mandatory)][string]$Iscc,
+    [string]$ElectronDist,
+    [Parameter(Mandatory)][string]$ResourceEditor,
+    [string]$ReleaseTools
 )
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
+if (-not $ReleaseTools) { $ReleaseTools = Join-Path $repo 'build/release-tools' }
 if (-not $Python) { $Python = Join-Path $repo '.venv/Scripts/python.exe' }
 $py = (Resolve-Path -LiteralPath $Python).Path
 $compiler = (Resolve-Path -LiteralPath $Iscc).Path
@@ -24,7 +28,9 @@ try {
     & $py -m PyInstaller --noconfirm --distpath $bundle --workpath "$job/work" 'packaging/Xiaomao.spec'
     if ($LASTEXITCODE) { throw 'Application freeze failed' }
     $payload = Join-Path $bundle 'Xiaomao'
-    & $py 'packaging/collect_notices.py' $payload (Join-Path $repo 'build/release-tools')
+    & "$PSScriptRoot/build_desktop.ps1" -Source $stage -Payload $payload -Version $version -ElectronDist $ElectronDist -ResourceEditor $ResourceEditor
+    if ($LASTEXITCODE) { throw 'Desktop runtime packaging failed' }
+    & $py 'packaging/collect_notices.py' $payload $ReleaseTools
     if ($LASTEXITCODE) { throw 'Distribution notices failed' }
     $compilerLicense = Join-Path (Split-Path $compiler) 'license.txt'
     Copy-Item -LiteralPath $compilerLicense -Destination (Join-Path $payload 'licenses/Inno-Setup.txt')

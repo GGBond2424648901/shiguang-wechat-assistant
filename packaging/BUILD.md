@@ -1,11 +1,11 @@
 # Windows x64 构建
 
-在安装了 Tk 的 **64 位 CPython 3.13**、uv、Inno Setup 6 的 Windows 上运行。发布验证使用 CPython 3.13.15、PyInstaller 6.22.3、Inno Setup 6.7.1。可通过官方 [Inno Setup 下载页](https://jrsoftware.org/isdl.php) 获取编译器，请核对安装文件的数字签名。
+在安装了 Tk 的 **64 位 CPython 3.13**、Node.js 24、uv、Inno Setup 6 和 Electron rcedit 的 Windows 上运行。发布验证使用 CPython 3.13.15、PyInstaller 6.22.3、Inno Setup 6.7.1。可通过官方 [Inno Setup 下载页](https://jrsoftware.org/isdl.php) 获取编译器，请核对安装文件的数字签名。
 
 ```powershell
 uv venv --python 3.13 .venv
 uv pip install --python .venv/Scripts/python.exe --require-hashes --only-binary :all: -r requirements.lock -r packaging/build-requirements.lock
-.\packaging\build.ps1 -Iscc 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe'
+.\packaging\build.ps1 -Iscc 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' -ResourceEditor 'C:\Tools\rcedit-x64.exe'
 ```
 
 构建脚本先按 `public-files.txt` 导出新的源码树，再在内部构建。公开源码包括审核过的模块、素材和自包含测试；本机截图、历史记录、私有配置、供应商参考仓库及未授权表情图片从不进入清单。出厂人格由随包的上游适配模板生成。每次导出都必须指定一个不存在的新目录。

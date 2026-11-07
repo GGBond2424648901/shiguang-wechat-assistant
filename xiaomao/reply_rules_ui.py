@@ -1,33 +1,10 @@
 """Identity-scoped reply preferences; editing a row never switches WeChat."""
-from dataclasses import replace
 import tkinter as tk
 from tkinter import ttk
 
-from .client import ControlClient, ControlUnavailable
 from .config import Settings
-from .reply_preferences import REPLY_MODES, STICKER_FREQUENCIES, validate_rule_changes
+from .reply_preferences import REPLY_MODES, STICKER_FREQUENCIES, persist_preferences
 from .workspace_ui import PAPER, MUTED, LINE, FONT, button, label
-
-
-def persist_preferences(root,preferences,group=None,scope=None):
-    validate_rule_changes(preferences,allow_inherit=group is not None)
-    client=ControlClient(root)
-    try:client.status()
-    except ControlUnavailable:
-        from .windows import worker_scope
-        if worker_scope(root) is not None:
-            raise ControlUnavailable('后台正在运行但暂未连接，未修改设置，请稍后重试')
-        original=cfg=Settings.load(root)
-        if group is not None:
-            target=cfg.conversation_targets.get(group,{})
-            if scope!=target.get('account','')+'/'+target.get('id',''):
-                raise ValueError('会话身份已改变，请重新选择')
-            cfg=cfg.with_conversation_rules(group,preferences)
-        else:cfg=replace(cfg,**preferences)
-        cfg.save(expected=original)
-        return {'offline':True}
-    return (client.configure_reply_rules(group,scope,preferences) if group is not None
-            else client.configure_reply_defaults(preferences))
 
 
 class ReplyRulesEditor(tk.Frame):

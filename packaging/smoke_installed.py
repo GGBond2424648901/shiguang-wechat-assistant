@@ -5,6 +5,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import shutil
 import subprocess
 import tempfile
 import threading
@@ -14,11 +15,44 @@ import sys
 sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 
 
-def smoke(app_dir):
-    with tempfile.TemporaryDirectory(prefix="xiaomao-release-test-") as temporary:
+def launch_panel(app_dir, data, env, entry):
+    executable = app_dir / 'Xiaomao.exe'
+    arguments = ['--root', str(data), 'gui']
+    if entry == 'vbs':
+        # Stage the same payload under a disposable LOCALAPPDATA on the same drive.
+        def link_or_copy(source, destination):
+            try:
+                os.link(source, destination)
+            except OSError:
+                shutil.copy2(source, destination)
+            return destination
+        staged = Path(env['LOCALAPPDATA']) / 'Programs' / 'XiaomaoAssistant'
+        shutil.copytree(app_dir, staged, copy_function=link_or_copy)
+        script = data / '启动拾光微信聊天助手.vbs'
+        shutil.copyfile(Path(__file__).resolve().parents[1] / script.name, script)
+        return subprocess.Popen(['wscript.exe', '//B', str(script)], env=env), staged
+    if entry == 'shortcut':
+        import win32com.client
+        shell = win32com.client.Dispatch('WScript.Shell')
+        link = data / '拾光微信聊天助手.lnk'
+        shortcut = shell.CreateShortcut(str(link))
+        shortcut.TargetPath = str(executable)
+        shortcut.Arguments = subprocess.list2cmdline(arguments)
+        shortcut.WorkingDirectory = str(app_dir)
+        shortcut.Save()
+        os.startfile(str(link))
+        return None, app_dir
+    return subprocess.Popen([str(executable), *arguments], env=env), app_dir
+
+
+def smoke(app_dir, entry='exe'):
+    with tempfile.TemporaryDirectory(prefix="xiaomao-release-test-", dir=app_dir.parent) as temporary:
         data = Path(temporary) / "profile"
         runtime = data / "runtime"
         runtime.mkdir(parents=True)
+        from xiaomao.config import Settings
+        Settings(data, group='示例会话', auto_on_launch=False).save()
+        config = (runtime / 'config.json').read_bytes()
         token = secrets.token_hex(32)
         calls = []
 
@@ -61,14 +95,18 @@ def smoke(app_dir):
         (runtime / "control.json").write_text(json.dumps({"host":"127.0.0.1", "port":server.server_port,
                                                         "token":token}), "utf-8")
         threading.Thread(target=server.serve_forever,daemon=True).start()
-        proc = subprocess.Popen([str(app_dir / "Xiaomao.exe"), "--root", str(data), "gui"], env=env)
+        proc, launcher_dir = launch_panel(app_dir, data, env, entry)
         try:
+            from xiaomao.panel_entry import request_stop_and_exit, signal_panel, _identity, _panel_present
+            panel_name = 'Local\\Shiguang.Panel.' + _identity(data)
             deadline = time.monotonic() + 40
-            while time.monotonic() < deadline and proc.poll() is None and not calls:
+            while time.monotonic() < deadline and (not calls or not signal_panel(data)):
                 time.sleep(.2)
-            assert calls and proc.poll() is None, f"GUI never connected (exit={proc.poll()})"
-            # Use the app's own exit IPC, not WM_CLOSE (which now asks what to do).
-            from xiaomao.panel_entry import request_stop_and_exit
+            assert calls and _panel_present(panel_name), f"GUI never connected (launcher exit={proc.poll() if proc else entry})"
+            if (app_dir / 'desktop/ShiguangDesktop.exe').is_file():
+                assert (runtime / 'upgrade-v030/config.json').read_bytes() == config
+            assert (runtime / 'config.json').read_bytes() == config
+            # The tray command follows the same panel-owned exit channel.
             errors=[]
             def request_exit():
                 try:
@@ -77,15 +115,29 @@ def smoke(app_dir):
             shutdown=threading.Thread(target=request_exit,daemon=True)
             shutdown.start();shutdown.join(20)
             assert not shutdown.is_alive() and not errors, errors
-            if proc.wait(timeout=20) != 0:
+            if proc and proc.wait(timeout=20) != 0:
                 raise RuntimeError("Installed GUI exited with an error")
+            deadline = time.monotonic() + 15
+            while _panel_present(panel_name) and time.monotonic() < deadline:
+                time.sleep(.1)
+            assert not _panel_present(panel_name), "GUI did not release its profile lock"
             assert "/stop" in calls and not (runtime / "control.json").exists()
-            print(json.dumps({"doctor":doctor, "synthetic_status_requests":calls.count('/status'),
+            print(json.dumps({"doctor":doctor, "entry":entry, "synthetic_status_requests":calls.count('/status'),
                               "full_exit_requested":True,"closed":True},ensure_ascii=False))
         finally:
-            if proc.poll() is None:
+            if proc and proc.poll() is None:
                 proc.kill()
                 proc.wait(timeout=10)
+            import psutil
+            for child in psutil.process_iter(['exe', 'cmdline']):
+                args = child.info['cmdline'] or ()
+                if (child.info['exe'] and Path(child.info['exe']).parent == launcher_dir/'desktop'
+                        and '--profile='+str(data) in args):
+                    try:
+                        child.terminate()
+                        child.wait(10)
+                    except psutil.NoSuchProcess:
+                        pass
             server.shutdown()
             server.server_close()
 
@@ -93,4 +145,6 @@ def smoke(app_dir):
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("installation",type=Path)
-    smoke(parser.parse_args().installation.resolve())
+    parser.add_argument("--entry", choices=["exe", "vbs", "shortcut"], default="exe")
+    args = parser.parse_args()
+    smoke(args.installation.resolve(), args.entry)

@@ -73,11 +73,18 @@ def main():
     from .brand import APP_NAME
     parser = argparse.ArgumentParser(description=APP_NAME+'，启动遵循本机运行偏好')
     parser.add_argument("--root", type=Path, default=default_root())
-    parser.add_argument("command", nargs="?", default="gui", choices=["gui","daemon","mcp","start","observe","enable","status","pause","stop","doctor","key","test-model"])
+    parser.add_argument("command", nargs="?", default="gui", choices=["gui","daemon","mcp","start","observe","enable","status","pause","stop","doctor","key","test-model","desktop-bridge"])
     parser.add_argument("--stdin", action="store_true", help="key 命令从标准输入读取；一行更新主密钥，多行依次替换主密钥及备用密钥")
     parser.add_argument("--ocr", action="store_true", help="doctor 使用内置测试文字核对 OCR，可离线运行")
     parser.add_argument('--initial-mode',choices=['auto','observe','paused'],help=argparse.SUPPRESS)
+    parser.add_argument('--legacy-ui', action='store_true', help='使用旧版桌面面板')
+    parser.add_argument('--managed', action='store_true', help=argparse.SUPPRESS)
+    parser.add_argument('--read-only', action='store_true', help=argparse.SUPPRESS)
     args = parser.parse_args()
+    if args.command == 'desktop-bridge':
+        from .desktop_bridge import run_bridge
+        run_bridge(args.root, read_only=args.read_only, managed=args.managed)
+        return
     from .client import ControlClient, ControlUnavailable
     from .config import Settings
     from .credentials import CredentialStore, CredentialError
@@ -89,8 +96,10 @@ def main():
             daemon(root,args.initial_mode)
             return
         if args.command == "gui":
-            from .gui import launch
-            launch(root)
+            from .desktop_launch import launch_desktop
+            if not launch_desktop(root, force_legacy=args.legacy_ui):
+                from .gui import launch
+                launch(root)
             return
         if args.command == "mcp":
             from .mcp_server import build_server

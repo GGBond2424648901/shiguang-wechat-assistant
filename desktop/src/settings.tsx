@@ -1,0 +1,288 @@
+import { Check, Crosshair, KeyRound, Layers3, Link2, Monitor, Plus, RotateCcw, Save, Send, Trash2 } from "lucide-react";
+import { useCallback, useEffect, useState, type ReactNode } from "react";
+import { defaultAppearance, errorMessage, request, type Appearance, type PageKey, type Status } from "./api";
+import { Button, Confirm, Empty, IconButton, PanelTitle, Select, Switch, useDraftGuard } from "./components";
+
+type Notify = (message: string, error?: boolean) => void;
+type General = {
+  model_name: string; auto_on_launch: boolean; split_replies: boolean; idle_wake: boolean;
+  self_display_name: string; self_name_unique_confirmed: boolean; owner_confirmed: boolean;
+};
+type Settings = General & {
+  account: string; scopeRevision: string; current: string; receive: string; owner_available: boolean; revision: string;
+  pacing: [number, number, number, number]; models: string[];
+  pacingPresets: { label: string; values: number[] }[];
+  keys: { identifier: string; suffix: string }[]; credentialError: string;
+};
+type Confirmation = { title: string; detail: string; run: () => void };
+type Draft<T> = { original: T; value: T; revision: string; scope: string };
+const same = (left: unknown, right: unknown) => JSON.stringify(left) === JSON.stringify(right);
+const changed = <T,>(draft?: Draft<T>) => Boolean(draft && !same(draft.original, draft.value));
+function updateDraft<T>(previous: Draft<T> | undefined, value: T, next: Settings, replace: boolean, rebase: boolean): Draft<T> {
+  if (!previous || replace || !changed(previous)) return {
+    original: value, value, revision: next.revision, scope: next.scopeRevision,
+  };
+  if (rebase && previous.scope === next.scopeRevision && same(previous.original, value))
+    return { ...previous, revision: next.revision };
+  return previous;
+}
+const fieldsOf = (state: Settings): General => ({
+  model_name: state.model_name, auto_on_launch: state.auto_on_launch,
+  split_replies: state.split_replies, idle_wake: state.idle_wake, self_display_name: state.self_display_name,
+  self_name_unique_confirmed: state.self_name_unique_confirmed, owner_confirmed: state.owner_confirmed,
+});
+const rateLabels = [
+  { name: "最短间隔（秒）", min: 3, max: 3600 }, { name: "每小时（条）", min: 1, max: 500 },
+  { name: "每分钟（条）", min: 1, max: 10 }, { name: "随机加时（秒）", min: 0, max: 30 },
+];
+
+export function SettingsPage({ active, status, appearance, setAppearance, notify, navigate }: {
+  active: boolean; status?: Status; appearance: Appearance; setAppearance: (value: Appearance) => void;
+  notify: Notify; navigate: (page: PageKey) => void;
+}) {
+  const [tab, setTab] = useState("general");
+  const [data, setData] = useState<Settings>();
+  const [general, setGeneral] = useState<Draft<General>>();
+  const [pacing, setPacing] = useState<Draft<string[]>>();
+  const [keys, setKeys] = useState([""]);
+  const [editingKeys, setEditingKeys] = useState(false);
+  const [target, setTarget] = useState("");
+  const [busy, setBusy] = useState("");
+  const [error, setError] = useState("");
+  const [confirm, setConfirm] = useState<Confirmation>();
+  const readOnly = status?.readOnly ?? true;
+  const draft = general?.value;
+  const rate = pacing?.value ?? [];
+  const configurationDirty = changed(general) || changed(pacing);
+  const dirty = configurationDirty || keys.some(key => !!key.trim());
+  const configChanged = Boolean(data && status?.revision && data.revision !== status.revision);
+  const generalStale = configChanged || general?.revision !== data?.revision;
+  const rateStale = configChanged || pacing?.revision !== data?.revision;
+  const editingDisabled = readOnly || !!busy;
+  useDraftGuard("settings", !readOnly && dirty);
+
+  const accept = useCallback((next: Settings, operation = "") => {
+    setData(next);
+    setGeneral(previous => updateDraft(previous, fieldsOf(next), next, operation === "general" || operation === "reload", operation === "rate"));
+    setPacing(previous => updateDraft(previous, next.pacing.map(String), next, operation === "rate" || operation === "reload", operation === "general"));
+    setError("");
+  }, []);
+  useEffect(() => {
+    if (!active || busy || data?.revision && !configChanged) return;
+    let current = true;
+    request<Settings>("settings.read").then(value => {
+      if (current) accept(value);
+    }).catch(error => { if (current) setError(errorMessage(error)); });
+    return () => { current = false; };
+  }, [active, busy, configChanged, data?.revision, status?.revision, accept]);
+
+  const perform = async (key: string, method: string, params: Record<string, unknown>, message: string) => {
+    if (busy) return;
+    setBusy(key);
+    try {
+      const next = await request<Settings>(method, params);
+      accept(next, key);
+      if (key === "append" || key === "replace") {
+        setKeys([""]);
+        setEditingKeys(false);
+      }
+      notify(message);
+    } catch (error) { notify(errorMessage(error), true); }
+    finally { setBusy(""); }
+  };
+
+  const reload = () => {
+    const run = () => void perform("reload", "settings.read", {}, "已读取最新设置");
+    if (configurationDirty) setConfirm({ title: "读取最新设置", detail: "读取后将放弃当前未保存的运行设置和节奏草稿。", run });
+    else run();
+  };
+  const credentials = (mode: "append" | "replace") => {
+    const values = keys.map(key => key.trim()).filter(Boolean);
+    if (!values.length) { notify("请输入要保存的密钥", true); return; }
+    const run = () => void perform(mode, "settings.credentials", { mode, values }, "加密密钥已保存");
+    if (mode === "replace" && data?.keys.length) {
+      setConfirm({ title: "替换已保存的密钥", detail: "使用当前输入替换整个密钥列表。", run });
+    } else run();
+  };
+  const test = async () => {
+    if (busy) return;
+    setBusy("test");
+    try { notify((await request<{ message: string }>("settings.testModel")).message); }
+    catch (error) { notify(errorMessage(error), true); }
+    finally { setBusy(""); }
+  };
+  const set = <K extends keyof General>(key: K, value: General[K]) =>
+    setGeneral(previous => previous && ({ ...previous, value: { ...previous.value, [key]: value } }));
+  const setRate = (value: string[] | ((previous: string[]) => string[])) =>
+    setPacing(previous => previous && ({ ...previous, value: typeof value === "function" ? value(previous.value) : value }));
+  const targetOptions = status?.sessions.map(session => ({ value: session.id, label: session.name })) ?? [];
+  const selected = status?.sessions.find(session => session.id === target)
+    ?? status?.sessions.find(session => session.id === status.primary);
+  const tabs = <div className="segments settings-tabs" role="group" aria-label="设置页面">
+    <Button variant={tab === "general" ? "primary" : "ghost"} aria-pressed={tab === "general"} onClick={() => setTab("general")}>常规</Button>
+    <Button variant={tab === "appearance" ? "primary" : "ghost"} aria-pressed={tab === "appearance"} onClick={() => setTab("appearance")}>界面外观</Button>
+  </div>;
+  return <div className="settings-page page-grid" data-tab={tab}>
+    <div className="settings-general page-grid" hidden={tab !== "general"}>
+      {data && draft ? <>
+        {(generalStale || rateStale) && <div className="inline-error" role="status">
+          <span>账号或设置已更新，当前草稿需核对后再保存。</span>
+          <Button busy={busy === "reload"} disabled={!!busy} onClick={reload}>读取最新设置</Button>
+        </div>}
+        <div className="settings-columns">
+          <section className="glass panel credentials-panel">
+            <PanelTitle icon={<Layers3 size={20} />}>模型与密钥</PanelTitle>
+            <div className="form-stack settings-form">
+              <p className="muted">配置对话模型和本机加密密钥。</p>
+              <div className="field settings-model"><span>对话模型</span><Select label="对话模型" value={draft.model_name}
+                options={data.models.map(value => ({ value, label: value }))} onChange={value => set("model_name", value)} disabled={editingDisabled} /></div>
+              <div className="row-heading"><strong>密钥管理</strong><span>已加密保存 {data.keys.length} 个</span></div>
+              {data.credentialError && <p className="muted">{data.credentialError}</p>}
+              <div className="credential-list">{data.keys.map((key, index) => <div className="credential-row" key={key.identifier}>
+                <KeyRound size={15} /><span>密钥 {index + 1} · •••• {key.suffix}</span>
+                <IconButton label={`删除密钥 ${index + 1}`} icon={<Trash2 size={15} />} disabled={data.keys.length <= 1 || readOnly || !!busy}
+                  onClick={() => setConfirm({ title: "删除此密钥", detail: `移除末四位为 ${key.suffix} 的密钥。`,
+                    run: () => void perform("remove", "settings.removeKey", { id: key.identifier }, "密钥已删除") })} />
+              </div>)}</div>
+              {!data.keys.length && !data.credentialError && <p className="muted">尚未添加密钥</p>}
+              {editingKeys && <><div className="key-inputs">{keys.map((value, index) => <label key={index} className="field">
+                <input type="password" autoComplete="off" spellCheck={false} aria-label={`新密钥 ${index + 1}`}
+                  placeholder={`新密钥 ${index + 1}`} value={value} maxLength={256} disabled={readOnly || !!busy}
+                  onChange={event => setKeys(values => values.map((key, at) => at === index ? event.target.value : key))} />
+              </label>)}</div>
+              <div className="flex key-tools">
+                <Button disabled={readOnly || keys.length >= 8 || !!busy} onClick={() => setKeys(previous => [...previous, ""])}>增加输入栏</Button>
+                <Button disabled={readOnly || !!busy} onClick={() => { setKeys([""]); setEditingKeys(false); }}>取消输入</Button>
+              </div>
+              <div className="flex key-actions">
+                <Button variant="primary" icon={<KeyRound size={16} />} disabled={readOnly || !!busy}
+                  onClick={() => credentials("append")}>追加密钥</Button>
+                <Button disabled={readOnly || !!busy} onClick={() => credentials("replace")}>替换密钥</Button>
+              </div></>}
+              <div className="flex key-actions">
+                {!editingKeys && <Button variant="primary" icon={<Plus size={16} />} disabled={readOnly || !!busy}
+                  onClick={() => setEditingKeys(true)}>添加密钥</Button>}
+                <Button icon={<Link2 size={15} />} busy={busy === "test"} disabled={readOnly || !!busy} onClick={() => void test()}>测试连接</Button>
+              </div>
+            </div>
+          </section>
+          <section className="glass panel wechat-settings">
+            <PanelTitle icon={<Monitor size={20} />} end={tabs}>微信与启动</PanelTitle>
+            <div className="form-stack settings-form">
+              <div className="row-heading route-status">
+                <strong>{selected?.calibrated && <Check size={20} />}{selected?.calibrated ? "微信窗口已校准" : "微信窗口待校准"}</strong>
+                <span>{data.account || "微信账号待核对"}</span></div>
+              <div className="flex route-settings">
+                <Select label="校准对象" options={targetOptions} value={selected?.id ?? ""} onChange={setTarget} />
+                <Button icon={<Crosshair size={15} />} disabled={readOnly} onClick={() =>
+                  void window.shiguang.calibrate(selected?.id).catch(error => notify(errorMessage(error), true))}>校准所选窗口</Button>
+                <Button onClick={() => navigate("sessions")}>管理监听</Button>
+              </div>
+              {selected?.windowState && <p className="muted">{selected.windowState}</p>}
+              <Switch checked={draft.auto_on_launch} onChange={value => set("auto_on_launch", value)} disabled={editingDisabled}>启动时自动回复</Switch>
+              <Switch checked={draft.split_replies} onChange={value => set("split_replies", value)} disabled={editingDisabled}>分气泡发送</Switch>
+              <Switch checked={draft.idle_wake} onChange={value => set("idle_wake", value)} disabled={editingDisabled}>空闲时唤起微信发送</Switch>
+              <label className="field">群内昵称<input value={draft.self_display_name} disabled={editingDisabled} maxLength={80}
+                onChange={event => set("self_display_name", event.target.value)} /></label>
+              <Switch checked={draft.self_name_unique_confirmed} onChange={value => set("self_name_unique_confirmed", value)}
+                disabled={editingDisabled}>已确认群内昵称唯一</Switch>
+              <Switch checked={draft.owner_confirmed} onChange={value => set("owner_confirmed", value)}
+                disabled={editingDisabled || !data.owner_available}>可称呼当前私聊为“主人”</Switch>
+            </div>
+          </section>
+        </div>
+        <section className="glass panel pacing-panel">
+          <PanelTitle icon={<Send size={19} />} end={<div className="pacing-presets flex">
+            <span className="muted fine-print">节奏预设</span>
+            <Select label="节奏预设" value={data.pacingPresets.find(preset => preset.values.join(",") === rate.join(","))?.label || ""}
+              options={[{ value: "", label: "自定义节奏" }, ...data.pacingPresets.map(({ label }) => ({ value: label, label }))]}
+              onChange={label => {
+                const preset = data.pacingPresets.find(item => item.label === label);
+                if (preset) setRate(preset.values.map(String));
+              }} disabled={readOnly || !!busy} />
+          </div>}>发送节奏</PanelTitle>
+          <div className="rate-fields">{[0, 3, 2, 1].map(index => <label key={index} className="field">
+            {rateLabels[index].name}<input type="number" step={index === 0 || index === 3 ? "any" : 1}
+              min={rateLabels[index].min} max={rateLabels[index].max}
+              value={rate[index] ?? ""} disabled={readOnly || !!busy}
+              onChange={event => setRate(values => values.map((value, at) => at === index ? event.target.value : value))} />
+          </label>)}
+          <Button variant="primary" icon={<Save size={16} />} disabled={editingDisabled || rateStale}
+            onClick={() => void perform("rate", "settings.pacing", {
+              expected: pacing?.revision, minimum: Number(rate[0]), hourly: Number(rate[1]), minute: Number(rate[2]), jitter: Number(rate[3]),
+            }, "发送节奏已保存")}>保存节奏</Button></div>
+        </section>
+        <div className="settings-footer flex glass">
+          <span>{data.receive === "database" ? "数据库监听 · 微信最小化时也可接收" : "可见窗口监听"}</span>
+          <Button onClick={() => navigate("workbench")}>查看队列</Button>
+          <Button onClick={() => void window.shiguang.windowAction("close")}>关闭选项</Button>
+          <Button variant="primary" icon={<Save size={16} />} disabled={editingDisabled || generalStale} busy={busy === "general"}
+            onClick={() => void perform("general", "settings.save", { expected: general?.revision, fields: draft }, "运行设置已保存")}>保存设置</Button>
+        </div>
+      </> : <section className="glass panel">
+        <PanelTitle end={tabs}>运行设置</PanelTitle><Empty title={error || "正在读取运行设置"} />
+        {error && <Button onClick={reload} disabled={!!busy}>读取最新设置</Button>}
+      </section>}
+    </div>
+    <div hidden={tab !== "appearance"}><AppearancePage appearance={appearance} onChange={setAppearance}
+      readOnly={readOnly} notify={notify} tabs={tabs} /></div>
+    {confirm && <Confirm title={confirm.title} detail={confirm.detail} cancel={() => setConfirm(undefined)}
+      confirm={() => { const run = confirm.run; setConfirm(undefined); run(); }} />}
+  </div>;
+}
+
+function AppearancePage({ appearance, onChange, readOnly, notify, tabs }: {
+  appearance: Appearance; onChange: (value: Appearance) => void; readOnly: boolean; notify: Notify;
+  tabs: ReactNode;
+}) {
+  const [sample, setSample] = useState("浅色文字");
+  const [segment, setSegment] = useState(0);
+  const [saving, setSaving] = useState(false);
+  const save = async () => {
+    if (saving) return;
+    setSaving(true);
+    try {
+      onChange(await request<Appearance>("appearance.save", {
+        transparency: appearance.transparency, reduceMotion: appearance.reduceMotion, expected: appearance.revision,
+      }));
+      notify("界面外观已保存");
+    } catch (error) { notify(errorMessage(error), true); }
+    finally { setSaving(false); }
+  };
+  return <section className="glass panel appearance-pane">
+    <PanelTitle icon={<Layers3 size={20} />} end={tabs}>外观</PanelTitle>
+    <p className="appearance-description muted">调整背景透光和过渡动效，在右侧预览文字与控件。</p>
+    <div className="settings-columns appearance-columns">
+      <section className="glass panel appearance-options">
+        <h3>玻璃透明度</h3><p className="muted">调整时即时预览。</p>
+        <div className="opacity-control"><input type="range" aria-label="玻璃透明度" min={0} max={48}
+          value={appearance.transparency} onChange={event => onChange({ ...appearance, transparency: Number(event.target.value) })} />
+          <output>{appearance.transparency}%</output></div>
+        <div className="opacity-labels"><span>更清晰</span><span>更多背景</span></div>
+        <div className="form-divider" />
+        <Switch checked={appearance.reduceMotion} onChange={value => onChange({ ...appearance, reduceMotion: value })}>减少动态效果</Switch>
+        <p className="muted fine-print">关闭过渡动效，减少界面位移。</p>
+        <div className="flex appearance-actions">
+          <Button icon={<RotateCcw size={15} />} onClick={() => onChange({ ...defaultAppearance, revision: appearance.revision })}>恢复默认</Button>
+          <Button variant="primary" icon={<Check size={16} />} busy={saving} disabled={readOnly} onClick={() => void save()}>保存外观</Button>
+        </div>
+      </section>
+      <section className="glass panel appearance-preview">
+        <h3><Monitor size={17} /> 界面预览</h3><p className="muted">预览卡片、下拉框和文字对比度。</p>
+        <div className="appearance-sample glass">
+          <b>示例卡片 A</b>
+          <div className="flex">
+            <Select label="示例选择" value={sample} options={["浅色文字", "次要文字"].map(value => ({ value, label: value }))} onChange={setSample} />
+            <div className="segments">{[0, 1].map(index => <Button key={index} variant={segment === index ? "primary" : "ghost"}
+              onClick={() => setSegment(index)}>{index === 0 ? "选项一" : "选项二"}</Button>)}</div>
+          </div>
+        </div>
+        <div className="appearance-sample glass">
+          <b>示例卡片 B</b>
+          <label className="field">文本输入<input placeholder="点击查看焦点边缘" /></label>
+          <span className="muted">次要说明文字</span>
+        </div>
+      </section>
+    </div>
+  </section>;
+}

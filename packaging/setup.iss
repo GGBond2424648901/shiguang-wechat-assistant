@@ -1,4 +1,4 @@
-﻿#ifndef AppVersion
+#ifndef AppVersion
   #error AppVersion required
 #endif
 #ifndef Payload
@@ -47,5 +47,6 @@ Type: dirifempty; Name: "{userprograms}\小猫助手"
 
 [Icons]
 Name: "{group}\拾光微信聊天助手"; Filename: "{app}\Xiaomao.exe"
+Name: "{group}\拾光微信聊天助手（旧版界面）"; Filename: "{app}\Xiaomao.exe"; Parameters: "gui --legacy-ui"
 Name: "{userdesktop}\拾光微信聊天助手"; Filename: "{app}\Xiaomao.exe"; Tasks: desktopicon
 

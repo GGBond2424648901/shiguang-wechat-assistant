@@ -1,0 +1,138 @@
+import { ChevronDown, Check, LoaderCircle, X } from "lucide-react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { runLabels, type RunMode } from "./api";
+
+type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
+  variant?: "primary" | "ghost" | "danger";
+  busy?: boolean;
+  icon?: ReactNode;
+};
+export function Button({ variant, busy, icon, className = "", children, ...props }: ButtonProps) {
+  return <button type="button" {...props} disabled={props.disabled || busy}
+    className={`button ${variant || "default"} ${className}`} aria-busy={busy || undefined}>
+    {busy ? <LoaderCircle className="spinner" size={16} /> : icon}{children}
+  </button>;
+}
+
+export function IconButton({ label, icon, ...props }: ButtonProps & { label: string }) {
+  return <Button aria-label={label} title={label} icon={icon} {...props}
+    className={`icon-button ${props.className ?? ""}`} />;
+}
+
+export function StatusPill({ mode, compact = false }: { mode: RunMode; compact?: boolean }) {
+  return <span className={`status-pill ${mode} ${compact ? "compact" : ""}`}>
+    <span aria-hidden="true" />{runLabels[mode] ?? mode}
+  </span>;
+}
+
+export function PanelTitle({ icon, children, end }: { icon?: ReactNode; children: ReactNode; end?: ReactNode }) {
+  return <header className="panel-title">
+    <h2>{icon}{children}</h2>{end && <div className="panel-end">{end}</div>}
+  </header>;
+}
+
+export function Empty({ title, detail, icon }: { title: string; detail?: string; icon?: ReactNode }) {
+  return <div className="empty">{icon}<strong>{title}</strong>{detail && <span>{detail}</span>}</div>;
+}
+
+export type Option = { label: string; value: string };
+export function Select({ label, options, value, onChange, disabled = false }: {
+  label: string; options: readonly Option[]; value: string;
+  onChange: (value: string) => void; disabled?: boolean;
+}) {
+  const menu = useRef<HTMLDivElement>(null);
+  const trigger = useRef<HTMLButtonElement>(null);
+  const id = useId();
+  const [open, setOpen] = useState(false);
+  const [index, setIndex] = useState(0);
+  const selected = options.findIndex(item => item.value === value);
+  useEffect(() => {
+    if (!open) return;
+    const outside = (event: PointerEvent) => {
+      if (!menu.current?.contains(event.target as Node)) setOpen(false);
+    };
+    document.addEventListener("pointerdown", outside);
+    return () => document.removeEventListener("pointerdown", outside);
+  }, [open]);
+  useEffect(() => {
+    if (!open) return;
+    const selected = document.getElementById(`${id}-${index}`);
+    const list = selected?.parentElement;
+    if (!selected || !list) return;
+    if (selected.offsetTop < list.scrollTop) list.scrollTop = selected.offsetTop;
+    const bottom = selected.offsetTop + selected.offsetHeight;
+    if (bottom > list.scrollTop + list.clientHeight) list.scrollTop = bottom - list.clientHeight;
+  }, [open, index, id]);
+  const choose = (at: number) => {
+    if (options[at]) onChange(options[at].value);
+    setOpen(false);
+    trigger.current?.focus();
+  };
+  return <div className="select" ref={menu} data-open={open || undefined}>
+    <button ref={trigger} type="button" className="select-trigger" role="combobox"
+      aria-label={label} aria-expanded={open} aria-controls={id}
+      aria-activedescendant={open ? `${id}-${index}` : undefined} disabled={disabled || !options.length}
+      onBlur={() => setOpen(false)}
+      onClick={() => { setIndex(Math.max(0, selected)); setOpen(!open); }}
+      onKeyDown={event => {
+        if (event.key === "Escape" && open) { event.stopPropagation(); setOpen(false); return; }
+        if (event.key === "Tab") { setOpen(false); return; }
+        if (["ArrowDown", "ArrowUp", "Home", "End"].includes(event.key)) {
+          event.preventDefault();
+          if (!open) { setIndex(Math.max(0, selected)); setOpen(true); return; }
+          const next = event.key === "Home" ? 0 : event.key === "End" ? options.length - 1
+            : (index + (event.key === "ArrowDown" ? 1 : -1) + options.length) % options.length;
+          setIndex(next);
+        }
+        if (open && (event.key === "Enter" || event.key === " ")) {
+          event.preventDefault();
+          choose(index);
+        }
+      }}>
+      <span>{options[selected]?.label ?? "请选择"}</span><ChevronDown size={16} />
+    </button>
+    {open && <div className="select-menu" id={id} role="listbox" aria-label={label}>
+      {options.map((option, at) => <div key={option.value} id={`${id}-${at}`} role="option"
+        aria-selected={option.value === value} className={at === index ? "highlight" : ""}
+        onPointerMove={() => setIndex(at)} onPointerDown={event => event.preventDefault()}
+        onClick={() => choose(at)}>{option.label}{option.value === value && <Check size={15} />}</div>)}
+    </div>}
+  </div>;
+}
+
+export function Switch({ checked, onChange, children, disabled = false }: {
+  checked: boolean; onChange: (value: boolean) => void; children: ReactNode; disabled?: boolean;
+}) {
+  return <label className="switch-label">
+    <input type="checkbox" role="switch" checked={checked} onChange={event => onChange(event.target.checked)}
+      disabled={disabled} />
+    <span className="switch-track" aria-hidden="true" /><span>{children}</span>
+  </label>;
+}
+
+export function Confirm({ title, detail, confirm, cancel }: {
+  title: string; detail: string; confirm: () => void; cancel: () => void;
+}) {
+  const dialog = useRef<HTMLDialogElement>(null);
+  const label = useId();
+  useEffect(() => {
+    const node = dialog.current;
+    node?.showModal();
+    return () => node?.close();
+  }, []);
+  return <dialog ref={dialog} className="confirm-dialog" aria-labelledby={label}
+    onCancel={event => { event.preventDefault(); cancel(); }}>
+    <div className="confirm-heading"><h2 id={label}>{title}</h2>
+      <IconButton label="关闭确认" icon={<X size={15} />} onClick={cancel} /></div>
+    <p>{detail}</p>
+    <div className="confirm-actions"><Button autoFocus onClick={cancel}>取消</Button>
+      <Button variant="primary" onClick={confirm}>确认</Button></div>
+  </dialog>;
+}
+
+export function useDraftGuard(page: string, dirty: boolean) {
+  useLayoutEffect(() => {
+    void window.shiguang.draft(page, dirty).catch(() => {});
+    return () => { void window.shiguang.draft(page, false).catch(() => {}); };
+  }, [page, dirty]);
+}

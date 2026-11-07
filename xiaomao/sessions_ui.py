@@ -7,7 +7,7 @@ import tkinter as tk
 from tkinter import ttk
 import unicodedata
 
-from .config import Settings,validate_send_pacing
+from .config import Settings, SEND_PACING_PRESETS as RATES, validate_send_pacing
 from .contacts import search_directory, visual_name_key
 from .selection import load_directory
 from .reply_preferences import REPLY_MODES, STICKER_FREQUENCIES
@@ -15,12 +15,7 @@ from .reply_rules_ui import ReplyRulesEditor
 from .workspace_ui import BG, FONT, INK, LINE, MUTED, NAVY, PAPER, PEACH, button, card, glyph, label
 
 
-RATES = {
-    '活跃聊天 · 随机4–8秒 / 每分钟10条 / 每小时180条': (4, 180, 10, 4),
-    '快速接话 · 随机5–12秒 / 每分钟6条 / 每小时60条': (5, 60, 6, 7),
-    '日常聊天 · 随机10–17秒 / 每分钟6条 / 每小时60条': (10, 60, 6, 7),
-    '保守模式 · 随机30–37秒 / 每小时6条': (30, 6, 6, 7),
-}
+
 MODES = [('natural', '自然参与'), ('all', '逐条回复'), ('mentions', '仅点名')]
 KINDS = {'group': '群聊', 'private': '个人', 'service': '系统服务'}
 CUSTOM_RATE = '自定义节奏'

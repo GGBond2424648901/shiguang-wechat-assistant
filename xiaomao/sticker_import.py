@@ -29,6 +29,7 @@ class Picture:
     frames: int
     duration_ms: int
     preview: bytes
+    thumbnail: bytes = b''
 
 
 def inspect_picture(path):
@@ -58,7 +59,9 @@ def inspect_picture(path):
         for t in thumbs:
             sheet.paste(t,(x,(sheet.height-t.height)//2),t);x+=t.width
         preview=io.BytesIO();sheet.save(preview,format='PNG')
-        return Picture(path,hashlib.sha256(data).hexdigest(),ext,len(data),w,h,frames,duration,preview.getvalue())
+        thumbnail=io.BytesIO();thumbs[0].save(thumbnail,format='PNG')
+        return Picture(path,hashlib.sha256(data).hexdigest(),ext,len(data),w,h,frames,duration,
+                       preview.getvalue(),thumbnail.getvalue())
     except (OSError,Image.DecompressionBombError,EOFError) as error:
         raise ValueError('图片损坏、无法解码或尺寸过大') from error
 
@@ -94,9 +97,14 @@ class StickerShelf:
         """)
         return db
 
-    def snapshot(self):
+    def snapshot(self, *, read_only=False):
         if not self.database.exists():return [],{},False
-        with closing(self.connect()) as db,db:
+        if read_only:
+            connection = sqlite3.connect(self.database.as_uri() + '?mode=ro', uri=True, timeout=5)
+            connection.row_factory = sqlite3.Row
+        else:
+            connection = self.connect()
+        with closing(connection) as db,db:
             db.execute('BEGIN')
             rows=[dict(r) for r in db.execute('SELECT * FROM media ORDER BY rowid DESC LIMIT 10000')]
             prefs=dict(db.execute('SELECT category,priority FROM prefs'))

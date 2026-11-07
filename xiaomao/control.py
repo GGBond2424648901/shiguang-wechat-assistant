@@ -66,7 +66,7 @@ class ControlServer:
                     return self.answer(401, {"error": "控制凭据无效"})
                 routes = {"GET": {"/status": engine.status, "/pending": lambda: {"tasks": engine.pending()}},
                           "POST": {"/observe": engine.observe, "/enable": engine.enable, "/pause": engine.pause, "/stop": engine.stop,
-                                   "/reply_latest":engine.reply_latest,
+                                   "/reply_latest":lambda:engine.reply_latest(**payload),
                                    "/stop_if_idle":lambda:engine.stop_if_idle(),
                                    "/reload_windows":lambda:engine.reload_windows(),
                                    "/queue_text":lambda:engine.queue_text(**payload),
@@ -112,7 +112,7 @@ class ControlServer:
                             if not isinstance(payload,dict) or set(payload)!={'preferences'}:
                                 return self.answer(400, {"error": "需要回复偏好设置"})
                         elif (self.path in ('/enable_selected','/pause_selected','/companion_configure','/configure_reply_rules') or
-                                self.path in ('/companion_preview','/companion_once') and payload!={}):
+                                self.path in ('/reply_latest','/companion_preview','/companion_once') and payload!={}):
                             keys={'group','scope','preferences'} if self.path in ('/companion_configure','/configure_reply_rules') else {'group','scope'}
                             if not isinstance(payload,dict) or set(payload)!=keys or not all(isinstance(payload[k],str) and payload[k] for k in ('group','scope')):
                                 return self.answer(400, {"error": "请指定监听会话及身份"})

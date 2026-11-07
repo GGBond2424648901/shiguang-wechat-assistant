@@ -30,9 +30,9 @@ def private_dir(path: Path) -> Path:
     return path
 
 
-def secret_bytes(path: Path, size: int = 32) -> bytes:
+def secret_bytes(path: Path, size: int = 32, *, create=True) -> bytes:
     import secrets
-    if not path.exists():
+    if create and not path.exists():
         with path.open("xb") as output:
             output.write(secrets.token_bytes(size))
         make_private(path)

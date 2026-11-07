@@ -523,11 +523,14 @@ class Resident:
                 return self.stop(preserve_companion=True)
         finally:self.cycle_lock.release()
 
-    def reply_latest(self):
+    def reply_latest(self, *, group=None, scope=None):
         # 本机恢复入口只指向群列表第一项，绝不把所有群历史一起排队。
         with self.lock:
+            primary = self.engines[0]
+            if (group is not None or scope is not None) and self._selected_engine(group,scope) is not primary:
+                raise ValueError('后台正在应用新主会话，请稍后再试')
             self.index=self.turns=0
-            self.engines[0].reply_latest()
+            primary.reply_latest()
             return self.status()
 
     def queue_text(self, group, text, request_id):
