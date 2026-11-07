@@ -58,7 +58,7 @@ class TrayIcon:
     _NIN_KEYSELECT = 0x401
     _RESTORE_DELAYS = (0.25, 1, 2, 4)
     _COMMANDS = ((1001, '打开助手', 'open'), (1002, '运行状态', 'status'),
-                 (1003, '暂停全部', 'pause'), (1004, '停止并退出', 'exit'))
+                 (1003, '暂停全部', 'pause'), (1004, '完全退出', 'exit'))
 
     def __init__(self, icon_path: Path | str | None = None, *,
                  on_open: Callable[[], object], on_pause: Callable[[], object],

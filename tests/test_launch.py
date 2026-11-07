@@ -71,7 +71,7 @@ def test_different_data_directory_reports_owner_without_starting_a_second_worker
         assert windows.worker_scope(primary) == 'current'
         assert windows.worker_scope(secondary) == 'other'
         monkeypatch.setattr('xiaomao.launch.spawn_worker', lambda *a, **k: pytest.fail('duplicate spawn'))
-        with pytest.raises(ControlUnavailable, match='停止并退出'):
+        with pytest.raises(ControlUnavailable, match='完全退出'):
             ControlClient(secondary).start(initial_mode='paused')
         assert not secondary.exists()
     finally:

@@ -298,7 +298,7 @@ def test_keyboard_activation_opens_panel_and_ignores_other_icon_ids(native):
         tray.stop()
 
 
-@pytest.mark.parametrize('label,expected', [('打开助手', 'open'), ('暂停全部', 'pause'), ('停止并退出', 'exit')])
+@pytest.mark.parametrize('label,expected', [('打开助手', 'open'), ('暂停全部', 'pause'), ('完全退出', 'exit')])
 def test_context_menu_dispatches_only_the_selected_command(native, label, expected):
     api, _ = native
     calls = []
@@ -311,7 +311,7 @@ def test_context_menu_dispatches_only_the_selected_command(native, label, expect
         eventually(lambda: calls)
         assert calls == [expected]
         assert [row[2] for row in api.shown_menus[0] if row[0] != api.MF_SEPARATOR] == [
-            '打开助手', '运行状态', '暂停全部', '停止并退出']
+            '打开助手', '运行状态', '暂停全部', '完全退出']
         assert tray.running and api.shell_icons
         eventually(lambda: not api.menus)
     finally:
@@ -542,7 +542,7 @@ def test_explicit_exit_callback_can_stop_tray_without_deadlocking(native):
     tray = make_tray(native, on_exit=exit_app)
     try:
         tray.start()
-        api.selected_label = '停止并退出'
+        api.selected_label = '完全退出'
         api.notify(api.WM_RBUTTONUP)
         assert exited.wait(2)
         assert not tray.running and not api.shell_icons

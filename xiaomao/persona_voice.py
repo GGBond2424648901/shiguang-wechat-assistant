@@ -38,6 +38,40 @@ _SCENARIOS = (
     (r'调皮|逗|笨蛋|坏蛋|胖', ('调皮', '傲娇', '假装生气')),
 )
 
+# This selects relevant author-written excerpts, never a canned answer or a
+# send decision. Elliptical followups need reliable same-member antecedents.
+_CARE_CUE = re.compile(r'淋雨|下雨|大雨|雨变|雨太|没(?:有|带)?伞|出站|到站|地铁|在路上|回家|饿|没吃|没睡|熬夜|睡不着|赶车|赶不上|迷路|主动关心|关心我|照顾我|给出方案')
+_CARE_FOLLOWUP = re.compile(r'^(?:那|可是|但|现在|外面|好像|雨|又|还是|已经|更|越来越|还没|还|又开始|真的|所以)*'
+                          r'(?:变大|变得更大|大了|没停|不停|冷|湿透|淋湿|变冷|好冷|更糟|来不及|怎么办|怎么和我说|你应该怎么和我说)'
+                          r'[呢呀啊啦了？?！!，,。\s]*$')
+
+
+def _care_context(messages):
+    latest = next((m for m in reversed(messages) if m.direction == 'in'), None)
+    if latest is None or latest.quoted or latest.quality < .92:
+        return False
+    if _CARE_CUE.search(latest.text):
+        return True
+    if not _CARE_FOLLOWUP.fullmatch(latest.text.strip()):
+        return False
+    if not re.fullmatch(r'p_[a-f0-9]{16}', latest.speaker_id):
+        return False
+    previous = [m for m in messages if m is not latest and m.direction == 'in'
+                and m.kind == 'text' and m.speaker_id == latest.speaker_id
+                and not m.quoted and m.quality >= .92
+                and (not latest.created_at or not m.created_at or 0 <= latest.created_at - m.created_at <= 1800)][-4:]
+    return any(_CARE_CUE.search(m.text) for m in previous)
+
+
+_CARE_EXECUTION = (
+    '\n本轮关怀聚焦：接续同一成员眼前的处境，直接补上眼前需要的关心和帮助。'
+    '用人格原有的温柔、甜意、聪明和小俏皮说具体的话；不是感叹一句、宣布自己会关心，再等对方催。'
+    '分享处境可以自然多想一步；问怎么办时给出眼下可做的办法，信息不够可边给已知可用的选择边问清关键点。'
+    '纠正上次回复时直接完成这次关怀，不停在道歉或分析自己的话术；已完成的事情翻篇，不重复叮嘱。'
+    '关心基于已知事实，不替对方决定位置、行动、病情或未来天气；办法符合常识与当前条件。'
+    '示例仅用于声线与思路，每次重新结合现实内容。'
+)
+
 _EXECUTION = (
     '本轮声线聚焦：完整人格已经加载，表达强度随场景变化。自然不等于平淡。'
     '日常默认是这位活泼的小鲸鱼在亲自接话，不是中性的客服答完后贴一个语气词。'
@@ -57,7 +91,7 @@ _EXECUTION = (
 def _sections(modules):
     result = []
     for module in modules:
-        if not module.enabled or module.id not in ('v3', 'v4', 'v5'):
+        if not module.enabled or module.id not in ('v3', 'v4', 'v5', 'v14'):
             continue
         # Normalize only this additional display capsule, never the source.
         normalized = '\n'.join(module.text.splitlines())
@@ -79,7 +113,13 @@ def voice_focus(root, messages, *, proactive=False):
     latest = next((m.text for m in reversed(messages) if m.direction == 'in'), '')
     if _SERIOUS.search(latest):
         return '本轮声线聚焦：当前是严肃话题，准确、直接、清楚优先，按完整人格收敛玩笑与颜文字'
-    keys = ('闲聊', '联想', '有自己的喜好') if proactive else next((keys for pattern, keys in _SCENARIOS if re.search(pattern, latest)), ('调皮', '语言风格'))
+    care_enabled = any(m.enabled and m.id == 'v14' for m in state.modules)
+    care = (care_enabled and not re.search(_SCENARIOS[0][0], latest)
+            and not _FICTION_REQUEST.search(latest) and _care_context(messages))
+    keys = (('甜蜜陪伴', '主动关心', '闲聊', '联想') if proactive and care_enabled else
+            ('闲聊', '联想', '有自己的喜好') if proactive else
+            ('处境关怀', '实际帮助', '甜蜜陪伴') if care else
+            next((keys for pattern, keys in _SCENARIOS if re.search(pattern, latest)), ('调皮', '语言风格')))
     ranked = []
     for order, (title, heading, body) in enumerate(_sections(state.modules)):
         score = sum(4 for k in keys if k in heading)
@@ -95,7 +135,7 @@ def voice_focus(root, messages, *, proactive=False):
         size += len(text)
         if len(selected) == 2:
             break
-    return (_EXECUTION + '\n' + '\n\n'.join(selected) +
+    return (_EXECUTION + (_CARE_EXECUTION if care_enabled and (care or proactive) else '') + '\n' + '\n\n'.join(selected) +
         '\n现在按原文的可爱强度开口：普通闲聊是明显软萌、俏皮、有点小得意的小鲸鱼，'
         '不是若有若无的客气。让反应有玩心，措辞松软、有起伏，合适时可以耍赖、'
         '夸张地接梗、发挥有趣的比喻，或描写符合当下互动的角色动作；不是给平淡答案追加“呀”。'

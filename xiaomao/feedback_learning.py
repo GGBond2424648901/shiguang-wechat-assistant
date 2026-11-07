@@ -5,8 +5,8 @@ import re
 from .companion_memory import source_ref
 
 _MEMBER = re.compile(r'p_[a-f0-9]{16}')
-_STYLE = re.compile(r'说话|语气|回复|回答|接话|追问|口头禅|称呼|撒娇|颜文字|表情|安慰|玩笑|嘿嘿|客服|机器人|温柔|自然|简短')
-_FEEDBACK = re.compile(r'不要|别|少|多|喜欢|希望|以后|可以|太|总|老|刚才|这样|一点|点儿')
+_STYLE = re.compile(r'说话|语气|回复|回答|接话|追问|口头禅|称呼|撒娇|颜文字|表情|安慰|玩笑|嘿嘿|客服|机器人|温柔|自然|简短|关心|照顾|体贴|主动|给出方案')
+_FEEDBACK = re.compile(r'不要|别|少|多|喜欢|希望|以后|可以|太|总|老|刚才|这样|一点|点儿|为什么不|怎么不|应该')
 
 
 def explicit_feedback(text):

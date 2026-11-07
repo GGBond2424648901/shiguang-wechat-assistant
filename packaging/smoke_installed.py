@@ -1,7 +1,5 @@
 """Verify the installed CLI, OCR and GUI against synthetic data only."""
 import argparse
-import ctypes
-from ctypes import wintypes
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import os
@@ -11,6 +9,9 @@ import subprocess
 import tempfile
 import threading
 import time
+from types import SimpleNamespace
+import sys
+sys.path.insert(0,str(Path(__file__).resolve().parents[1]))
 
 
 def smoke(app_dir):
@@ -35,6 +36,17 @@ def smoke(app_dir):
                 self.end_headers()
                 self.wfile.write(payload)
 
+            def do_POST(self):
+                if self.headers.get("Authorization") != "Bearer " + token or self.path != "/stop":
+                    self.send_error(403)
+                    return
+                calls.append(self.path)
+                (runtime / "control.json").unlink(missing_ok=True)
+                self.send_response(200)
+                self.send_header("Content-Type", "application/json")
+                self.end_headers()
+                self.wfile.write(b'{"stopped":true}')
+
             def log_message(self, *args):
                 pass
 
@@ -50,39 +62,26 @@ def smoke(app_dir):
                                                         "token":token}), "utf-8")
         threading.Thread(target=server.serve_forever,daemon=True).start()
         proc = subprocess.Popen([str(app_dir / "Xiaomao.exe"), "--root", str(data), "gui"], env=env)
-        user = ctypes.WinDLL("user32", use_last_error=True)
-        callback = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
-        user.EnumWindows.argtypes = [callback, wintypes.LPARAM]
-        user.GetWindowThreadProcessId.argtypes = [wintypes.HWND, ctypes.POINTER(wintypes.DWORD)]
-        user.IsWindowVisible.argtypes = [wintypes.HWND]
-        user.GetWindowTextW.argtypes = [wintypes.HWND, wintypes.LPWSTR, ctypes.c_int]
-        found = []
-        @callback
-        def inspect(hwnd, _):
-            pid = wintypes.DWORD()
-            user.GetWindowThreadProcessId(hwnd, ctypes.byref(pid))
-            if pid.value == proc.pid and user.IsWindowVisible(hwnd):
-                title = ctypes.create_unicode_buffer(512)
-                user.GetWindowTextW(hwnd, title, len(title))
-                if title.value:
-                    found.append((hwnd, title.value))
-            return True
         try:
             deadline = time.monotonic() + 40
-            while time.monotonic() < deadline and proc.poll() is None:
-                found.clear()
-                user.EnumWindows(inspect, 0)
-                if found and calls:
-                    break
+            while time.monotonic() < deadline and proc.poll() is None and not calls:
                 time.sleep(.2)
-            assert found and calls, f"No application window or control request (exit={proc.poll()})"
-            user.PostMessageW.argtypes = [wintypes.HWND, wintypes.UINT, wintypes.WPARAM, wintypes.LPARAM]
-            if not user.PostMessageW(found[0][0], 0x10, 0, 0):
-                raise OSError("Could not close the test GUI")
+            assert calls and proc.poll() is None, f"GUI never connected (exit={proc.poll()})"
+            # Use the app's own exit IPC, not WM_CLOSE (which now asks what to do).
+            from xiaomao.panel_entry import request_stop_and_exit
+            errors=[]
+            def request_exit():
+                try:
+                    request_stop_and_exit(data,SimpleNamespace(stop=lambda:errors.append('GUI exit channel missing')))
+                except Exception as error:errors.append(type(error).__name__)
+            shutdown=threading.Thread(target=request_exit,daemon=True)
+            shutdown.start();shutdown.join(20)
+            assert not shutdown.is_alive() and not errors, errors
             if proc.wait(timeout=20) != 0:
                 raise RuntimeError("Installed GUI exited with an error")
-            print(json.dumps({"doctor":doctor, "window":found[0][1], "synthetic_status_requests":len(calls),
-                              "closed":True},ensure_ascii=False))
+            assert "/stop" in calls and not (runtime / "control.json").exists()
+            print(json.dumps({"doctor":doctor, "synthetic_status_requests":calls.count('/status'),
+                              "full_exit_requested":True,"closed":True},ensure_ascii=False))
         finally:
             if proc.poll() is None:
                 proc.kill()

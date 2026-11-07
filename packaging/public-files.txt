@@ -228,6 +228,7 @@ xiaomao/kaomoji.py
 tests/test_kaomoji_variety.py
 tests/test_sticker_interruption.py
 tests/test_persona_voice_focus.py
+tests/test_care_continuity.py
 tests/test_sticker_followthrough.py
 tests/test_sticker_engine.py
 tests/test_persona_modules.py
@@ -253,3 +254,5 @@ tests/test_waiting_reply.py
 tests/test_wechat_voice.py
 tests/test_windows_contract.py
 scripts/verify_sticker_selfchat.py
+docs/qa/2026-11-07-care-persona-consistency.md
+docs/screenshots/close-options.jpg

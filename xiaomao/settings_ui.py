@@ -377,7 +377,7 @@ class SettingsPage(tk.Frame):
         footer=tk.Frame(self,bg=BG);footer.grid(row=1,column=0,columnspan=2,sticky='ew',pady=(10,0))
         self.save_button=_action(footer,'保存设置',self.save,True,'save')
         self.save_button.pack(side='right')
-        _action(footer,'停止并退出',self.panel.stop_and_exit).pack(side='right',padx=10)
+        _action(footer,'完全退出',self.panel.stop_and_exit).pack(side='right',padx=10)
         self.canvas.bind('<Configure>',self._arrange)
         self._wheel_tag=f'SettingsScroll{self.winfo_id()}'
         self.bind_class(self._wheel_tag,'<MouseWheel>',self._wheel)

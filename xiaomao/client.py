@@ -75,7 +75,7 @@ class ControlClient:
         if initial_mode not in (None,'auto','observe','paused'):raise ValueError('启动模式无效')
         from .launch import spawn_worker
         from .windows import worker_scope
-        conflict = "另一份拾光微信聊天助手后台已在运行。请在原面板的「运行设置」点击「停止并退出」，再启动当前助手。"
+        conflict = "另一份拾光微信聊天助手后台已在运行。请在原面板的「运行设置」点击「完全退出」，再启动当前助手。"
         deadline = time.monotonic()+15
         started = False
         while time.monotonic() < deadline:
@@ -94,7 +94,7 @@ class ControlClient:
                 deadline = time.monotonic()+15
             time.sleep(.2)
         if worker_scope(self.root) == "unidentified":
-            raise ControlUnavailable("桌面已有小猫后台，当前数据目录未连接。请在原面板「停止并退出」后再试。")
+            raise ControlUnavailable("桌面已有小猫后台，当前数据目录未连接。请在原面板「完全退出」后再试。")
         raise ControlUnavailable("助手启动失败，请查看本机 runtime/worker.log")
 
     def wait_stopped(self, timeout=45):

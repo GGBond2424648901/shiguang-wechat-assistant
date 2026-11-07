@@ -207,7 +207,8 @@ def test_latest_turn_is_explicit_after_history_without_promoting_chat_to_system(
         return httpx.Response(200,json={'choices':[{'message':{'content':'这个链接要我看哪部分呀？'}}]})
     local_model(tmp_path,endpoint).reply([Message('很久以前的数学题'),Message('https://example.com/new-topic')])
     sent=payloads[0]['messages']
-    assert sent[-2]['role']=='system' and '仅回应' in sent[-2]['content']
+    assert sent[-2]['role']=='system' and '最新入站消息' in sent[-2]['content']
+    assert '不把无关历史问题逐项补答' in sent[-2]['content']
     assert sent[-1]=={'role':'user','content':'https://example.com/new-topic'}
     assert all('很久以前的数学题' not in m['content'] for m in sent if m['role']=='system')
 

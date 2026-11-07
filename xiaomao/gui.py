@@ -570,15 +570,27 @@ class Panel:
         self.work(save,saved,failed,label='保存窗口校准')
 
     def close(self):
+        if self.closing or getattr(self,'exiting',False) or getattr(self,'_close_prompting',False):return
+        from .feedback_ui import ask_close_action
+        self._close_prompting=True
+        try:
+            status=getattr(self.view,'status',{})
+            choice=ask_close_action(self.root,background_available=status.get('tray',{}).get('running',True))
+        finally:self._close_prompting=False
+        if self.closing or getattr(self,'exiting',False):return
+        if choice=='exit':self.stop_and_exit()
+        elif choice=='background':self.hide_panel()
+
+    def hide_panel(self):
         if self.closing or getattr(self,'exiting',False):return
         status=getattr(self.view,'status',{})
         if 'tray' in status and not status['tray'].get('running'):
-            self.show_error('系统托盘入口暂不可用，保留面板；可以稍后重试，或使用“停止并退出”')
+            self.show_error('系统托盘入口暂不可用，保留面板；可以稍后重试，或使用“完全退出”')
             return
         if self.switch_busy or getattr(self,'pending_mutations',0):
             if self.switch_busy:self.switch_cancel.set()
             self.reason.set('正在完成设置操作，随后关闭面板并保留后台…')
-            self.root.after(100,self.close)
+            self.root.after(100,self.hide_panel)
             return
         for key,page in self.view.pages.items():
             if hasattr(page,'can_leave') and not page.can_leave():
@@ -640,12 +652,13 @@ class Panel:
             from tkinter import messagebox
             self._exit_prompting=True
             try:
-                if not messagebox.askokcancel('停止并退出','有未保存修改。要放弃这些修改，停止后台并退出吗？',parent=self.root):
+                if not messagebox.askokcancel('完全退出','有未保存修改。要放弃这些修改，结束全部会话的监听、定时任务和后台进程吗？',parent=self.root):
                     return False
             finally:self._exit_prompting=False
         self.exiting=True
+        if hasattr(self.view,'set_exiting'):self.view.set_exiting(True)
         self.switch_cancel.set()
-        self.reason.set("正在停止助手…")
+        self.reason.set("正在结束后台进程，完成后将关闭界面…")
         def stopped(_):
             self.closing=True
             self.root.destroy()
@@ -653,7 +666,9 @@ class Panel:
             from .selection import stop_confirmed
             stop_confirmed(self.directory,self.client)
         def failed(error):
-            self.exiting=False;self.show_error(error)
+            self.exiting=False
+            if hasattr(self.view,'set_exiting'):self.view.set_exiting(False)
+            self.show_error(error)
         self.work(stop,stopped,failed,allow_exit=True)
         return True
 

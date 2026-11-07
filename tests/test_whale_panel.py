@@ -119,6 +119,9 @@ def test_native_pages_keep_their_controls_and_show_real_activity(tmp_path,native
         view.select('pending');assert ('queue',0) in events and view.page=='assistant'
         assert not view.pages['companion'].active
         view.select('settings');assert field.get()=='unsaved input'
+        view.set_exiting(True)
+        assert '完全退出' in view.header_status.cget('text')
+        view.set_exiting(False)
         assert view.pages['settings'].winfo_manager()=='grid'
         view.nav['settings'].focus_force();root.update()
         view.nav['settings'].event_generate('<Alt-KeyPress-3>');root.update()

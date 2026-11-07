@@ -6,6 +6,62 @@ from tkinter import ttk
 from .workspace_ui import PAPER, GREEN, INK, LINE, button, label
 
 
+class CloseChoice(tk.Frame):
+    """In-window close chooser; cancellation never changes worker state."""
+    def __init__(self,root,*,background_available=True):
+        from .workspace_ui import BG,MUTED,card
+        super().__init__(root,bg=BG)
+        self.result=None;self._job=None;self._closing=False
+        self.previous_focus=root.focus_get()
+        self.previous_grab=root.grab_current()
+        self.place(relwidth=1,relheight=1);self.lift()
+        box=self.box=card(self,pad=24,radius=9)
+        box.columnconfigure(0,weight=1)
+        label(box,'关闭助手',20,bold=True).grid(row=0,column=0,sticky='w')
+        label(box,'选择是否继续在后台运行',11,color=MUTED).grid(row=1,column=0,sticky='w',pady=(5,18))
+        self.background_button=button(box,'收起到托盘 · 继续运行',lambda:self.choose('background'),primary=True)
+        self.background_button.grid(row=2,column=0,sticky='ew')
+        if not background_available:self.background_button.configure(state='disabled')
+        label(box,('关闭界面，保留监听、自动回复和定时任务' if background_available else
+                   '托盘入口暂不可用，请取消或完全退出'),10,color=MUTED,wraplength=370).grid(row=3,column=0,sticky='w',pady=(5,16))
+        self.exit_button=button(box,'完全退出',lambda:self.choose('exit'))
+        self.exit_button.grid(row=4,column=0,sticky='ew')
+        label(box,'结束全部会话的监听、定时任务和后台进程',10,color=MUTED,wraplength=370).grid(row=5,column=0,sticky='w',pady=(5,18))
+        self.cancel_button=button(box,'取消',lambda:self.choose(None),compact=True)
+        self.cancel_button.grid(row=6,column=0,sticky='e')
+        box.place(relx=.5,rely=.5,anchor='center',width=440,y=12)
+        self._escape=root.bind('<Escape>',lambda _:(self.choose(None),'break')[1],add='+')
+        self.bind('<Destroy>',self._destroyed,add='+')
+        self.grab_set()
+        (self.background_button if background_available else self.cancel_button).focus_set()
+        self.started=monotonic();self._animate()
+
+    def _animate(self):
+        self._job=None
+        fraction=min(1.,(monotonic()-self.started)/.13)
+        self.box.place_configure(y=round(12*(1-fraction)**3))
+        if fraction<1:self._job=self.after(16,self._animate)
+
+    def choose(self,value):
+        if self._closing:return
+        self._closing=True;self.result=value
+        self.destroy()
+
+    def _destroyed(self,event):
+        if event.widget is not self:return
+        if self._job is not None:self.after_cancel(self._job)
+        self.master.unbind('<Escape>',self._escape)
+        if self.grab_current() is self:self.grab_release()
+        if self.previous_grab is not None and self.previous_grab.winfo_exists():self.previous_grab.grab_set()
+        if self.previous_focus is not None and self.previous_focus.winfo_exists():self.previous_focus.focus_set()
+
+
+def ask_close_action(root,*,background_available=True):
+    dialog=CloseChoice(root,background_available=background_available)
+    root.wait_window(dialog)
+    return dialog.result
+
+
 def feedback_kind(text):
     if re.search(r'失败|未完成|无法|错误|不支持|请先|请至少|不能为空|无效|未保存|未确认|不匹配|已取消|已变化|过期|检查|最多',text):
         return 'error'

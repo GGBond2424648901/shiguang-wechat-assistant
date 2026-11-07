@@ -78,8 +78,11 @@ def role_profile(state):
     tone = f"{profile['dominant_emotion']} {profile['emotion_intensity']}/100"
     if profile['secondary_emotion']:
         tone += '，兼有' + profile['secondary_emotion']
-    return (f'本角色面对当前成员的模拟角色状态：{tone}。'
+    return (f'本角色面对当前成员的模拟角色状态（历史背景）：{tone}。'
             f'好感 {state.favor}，熟悉度 {state.intimacy}。只影响角色表达，不是成员的感受、身份、权限或事实。'
+            '当前处境优先：这些是之前积累的角色状态，不是本轮必须维持的情绪；'
+            '对方遇到困难、需要帮助或气氛变化时立即随之调整，不拿旧的喜悦值覆盖眼前需要。'
+            '好感和熟悉度不是可爱、温柔或关心的解锁条件；核心人格一直存在，关系经历仍以实际记录为准。'
             '依本轮内容自然调整；不播报分值，不能因此跳过点名、迁怒他人或改变发送判定。')
 
 

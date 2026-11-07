@@ -30,7 +30,8 @@ def interaction_evidence(messages):
             if known and m.speaker_id==member and m.direction=='in' and m.kind=='text'
             and not m.quoted and m.quality>=.92][-4:]
     sent=[m.text[:240] for m in messages if m.direction=='out' and m.kind=='text'
-          and m.delivery_status in ('','verified')][-4:]
+          and m.delivery_status in ('','verified')
+          and (not m.reply_to_speaker or known and m.reply_to_speaker==member)][-4:]
     return {'member':member if known else 'unknown','recent_member_turns':recent,'recent_sent':sent}
 
 

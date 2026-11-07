@@ -53,7 +53,7 @@ def panel(tmp_path):
 
 
 def test_closing_panel_keeps_standalone_worker_running(tmp_path):
-    p,events=panel(tmp_path);p.close()
+    p,events=panel(tmp_path);p.hide_panel()
     assert events==['closed'] and p.closing
 
 
@@ -94,13 +94,75 @@ def test_reopen_reconnect_keeps_existing_worker_paused(tmp_path,monkeypatch):
 def test_missing_tray_does_not_discard_last_visible_entry(tmp_path):
     p,events=panel(tmp_path)
     p.view.status={'tray':{'running':False,'error':'通知图标暂不可用'}}
-    p.close()
+    p.hide_panel()
     assert not p.closing and events==['error']
 
 
 def test_explicit_stop_and_exit_waits_for_worker_exit(tmp_path):
     p,events=panel(tmp_path);p.stop_and_exit()
     assert events==['stop','wait','closed'] and p.closing
+
+
+def test_failed_full_exit_keeps_panel_available_for_retry(tmp_path):
+    from xiaomao.client import ControlUnavailable
+    p,events=panel(tmp_path)
+    p.view.set_exiting=lambda value:events.append(('exiting',value))
+    def fail_wait():raise ControlUnavailable('后台仍在结束当前请求')
+    p.client.wait_stopped=fail_wait
+    def work(action,success,failure,**options):
+        try:result=action()
+        except ControlUnavailable as error:failure(str(error))
+        else:success(result)
+    p.work=work
+    p.stop_and_exit()
+    assert events==[('exiting',True),'stop',('exiting',False),'error']
+    assert not p.closing and not p.exiting
+
+
+@pytest.mark.parametrize('choice,expected',[('background',['closed']),('exit',['stop','wait','closed']),(None,[])])
+def test_window_close_choice_routes_background_full_exit_or_cancel(tmp_path,monkeypatch,choice,expected):
+    p,events=panel(tmp_path)
+    monkeypatch.setattr('xiaomao.feedback_ui.ask_close_action',lambda *a,**kw:choice,raising=False)
+    p.close()
+    assert events==expected
+
+
+def test_close_chooser_does_not_reenter_and_allows_full_exit_without_tray(tmp_path,monkeypatch):
+    p,events=panel(tmp_path);p.view.status={'tray':{'running':False}}
+    opened=[]
+    def choose(*args,**kw):
+        opened.append(kw);p.close();return 'exit'
+    monkeypatch.setattr('xiaomao.feedback_ui.ask_close_action',choose,raising=False)
+    p.close()
+    assert len(opened)==1 and opened[0]['background_available'] is False
+    assert events==['stop','wait','closed']
+
+
+@pytest.mark.parametrize('choice', ['background','exit',None])
+def test_close_dialog_buttons_return_only_the_chosen_action(native_root,choice):
+    import tkinter as tk
+    from xiaomao.feedback_ui import CloseChoice
+    root=tk.Toplevel(native_root);root.geometry('930x620+3400+2000')
+    try:
+        dialog=CloseChoice(root);root.update()
+        control={'background':dialog.background_button,'exit':dialog.exit_button,None:dialog.cancel_button}[choice]
+        assert control.winfo_ismapped() and dialog.grab_current() is dialog
+        control.invoke();root.update()
+        assert dialog.result==choice and not dialog.winfo_exists() and root.grab_current() is None
+    finally:root.destroy()
+
+
+def test_close_dialog_escape_cancels_and_missing_tray_disables_background(native_root):
+    import tkinter as tk
+    from xiaomao.feedback_ui import CloseChoice
+    root=tk.Toplevel(native_root);root.geometry('930x620+3400+2000')
+    try:
+        dialog=CloseChoice(root,background_available=False);root.update()
+        dialog.background_button.invoke();assert dialog.winfo_exists()
+        dialog.cancel_button.focus_force();root.update()
+        dialog.cancel_button.event_generate('<Escape>');root.update()
+        assert dialog.result is None and not dialog.winfo_exists()
+    finally:root.destroy()
 
 
 @pytest.mark.parametrize('discard',[True,False])

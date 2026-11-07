@@ -199,7 +199,7 @@ def titlebar(root, view):
         control.pack(side='left')
         control.bind('<Return>', lambda e: e.widget.invoke())
         control._hint=HoverTip(control,lambda w=control,n=name:
-            '关闭界面，后台继续运行' if n=='close' else str(w.cget('text')))
+            '关闭选项：后台运行 / 完全退出' if n=='close' else str(w.cget('text')))
 
     last_zoomed=None
     def update_maximize_icon(event):
@@ -445,6 +445,12 @@ class GlassView(tk.Frame):
         self.local_status=label(bottom,'本地助手',10,bold=True,color=PAPER);self.local_status.pack(anchor='w')
         self.side_note=label(bottom,'读取连接状态…',8,color='#D5E1E8');self.side_note.pack(anchor='w',pady=(2,0))
         label(bottom,'Alt + 1–6 切换页面',8,color='#ACC0CD').pack(anchor='w',pady=(8,0))
+
+    def set_exiting(self,exiting):
+        if exiting:
+            self.header_status.configure(text='●  正在完全退出',fg=MUTED)
+            self.side_note.configure(text='正在结束后台进程…')
+        else:self.update_text()
 
     def _paint_nav(self):
         active='sessions' if self.page=='contacts' else self.page
