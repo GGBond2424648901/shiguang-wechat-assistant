@@ -31,6 +31,7 @@ export interface Status {
 
 export interface Queue {
   total: number;
+  receiptTotal: number;
   note: string;
   tasks: { id: string; group: string; sender: string; text: string; reply: string; state: string; progress: string }[];
   receipts: { at: number; group: string; text: string }[];

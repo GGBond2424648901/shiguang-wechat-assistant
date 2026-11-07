@@ -123,6 +123,16 @@ async function main() {
     await scope.press("Enter");
     await page.getByText("这周有约拍吗？", { exact: true }).waitFor();
 
+    const history = page.getByRole("navigation", { name: "已确认回执分页" });
+    await history.waitFor({ timeout: 7000 });
+    await page.getByText("历史回执 6", { exact: true }).waitFor();
+    await history.getByRole("button", { name: "更早", exact: true }).click();
+    await page.getByText("历史回执 1", { exact: true }).waitFor();
+    assert.equal(await page.getByText("历史回执 6", { exact: true }).count(), 0);
+    await history.getByRole("button", { name: "较新", exact: true }).click();
+    await page.getByText("历史回执 6", { exact: true }).waitFor();
+    assert.equal(await page.getByText("历史回执 1", { exact: true }).count(), 0);
+
     await page.getByRole("button", { name: "表情包", exact: true }).click();
     await page.getByText("共 5,000 项", { exact: true }).waitFor();
     const gallery = page.getByTestId("gallery-scroll");

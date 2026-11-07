@@ -232,6 +232,8 @@ h1, h2, h3, p { margin: 0; }
 .queue-panel .panel-end .select { width: 152px; }
 .queue-panel .select-trigger, .active-session .session-actions .button:last-child { border-color: rgb(250 207 181 / .75); }
 .queue-list, .watch-list { overflow: auto; min-height: 0; flex: 1; scrollbar-gutter: stable; }
+.receipt-pagination { gap: 6px; flex-wrap: wrap; padding: 6px 0; font-size: 13px; border-bottom: 1px solid var(--soft-line); }
+.receipt-pagination .button { min-height: 32px; font-size: inherit; }
 .queue-row { display: flex; align-items: center; gap: 20px; min-height: 103px; padding: 14px 1px; border-bottom: 1px solid var(--soft-line); }
 .queue-row .glyph { width: 50px; height: 50px; }
 .queue-row .glyph svg { width: 28px; height: 28px; }

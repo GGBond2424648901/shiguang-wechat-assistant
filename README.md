@@ -8,7 +8,9 @@
 
 **v0.3.0** 使用 Electron、React 与 TypeScript 重做六个页面。页面共用固定侧栏，切换时保留筛选和编辑草稿，图库按可见区域加载。可在「运行设置 → 界面外观」即时预览并保存玻璃透明度，或开启减少动态效果。Python 后台、会话配置、人格模块、加密记忆和 CLI／MCP 沿用原有数据目录。
 
-[下载 Windows x64 安装包与校验值](https://github.com/GGBond2424648901/shiguang-wechat-assistant/releases/tag/v0.3.0)
+**v0.3.1** 在工作台发送队列中增加了按会话翻阅已确认回执的功能。待发队列和回执历史分别翻页。
+
+[下载 Windows x64 安装包与校验值](https://github.com/GGBond2424648901/shiguang-wechat-assistant/releases/tag/v0.3.1)
 
 ![v0.3.0 Windows 工作台实机截图，使用隔离示例数据](docs/screenshots/desktop-workbench.png)
 

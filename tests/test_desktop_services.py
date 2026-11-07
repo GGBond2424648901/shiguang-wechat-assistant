@@ -68,6 +68,96 @@ def test_dashboard_filters_by_verified_identity_and_rejects_old_account(tmp_path
     assert len(worker.calls) == 1
 
 
+def test_queue_pages_scoped_receipts_without_rereading_the_archive(tmp_path, monkeypatch):
+    from xiaomao import receipts
+    from xiaomao.desktop_service import DesktopService
+    from xiaomao.domain import Message
+    from xiaomao.memory import ConversationMemory
+
+    cfg = configured(tmp_path)
+    group = cfg.for_group('晨光群')
+    friend = cfg.for_group('小禾')
+    for scope, peer, count in ((group.memory_scope, 'example@chatroom', 6),
+                               (friend.memory_scope, 'example_friend', 1)):
+        memory = ConversationMemory(cfg.runtime, scope)
+        for number in range(1, count + 1):
+            memory.remember(Message(f'已确认 {number}', direction='out', speaker_id='self',
+                message_id=f'{peer}/s/{number}', reply_to_id=f'{peer}/s/200',
+                reply_to_speaker='p_' + 'a' * 16, created_at=1000 + number))
+        memory.remember(Message('手动发送', direction='out', speaker_id='self',
+            message_id=f'{peer}/s/201', created_at=1100))
+
+    reads = []
+    original = receipts._receipt_rows
+
+    def read(*args, **kwargs):
+        reads.append(args[2])
+        return original(*args, **kwargs)
+
+    monkeypatch.setattr(receipts, '_receipt_rows', read)
+    panel = DesktopService(tmp_path, client=FixtureClient())
+    selected = {'session': cfg.conversation_pause_key('晨光群')}
+    latest = panel.call('view.queue', selected)
+    assert latest['receiptTotal'] == 6
+    assert [row['text'] for row in latest['receipts']] == ['已确认 6', '已确认 5', '已确认 4', '已确认 3']
+    earlier = panel.call('view.queue', {**selected, 'receipt_offset': 4})
+    assert [row['text'] for row in earlier['receipts']] == ['已确认 2', '已确认 1']
+    assert earlier['tasks'] == latest['tasks']
+    assert earlier['receiptTotal'] == 6
+    other = panel.call('view.queue', {'session': cfg.conversation_pause_key('小禾')})
+    assert other['receiptTotal'] == 1
+    assert [row['group'] for row in other['receipts']] == ['小禾']
+    assert panel.call('view.queue', selected) == latest
+    assert reads == [group.memory_scope, friend.memory_scope]
+    with pytest.raises(ValueError, match='分页'):
+        panel.call('view.queue', {**selected, 'receipt_offset': -4})
+
+
+def test_receipt_history_includes_an_older_confirmed_proactive_message(tmp_path):
+    from xiaomao.desktop_service import DesktopService
+    from xiaomao.domain import Message
+    from xiaomao.memory import ConversationMemory
+    from xiaomao.store import StateStore
+
+    cfg = configured(tmp_path)
+    memory = ConversationMemory(cfg.runtime, cfg.memory_scope)
+    store = StateStore(cfg.runtime)
+    try:
+        for number in range(1, 71):
+            message = Message(f'已发 {number}', direction='out', speaker_id='self',
+                message_id=f'example@chatroom/s/{number}', created_at=1000 + number)
+            task = store.create(f'receipt-{number}', message.created_at - 1)
+            store.mark_sending(task, message.created_at - 1, group=cfg.memory_scope, reply=message.text)
+            assert store.confirm_receipt(task, cfg.memory_scope, message)
+            if number <= 6:
+                memory.remember(message)
+    finally:
+        store.close()
+
+    panel = DesktopService(tmp_path, client=FixtureClient())
+    queue = panel.call('view.queue', {'receipt_offset': 4})
+    assert queue['receiptTotal'] == 6
+    assert [row['text'] for row in queue['receipts']] == ['已发 2', '已发 1']
+
+
+def test_receipt_page_rejects_a_scope_change_during_archive_read(tmp_path, monkeypatch):
+    from xiaomao import desktop_service
+
+    cfg = configured(tmp_path)
+    panel = desktop_service.DesktopService(tmp_path, client=FixtureClient())
+    read = desktop_service.receipt_page
+
+    def account_changed(*args, **kwargs):
+        page = read(*args, **kwargs)
+        targets = {name: {**target, 'account': 'account-b'} for name, target in cfg.conversation_targets.items()}
+        replace(cfg, conversation_targets=targets).save(expected=cfg)
+        return page
+
+    monkeypatch.setattr(desktop_service, 'receipt_page', account_changed)
+    with pytest.raises(ValueError, match='微信账号或监听范围'):
+        panel.call('view.queue', {'receipt_offset': 4})
+
+
 def test_recovery_waits_for_the_requested_primary_to_be_live(tmp_path):
     from threading import RLock
     from types import SimpleNamespace

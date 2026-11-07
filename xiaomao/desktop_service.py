@@ -15,7 +15,8 @@ from .desktop_persona import DesktopPersona
 from .desktop_settings import DesktopSettings, config_revision
 from .desktop_sessions import DesktopSessions
 from .member_names import safe_name
-from .receipts import receipt_previews
+from .memory import ConversationMemory
+from .receipts import receipt_page
 from .reply_preferences import persist_preferences
 from .ui_labels import member_label
 
@@ -156,21 +157,17 @@ class DesktopService:
         return {'state': row['state'], 'summary': clean_text(row.get('summary')),
                 'reason': clean_text(row.get('reason')), 'at': row.get('at')}
 
-    def queue(self, session='', offset=0, limit=40):
-        if type(offset) is not int or not 0 <= offset <= 160 or type(limit) is not int or not 1 <= limit <= 80:
-            raise ValueError('队列分页无效')
+    def queue(self, session='', offset=0, limit=40, receipt_offset=0):
         cfg = Settings.load(self.root)
         names = (self._session(cfg, session),) if session else cfg.allowed_groups
+        if (type(offset) is not int or not 0 <= offset <= 160 or type(limit) is not int or not 1 <= limit <= 80
+                or type(receipt_offset) is not int or not 0 <= receipt_offset <= len(names) * ConversationMemory.MAX_MESSAGES):
+            raise ValueError('队列分页无效')
         try:
             self._connected_status(cfg)
             pending = self.client.pending()['tasks']
         except ControlUnavailable as error:
-            return {'tasks': [], 'receipts': [], 'total': 0, 'note': clean_text(str(error))}
-        fresh = Settings.load(self.root)
-        if (fresh.allowed_groups != cfg.allowed_groups
-                or fresh.conversation_targets != cfg.conversation_targets
-                or configured_account(fresh) != configured_account(cfg)):
-            raise ValueError('微信账号或监听范围已变化，请刷新队列')
+            return {'tasks': [], 'receipts': [], 'receiptTotal': 0, 'total': 0, 'note': clean_text(str(error))}
         rows = []
         for row in pending:
             group = row.get('group', cfg.group)
@@ -188,9 +185,16 @@ class DesktopService:
                 'progress': clean_text(row.get('progress')),
             })
         with self._receipt_lock:
-            recent, note, self._receipts = receipt_previews(cfg, names, self._receipts)
+            recent, receipt_total, note, self._receipts = receipt_page(
+                cfg, names, self._receipts, offset=receipt_offset)
+        fresh = Settings.load(self.root)
+        if (fresh.allowed_groups != cfg.allowed_groups
+                or fresh.conversation_targets != cfg.conversation_targets
+                or configured_account(fresh) != configured_account(cfg)):
+            raise ValueError('微信账号或监听范围已变化，请刷新队列')
         return {
             'tasks': rows[offset:offset + limit], 'total': len(rows), 'note': note,
+            'receiptTotal': receipt_total,
             'receipts': [{'at': when, 'group': group, 'text': clean_text(body)}
                          for when, group, body in recent],
         }

@@ -10,6 +10,9 @@ const queueState: Record<string, string> = {
 };
 const number = new Intl.NumberFormat("zh-CN");
 const time = new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
+const TASK_PAGE = 40;
+const RECEIPT_PAGE = 4;
+type QueuePosition = { scope: string; offset: number; receiptOffset: number };
 
 function SessionIcon({ session }: { session: Session }) {
   return <span className="glyph">{session.kind === "private" ? <UserRound size={19} /> : <UsersRound size={19} />}</span>;
@@ -20,17 +23,23 @@ export function Workbench({ active, status, notify, navigate }: {
   notify: (message: string, error?: boolean) => void; navigate: (page: PageKey) => void;
 }) {
   const [selected, setSelected] = useState("");
-  const [queue, setQueue] = useState<{ scope: string; value: Queue }>();
+  const [queue, setQueue] = useState<QueuePosition & { value: Queue }>();
   const [refresh, setRefresh] = useState(0);
-  const [offset, setOffset] = useState(0);
+  const [position, setPosition] = useState<QueuePosition>();
   const [working, setWorking] = useState("");
   const [recover, setRecover] = useState<Session>();
   const scope = status?.sessions.some(item => item.id === selected) ? selected : "";
   const primary = status?.sessions.find(item => item.id === status.primary);
   const row = status?.sessions.find(item => item.id === scope) ?? primary;
   const stats = status?.stats;
-  const dataKey = `${status?.revision ?? ""}:${scope}:${offset}`;
-  const data = queue?.scope === dataKey ? queue.value : undefined;
+  const scopeKey = `${status?.revision ?? ""}:${scope}`;
+  const offset = position?.scope === scopeKey ? position.offset : 0;
+  const receiptOffset = position?.scope === scopeKey ? position.receiptOffset : 0;
+  const shown = status?.connected && queue?.scope === scopeKey ? queue : undefined;
+  const data = shown?.value;
+  const loadingPage = shown?.offset !== offset || shown?.receiptOffset !== receiptOffset;
+  const shownReceiptOffset = shown?.receiptOffset ?? 0;
+  const receiptTotal = data?.receiptTotal ?? 0;
   const names = useMemo(() => [{ value: "", label: "全部会话" }, ...(status?.sessions ?? []).map(
     item => ({ value: item.id, label: item.name }))], [status?.sessions]);
 
@@ -41,17 +50,19 @@ export function Workbench({ active, status, notify, navigate }: {
     const load = () => {
       if (document.hidden || reading) return;
       reading = true;
-      request<Queue>("view.queue", { session: scope, offset, limit: 40 }).then(value => {
-        if (valid) setQueue(old => old?.scope === dataKey && JSON.stringify(old.value) === JSON.stringify(value)
-          ? old : { scope: dataKey, value });
+      request<Queue>("view.queue", { session: scope, offset, limit: TASK_PAGE, receipt_offset: receiptOffset }).then(value => {
+        if (valid) setQueue(old => old?.scope === scopeKey && old.offset === offset && old.receiptOffset === receiptOffset
+          && JSON.stringify(old.value) === JSON.stringify(value)
+          ? old : { scope: scopeKey, offset, receiptOffset, value });
       }).catch(error => {
-        if (valid) setQueue({ scope: dataKey, value: { tasks: [], receipts: [], total: 0, note: errorMessage(error) } });
+        if (valid) setQueue({ scope: scopeKey, offset, receiptOffset,
+          value: { tasks: [], receipts: [], total: 0, receiptTotal: 0, note: errorMessage(error) } });
       }).finally(() => { reading = false; });
     };
     load();
     const timer = stats?.pending ? window.setInterval(load, 1000) : undefined;
     return () => { valid = false; window.clearInterval(timer); };
-  }, [active, status?.connected, stats?.pending, stats?.verified, stats?.unknown, stats?.failed, scope, offset, dataKey, refresh]);
+  }, [active, status?.connected, stats?.pending, stats?.verified, stats?.unknown, stats?.failed, scope, offset, receiptOffset, scopeKey, refresh]);
 
   const act = async (key: string, method: string, params = {}) => {
     if (working) return;
@@ -66,7 +77,8 @@ export function Workbench({ active, status, notify, navigate }: {
       setWorking("");
     }
   };
-  const updateScope = (id: string) => { setSelected(id); setOffset(0); };
+  const updateScope = (id: string) => { setSelected(id); setPosition(undefined); };
+  const pageTo = (tasks: number, receipts: number) => setPosition({ scope: scopeKey, offset: tasks, receiptOffset: receipts });
   const toggle = (session: Session) => act(session.id, "run.selected",
     { session: session.id, action: session.mode === "auto" ? "pause" : "enable" });
   const controlsDisabled = !status?.connected || status.readOnly || Boolean(working);
@@ -122,12 +134,21 @@ export function Workbench({ active, status, notify, navigate }: {
           {!data?.tasks.length && !data?.receipts.length && <Empty icon={<Send size={26} />}
             title={status?.connected ? data ? "当前没有待回复消息" : "正在读取队列" : "等待后台连接"}
             detail={data?.note || status?.reason || "新消息和已确认回执会显示在这里"} />}
+          {(receiptTotal > RECEIPT_PAGE || shownReceiptOffset > 0) && <nav className="receipt-pagination flex" aria-label="已确认回执分页">
+            <span className="muted" aria-live="polite">已确认回执 {data?.receipts.length
+              ? `${shownReceiptOffset + 1}–${shownReceiptOffset + data.receipts.length} / ${receiptTotal}`
+              : `共 ${receiptTotal} 条`}</span>
+            <Button variant="ghost" disabled={loadingPage || shownReceiptOffset === 0}
+              onClick={() => pageTo(offset, Math.max(0, receiptOffset - RECEIPT_PAGE))}>较新</Button>
+            <Button variant="ghost" disabled={loadingPage || shownReceiptOffset + RECEIPT_PAGE >= receiptTotal}
+              onClick={() => pageTo(offset, receiptOffset + RECEIPT_PAGE)}>更早</Button>
+          </nav>}
           {data?.receipts.map((entry, index) => <article className="queue-row" key={entry.at + "-" + index}>
             <span className="glyph mint"><Check size={20} /></span>
             <div className="queue-body"><b>{entry.group} <span>· 已确认</span></b><p>{entry.text}</p></div>
             <time>{time.format(new Date(entry.at * 1000))}</time>
           </article>)}
-          {data?.note && data.tasks.length > 0 && <p className="muted">{data.note}</p>}
+          {data?.note && (data.tasks.length > 0 || data.receipts.length > 0) && <p className="muted">{data.note}</p>}
         </div>
         <div className="panel-foot">
           <Button variant="ghost" icon={<Eye size={16} />} disabled={controlsDisabled}
@@ -136,9 +157,9 @@ export function Workbench({ active, status, notify, navigate }: {
             ? <Button variant="ghost" disabled={controlsDisabled || !primary} busy={working === "recover"}
                 onClick={() => setRecover(primary)}>处理最新点名</Button>
             : <span />}
-          {(data?.total ?? 0) > 40 && <div className="flex">
-            <Button disabled={offset === 0} onClick={() => setOffset(value => Math.max(0, value - 40))}>上一页</Button>
-            <Button disabled={offset + 40 >= (data?.total ?? 0)} onClick={() => setOffset(value => value + 40)}>下一页</Button>
+          {(data?.total ?? 0) > TASK_PAGE && <div className="flex">
+            <Button disabled={loadingPage || offset === 0} onClick={() => pageTo(Math.max(0, offset - TASK_PAGE), receiptOffset)}>上一页</Button>
+            <Button disabled={loadingPage || offset + TASK_PAGE >= (data?.total ?? 0)} onClick={() => pageTo(offset + TASK_PAGE, receiptOffset)}>下一页</Button>
           </div>}
         </div>
       </section>

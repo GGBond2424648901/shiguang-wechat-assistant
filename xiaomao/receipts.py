@@ -1,28 +1,37 @@
-"""Read-only, verified outbound receipt previews shared by both panels."""
+"""Read-only, verified outbound receipt history shared by both panels."""
+from collections import defaultdict
+from contextlib import closing
+from heapq import merge
 import hashlib
 import hmac
+from itertools import islice
 import json
 import re
+import sqlite3
+
+from .domain import normalized
+from .memory import ConversationMemory
 
 
 def _verified_receipts(directory,scope,salt):
     """Read existing confirmation evidence without opening a writable store."""
-    import sqlite3
-    from contextlib import closing
     path=directory/'state.sqlite3'
-    if not path.is_file():return []
+    if not path.is_file():return {}
     scoped=hmac.new(salt,scope.encode(),hashlib.sha256).hexdigest()
+    by_text=defaultdict(list)
     with closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True,timeout=.5)) as db:
         found=db.execute('''SELECT r.reply_digest,r.baseline,r.at FROM send_receipts r
             JOIN tasks t ON t.id=r.task_id
-            WHERE r.group_digest=? AND t.state='verified' ORDER BY r.at DESC LIMIT 64''',(scoped,)).fetchall()
-    return [(text,set(json.loads(baseline)),at) for text,baseline,at in found]
+            WHERE r.group_digest=? AND t.state='verified' ORDER BY r.at DESC LIMIT ?''',
+            (scoped,ConversationMemory.MAX_MESSAGES))
+        for text,baseline,at in found:
+            by_text[text].append((baseline,at))
+    return by_text
 
 
-def _receipt_rows(path, digest, scope, peer, name, *, confirmations=(),salt=b''):
+def _receipt_rows(path, digest, scope, peer, name, *, confirmations,salt):
     """Read the v1 archive without creating directories, keys or ACLs."""
     import win32crypt
-    from .memory import ConversationMemory
     with path.open('rb') as encrypted:
         blob=encrypted.read(ConversationMemory.MAX_FILE_BYTES+1)
     if len(blob)>ConversationMemory.MAX_FILE_BYTES:raise ValueError('archive size')
@@ -49,42 +58,57 @@ def _receipt_rows(path, digest, scope, peer, name, *, confirmations=(),salt=b'')
             # Proactive/local sends have no inbound source link. Admit them
             # only with the same scoped, timed, non-baseline proof accepted by
             # the real sender. A manual self-message alone is never evidence.
-            from .domain import normalized
+            if not confirmations:continue
             hashed=hmac.new(salt,normalized(record.get('text','')).encode(),hashlib.sha256).hexdigest()
             hashed_id=hmac.new(salt,identity.encode(),hashlib.sha256).hexdigest()
-            if not any(hashed==expected and -5<=at-sent<=120 and hashed_id not in baseline
-                       for expected,baseline,sent in confirmations):continue
+            if not any(-5<=at-sent<=120 and hashed_id not in json.loads(baseline)
+                       for baseline,sent in confirmations.get(hashed,())):continue
         if text:rows[identity]=(at,name,text[:55]+('…' if len(text)>55 else ''))
-    return sorted(rows.values(),reverse=True)[:4]
+    return sorted(rows.values(),reverse=True)
 
 
-def receipt_previews(cfg,watched,previous,cancelled=lambda:False):
-    """Keep at most four previews per selected archive; only return the latest four."""
+def receipt_page(cfg,watched,previous,*,offset=0,limit=4,cancelled=lambda:False):
+    """Page verified receipts from cached projections of the bounded archives."""
     primary=cfg.conversation_targets.get(cfg.group,{})
-    if not primary:return [],'主要会话尚未绑定账号',{}
+    if not primary:return [],0,'主要会话尚未绑定账号',{}
+    account=primary['account']
     targets=[(name,cfg.conversation_targets[name]) for name in cfg.allowed_groups
-             if name in watched and cfg.conversation_targets.get(name,{}).get('account')==primary['account']]
-    if not targets:return [],'',{}
+             if cfg.conversation_targets.get(name,{}).get('account')==account]
+    if not targets:return [],0,'',{}
     try:
         with (cfg.runtime/'fingerprint.key').open('rb') as file:salt=file.read(33)
         if len(salt)!=32:raise ValueError('salt size')
-    except FileNotFoundError:return [],'',{}
-    except (ValueError,OSError):return [],'本地回执暂不可读',{}
-    rows=[];cache={};failed=False
+    except FileNotFoundError:return [],0,'',{}
+    except (ValueError,OSError):return [],0,'本地回执暂不可读',{}
+    active_scopes={account+'/'+target['id'] for _,target in targets}
+    cache={scope:entry for scope,entry in previous.items() if scope in active_scopes}
+    batches=[];failed=False
     for name,target in targets:
+        if name not in watched:continue
         if cancelled():break
-        scope=target['account']+'/'+target['id']
+        scope=account+'/'+target['id']
         digest=hmac.new(salt,scope.encode(),hashlib.sha256).hexdigest()
         path=cfg.runtime/('memory-'+digest+'.dpapi')
         try:
             info=path.stat()
-            stamp=(name,info.st_ino,info.st_mtime_ns,info.st_size)
-            if scope in previous and previous[scope][0]==stamp:
-                found=previous[scope][1]
+            stamp=(digest,name,info.st_ino,info.st_mtime_ns,info.st_size)
+            if scope in cache and cache[scope][0]==stamp:
+                found=cache[scope][1]
             else:
                 confirmed=_verified_receipts(cfg.runtime,scope,salt)
                 found=_receipt_rows(path,digest,scope,target['id'],name,confirmations=confirmed,salt=salt)
-            rows.extend(found);cache[scope]=(stamp,found)
-        except FileNotFoundError:continue
-        except Exception:failed=True
-    return sorted(rows,reverse=True)[:4],('部分会话的回执暂不可读' if failed else ''),cache
+            batches.append(found)
+            cache[scope]=(stamp,found)
+        except FileNotFoundError:
+            cache.pop(scope,None)
+        except Exception:
+            cache.pop(scope,None)
+            failed=True
+    rows=list(islice(merge(*batches,reverse=True),offset,offset+limit))
+    return rows,sum(map(len,batches)),('部分会话的回执暂不可读' if failed else ''),cache
+
+
+def receipt_previews(cfg,watched,previous,cancelled=lambda:False):
+    """Keep the legacy panel's latest-four display and call contract."""
+    rows,_,note,cache=receipt_page(cfg,watched,previous,cancelled=cancelled)
+    return rows,note,cache

@@ -133,6 +133,19 @@ def prepare_visual_profile(root):
     notes.save()
 
 
+def prepare_receipt_pages(root):
+    from xiaomao.domain import Message
+    from xiaomao.memory import ConversationMemory
+
+    cfg = Settings.load(root)
+    peer = cfg.conversation_targets[cfg.group]['id']
+    memory = ConversationMemory(cfg.runtime, cfg.memory_scope)
+    for index in range(1, 7):
+        memory.remember(Message(f'历史回执 {index}', direction='out', speaker_id='self',
+            message_id=f'{peer}/s/{index}', reply_to_id=f'{peer}/s/200',
+            reply_to_speaker='p_2a3b4c5d6e7f8888', created_at=1794124680 + index * 60))
+
+
 def start_fixture(root, *, visual=False):
     token = secrets.token_hex(32)
     runtime = root / 'runtime'
@@ -319,6 +332,8 @@ if __name__ == '__main__':
     prepare_profile(profile, count=24 if visual else 5000)
     if visual:
         prepare_visual_profile(profile)
+    elif '--serve' in sys.argv:
+        prepare_receipt_pages(profile)
     server = start_fixture(profile, visual=visual)
     try:
         if '--serve' in sys.argv:
