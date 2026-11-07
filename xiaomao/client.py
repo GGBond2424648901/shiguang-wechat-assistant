@@ -21,7 +21,7 @@ class ControlClient:
     def _endpoint(self):
         try:
             data = json.loads((self.root / "runtime" / "control.json").read_text(encoding="utf-8"))
-            if data.get("host") != "127.0.0.1" or not isinstance(data["port"], int) or not 1024 <= data["port"] <= 65535 or not isinstance(data["token"], str) or len(data["token"]) < 32:
+            if not isinstance(data,dict) or data.get("host") != "127.0.0.1" or not isinstance(data["port"], int) or not 1024 <= data["port"] <= 65535 or not isinstance(data["token"], str) or len(data["token"]) < 32:
                 raise ValueError()
             self._pid=data.get('pid') if isinstance(data.get('pid'),int) and data['pid']>0 else None
             return f"http://127.0.0.1:{data['port']}", data["token"]
@@ -29,7 +29,7 @@ class ControlClient:
             raise ControlUnavailable("助手尚未运行，或本机控制信息无效") from None
 
     def request(self, operation: str, payload=None) -> dict:
-        if operation not in ("status", "pending", "observe", "enable", "pause", "stop", "reply_latest", "companion_preview", "companion_once","reload_windows","stop_if_idle","queue_text","companion_configure","enable_selected","pause_selected","configure_reply_rules","configure_reply_defaults"):
+        if operation not in ("status", "pending", "observe", "enable", "pause", "stop", "reply_latest", "companion_preview", "companion_once","reload_windows","stop_if_idle","queue_text","queue_outbound","companion_configure","enable_selected","pause_selected","configure_reply_rules","configure_reply_defaults"):
             raise ControlUnavailable("不支持这个控制操作")
         url, token = self._endpoint()
         try:
@@ -66,6 +66,10 @@ class ControlClient:
         return self.request('configure_reply_defaults',dict(preferences=preferences))
     def queue_text(self, group, text, request_id):
         return self.request('queue_text',dict(group=group,text=text,request_id=request_id))
+
+    def queue_outbound(self,group,scope,text,sticker_ids,request_id):
+        return self.request('queue_outbound',dict(group=group,scope=scope,text=text,
+                                               sticker_ids=sticker_ids,request_id=request_id))
 
     def start(self,initial_mode=None) -> dict:
         if initial_mode not in (None,'auto','observe','paused'):raise ValueError('启动模式无效')

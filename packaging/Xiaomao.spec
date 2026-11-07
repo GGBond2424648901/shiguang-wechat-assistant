@@ -23,6 +23,8 @@ data = collect_data_files("rapidocr", includes=["config.yaml", "default_models.y
 data += [(str(root / "xiaomao/ui_assets/表情包收集说明.txt"), "xiaomao/ui_assets")]
 data += [(str(root / "xiaomao/_vendor/dafeiyu" / name), "xiaomao/_vendor/dafeiyu")
          for name in ("persona-wechat.md", "persona-v2.1.md", "LICENSE", "PROVENANCE.md")]
+data += [(str(p), "xiaomao/_vendor/deepseek_harness")
+         for p in (root / "xiaomao/_vendor/deepseek_harness").iterdir() if p.is_file()]
 data += [(str(p), "xiaomao/ui_assets") for p in (root / "xiaomao/ui_assets").glob("*") if p.suffix in (".ico", ".png", ".jpg", ".webp")]
 analysis = Analysis(
     [str(root / "packaging/entry.py")], pathex=[str(root)], binaries=collect_dynamic_libs("onnxruntime"),

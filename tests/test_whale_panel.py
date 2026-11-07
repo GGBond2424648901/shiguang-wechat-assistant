@@ -323,3 +323,30 @@ def test_read_only_preview_of_new_configuration_creates_no_runtime_files(tmp_pat
     cfg=Settings(tmp_path,group='主',conversation_targets={'主':{'account':'a','id':'p1','kind':'private'}})
     rows,note,cache=receipt_previews(cfg,['主'],{})
     assert not rows and not cache and not cfg.runtime.exists()
+
+
+def test_proactive_receipt_preview_uses_verified_scoped_receipt_and_excludes_old_or_unconfirmed_self_text(tmp_path):
+    from xiaomao.domain import Message
+    from xiaomao.memory import ConversationMemory
+    from xiaomao.store import StateStore
+    from xiaomao.theme import receipt_previews
+    cfg=Settings(tmp_path,group='朋友',conversation_targets={'朋友':{'account':'a','id':'p1','kind':'private'}})
+    scope='a/p1';memory=ConversationMemory(cfg.runtime,scope)
+    old=Message('早呀',direction='out',speaker_id='self',message_id='p1/s/1',created_at=999)
+    actual=Message('早呀',direction='out',speaker_id='self',message_id='p1/s/2',created_at=1001)
+    unconfirmed=Message('别把这条当成功',direction='out',speaker_id='self',message_id='p1/s/3',created_at=1003)
+    manual=Message('手动发送',direction='out',speaker_id='self',message_id='p1/s/4',created_at=1004)
+    for message in (old,actual,unconfirmed,manual):memory.remember(message)
+    store=StateStore(cfg.runtime)
+    try:
+        task=store.create('first',1000)
+        store.mark_sending(task,1000,group=scope,reply=actual.text,baseline_ids=[old.message_id])
+        assert store.confirm_receipt(task,scope,actual)
+        pending=store.create('second',1002)
+        store.mark_sending(pending,1002,group=scope,reply=unconfirmed.text)
+        other=store.create('other',1003)
+        store.mark_sending(other,1003,group='b/p1',reply=manual.text)
+        assert store.confirm_receipt(other,'b/p1',manual)
+        rows,note,_=receipt_previews(cfg,['朋友'],{})
+        assert rows==[(1001,'朋友','早呀')] and not note
+    finally:store.close()

@@ -6,6 +6,8 @@ import pytest
 from xiaomao.config import Settings
 from xiaomao.contacts import Contact
 from test_vision import binding
+from test_bubble_delivery import delivery
+from test_engine import system
 
 
 ROOM = Contact('room@chatroom', 'account-a', '读书群', 'group')
@@ -220,6 +222,73 @@ def test_local_text_is_one_per_request_and_only_for_selected_recipient(tmp_path)
         assert [(t['group'],t['reply']) for t in resident.pending()]==[(PEER.name,'晚安')]
         assert resident.queue_text(ROOM.name,'晚上好',key)['queued']
     finally:store.close()
+
+
+def test_local_outbound_plan_is_bound_idempotent_and_keeps_real_sticker_objects(tmp_path):
+    from types import SimpleNamespace
+    from xiaomao.store import StateStore
+    cfg=selected(tmp_path,ROOM,PEER).with_window_binding(ROOM.name,window(ROOM,11)).with_window_binding(PEER.name,window(PEER,22))
+    store=StateStore(cfg.runtime)
+    try:
+        resident=screen_resident(cfg,store);resident.enable()
+        peer=resident.engines[1];peer.message_source=object()
+        items=[SimpleNamespace(id='still',priority='优先'),SimpleNamespace(id='animated',priority='优先')]
+        prepared={s.id:SimpleNamespace(sha256=s.id,description='已发送'+s.id) for s in items}
+        peer.stickers=SimpleNamespace(refresh=lambda:None,items=items,prepare=lambda item:prepared[item.id])
+        scope=peer.settings.memory_scope
+        result=resident.queue_outbound(PEER.name,scope,'晚上好',['still','animated'],'outbound-test-001')
+        assert result['queued']
+        assert resident.queue_outbound(PEER.name,scope,'晚上好',['still','animated'],'outbound-test-001')['duplicate']
+        task=peer.tasks[0]
+        assert task.state=='generated' and task.reply=='晚上好' and not task.messages
+        assert task.remaining_stickers==list(prepared.values())
+        assert not resident.engines[0].tasks
+        with pytest.raises(ValueError):resident.queue_outbound(PEER.name,'different','晚上好',[],'outbound-test-002')
+        with pytest.raises(ValueError):resident.queue_outbound(PEER.name,scope,'',['outside'],'outbound-test-003')
+        with pytest.raises(ValueError):resident.queue_outbound(PEER.name,scope,'',['still','still'],'outbound-test-004')
+        result=resident.queue_outbound(PEER.name,scope,'',['animated'],'outbound-test-005')
+        assert result['queued'] and peer.tasks[-1].sticker is prepared['animated']
+        resident.pause_selected(PEER.name,scope)
+        with pytest.raises(ValueError):resident.queue_outbound(PEER.name,scope,'晚上好',[],'outbound-test-006')
+    finally:store.close()
+
+
+def test_operator_sticker_batch_ignores_automatic_reaction_cooldown_and_attests_each_part(delivery,tmp_path,monkeypatch):
+    import threading
+    from xiaomao.resident import Resident
+    from xiaomao.stickers import StickerLibrary
+    from test_stickers import library
+    engine,feed,calls,clock,store=delivery
+    library(tmp_path);engine.stickers=StickerLibrary(tmp_path)
+    engine.desktop.type_sticker=feed.stage_sticker
+    engine.desktop.verify_sticker_input=lambda item:feed.sticker==item
+    engine.model.reply=lambda *_:pytest.fail('a local send plan cannot invent a new reply')
+    monkeypatch.setattr(store,'sticker_ready',lambda *_:False)
+    resident=Resident.__new__(Resident)
+    resident.engines=[engine];resident.lock=threading.RLock();resident.store=store;resident.clock=clock
+    ids=[s.id for s in engine.stickers.items[:2]]
+    assert len(ids)==2
+    resident.queue_outbound(engine.settings.group,engine.settings.memory_scope,'晚上好',ids,'operator-batch-001')
+    for _ in range(12):
+        engine.observe_once();clock.advance(4)
+        if not engine.tasks:break
+    assert store.counts()=={'verified':3} and len(feed.sent)==3 and not engine.tasks
+
+
+def test_unavailable_operator_sticker_never_regenerates_unrelated_text(delivery,tmp_path):
+    import threading
+    from xiaomao.resident import Resident
+    from xiaomao.stickers import StickerLibrary
+    from test_stickers import library
+    engine,feed,calls,clock,store=delivery
+    library(tmp_path);engine.stickers=StickerLibrary(tmp_path)
+    resident=Resident.__new__(Resident)
+    resident.engines=[engine];resident.lock=threading.RLock();resident.store=store;resident.clock=clock
+    resident.queue_outbound(engine.settings.group,engine.settings.memory_scope,'',[engine.stickers.items[0].id],'operator-media-001')
+    engine.stickers.collection_enabled=lambda _:False
+    engine._reply_and_send(engine.tasks[0])
+    assert not engine.tasks and not feed.sent and not calls
+    assert store.counts()=={'skipped':1}
 
 
 def test_hot_reload_retains_pending_work_and_respects_service_mode(tmp_path):

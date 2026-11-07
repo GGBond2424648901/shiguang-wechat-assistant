@@ -43,6 +43,33 @@ def test_late_old_rows_never_become_replies(tmp_path):
     source.close()
 
 
+def test_group_mentions_use_wechat_recipient_ids_and_not_display_text(tmp_path):
+    import zstandard
+    from xiaomao.database import DatabaseFeed,MemoryDatabase
+    from xiaomao.policy import TriggerPolicy
+    table='Msg_0123456789abcdef0123456789abcdef'
+    path=tmp_path/'message_0.db'
+    database(path,[(1,1,100,1,2,'旧')])
+    source=MemoryDatabase(path)
+    feed=DatabaseFeed(lambda:[source],'g@chatroom','wxid_self',table=table,clock=lambda:101)
+    feed.poll()
+    template='<msgsource><atuserlist><![CDATA[{}]]></atuserlist></msgsource>'
+    native=zstandard.ZstdCompressor().compress(template.format('friend,wxid_self').encode())
+    with sqlite3.connect(path) as connection:
+        connection.executemany(f'INSERT INTO {table} VALUES(?,?,1,101,?,?,?,0)',[
+            (2,2,2,2,'friend:\n@示例米饭同学\u2005你好'),
+            (3,3,3,2,'friend:\n@示例米饭同学\u2005重名成员'),
+            (4,4,4,2,'friend:\n'+template.format('wxid_self'))])
+        connection.execute(f'ALTER TABLE {table} ADD COLUMN source BLOB')
+        connection.executemany(f'UPDATE {table} SET source=? WHERE local_id=?',[
+            (native,2),(template.format('wxid_someone_else'),3)])
+    mentioned,other,fake=feed.poll().new
+    assert TriggerPolicy('小猫','').matches(mentioned)
+    assert not TriggerPolicy('小猫','示例米饭同学').matches(other)
+    assert not TriggerPolicy('小猫','').matches(fake)
+    source.close()
+
+
 def test_server_timestamp_one_second_ahead_does_not_lose_outgoing_receipt(tmp_path):
     from xiaomao.database import DatabaseFeed,MemoryDatabase
     path=tmp_path/'message_0.db';database(path,[(1,1,100,1,2,'旧')])

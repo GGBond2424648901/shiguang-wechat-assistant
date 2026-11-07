@@ -620,6 +620,91 @@ def test_ordinary_single_bubble_cannot_lose_deliberate_whitespace_at_input(deliv
     assert engine.mode=='paused' and not feed.sent and not engine.desktop.frame.draft_empty
 
 
+@pytest.mark.parametrize('preview',['clipped_static','clipped_gif','late','wrong'])
+def test_staged_picture_needs_visible_proof_before_one_send(delivery, tmp_path, preview):
+    from PIL import Image, ImageDraw
+    from hashlib import sha256
+    from xiaomao.config import Calibration
+    from xiaomao.windows import WindowsDesktop
+
+    engine, feed, _, clock, store = delivery
+    entry = library(tmp_path, count=1)[0]
+    path = tmp_path / entry['path']
+    art = Image.new('RGB', (200, 200), 'white')
+    draw = ImageDraw.Draw(art)
+    for y in range(0, 200, 20):
+        for x in range(0, 200, 20):
+            draw.rectangle((x, y, x+19, y+19), fill=((x*9+y*7)%256, (y*17+x*3)%256, (x*13+y*11)%256))
+    animated = preview == 'clipped_gif'
+    art.save(path, save_all=animated, append_images=[art.transpose(Image.Transpose.FLIP_LEFT_RIGHT)] if animated else [], duration=100)
+    entry.update(sha256=sha256(path.read_bytes()).hexdigest(), animated=animated)
+    (path.parent/'catalog.json').write_text(json.dumps({'items':[entry]}), encoding='utf-8')
+    engine.stickers = StickerLibrary(tmp_path)
+    prepared = engine.stickers.prepare(engine.stickers.items[0])
+    task = ReplyTask(store.create('staged-picture',clock()), clock(), clock(), '',
+                     reply=prepared.description, state='generated', sticker=prepared, sticker_requested=True)
+    engine.tasks.append(task)
+
+    binding = Calibration(1,1,766,835,'示例会话',{
+        'header':[.02,.03,.7,.15],'messages':[.01,.22,.98,.74],
+        'input':[15/766,684/835,735/766,758/835],'send':[616/766,764/835,735/766,805/835]},
+        True,target_group='示例会话',window_kind='detached',manual_regions=True)
+    adapter = WindowsDesktop(binding)
+    adapter._dpi_scale = lambda: 1.25
+    adapter.assert_input_focus = feed.screen.assert_input_focus
+    staged, reads, moves, full_checks = [], [], [], []
+
+    def paste(item):
+        staged.append(item)
+        feed.stage_sticker(item)
+
+    def shortcut(*keys):
+        assert keys == (0x11, 0x24)
+        moves.append(keys)
+
+    with Image.open(prepared.path) as source:
+        source.seek(1 if animated else 0)
+        thumb = source.convert('RGB').resize((150,150), Image.Resampling.LANCZOS)
+
+    def capture():
+        reads.append(1)
+        image = Image.new('RGB', (766,835), (237,237,237))
+        if preview == 'late' and len(reads) < 5:
+            return image
+        if preview == 'wrong':
+            ImageDraw.Draw(image).rectangle((24,684,173,811), fill='red')
+        elif preview in ('clipped_static','clipped_gif') and not moves:
+            image.paste(thumb.crop((0,60,150,150)), (24,684))
+        else:
+            image.paste(thumb, (24,686))
+        return image
+
+    adapter._shortcut = shortcut
+    adapter.capture = capture
+
+    def verify_full(item):
+        full_checks.append(1)
+        return adapter.verify_sticker_input(item)
+
+    engine.desktop.type_sticker = paste
+    engine.desktop.verify_sticker_input = verify_full
+    engine.desktop.probe_sticker_input = lambda item: adapter.probe_sticker_input(item)
+    engine.desktop.reveal_sticker_preview = lambda: adapter.reveal_sticker_preview()
+    engine.observe_once()
+
+    assert staged == [prepared] and not engine.tasks
+    if preview == 'wrong':
+        assert not feed.sent and not feed.screen.frame.draft_empty and engine.mode == 'paused'
+        assert not store.db.execute('SELECT 1 FROM attempts').fetchone()
+        assert len(full_checks) == 1
+    else:
+        assert feed.sent == ['[表情]'] and store.counts() == {'verified':1}
+        assert store.db.execute('SELECT sticker_md5 FROM send_receipts').fetchall()[0][0] == store.fingerprint(prepared.md5)
+        assert prepared.path.read_bytes() == path.read_bytes()
+        assert not full_checks
+    assert len(moves) == 1
+
+
 @pytest.mark.parametrize('current,old_member,elapsed,expected,allowed',[
     ('GIF',ALICE,10,'s_1',{'鲸鱼娘'}),
     ('换个GIF',ALICE,10,'s_1',{'鲸鱼娘'}),

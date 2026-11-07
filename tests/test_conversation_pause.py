@@ -62,6 +62,16 @@ def test_resume_one_after_global_pause_does_not_resume_other_rooms_on_restart(ro
     assert not Settings.load(live.settings.root).paused_conversations
 
 
+def test_paused_room_does_not_make_running_workbench_report_everything_paused(rooms):
+    live,_=rooms;a,b,c=live.engines
+    live.pause_selected(a.settings.group,a.settings.memory_scope)
+    b.reason='数据库后台监听中';live.index=0
+    status=live.status()
+    assert status['mode']=='auto' and status['reason']==b.reason
+    assert status['reason_group']==b.settings.group
+    assert status['groups'][0]['mode']=='paused' and '暂停' in status['groups'][0]['reason']
+
+
 def test_stale_identity_cannot_pause_another_recipient(rooms):
     live,_=rooms
     with pytest.raises(ValueError):live.pause_selected('甲群','other/room')

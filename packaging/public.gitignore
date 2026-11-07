@@ -1,5 +1,7 @@
 .venv/
 runtime/
+config/persona_sources/
+config/persona_documents.json
 *.dpapi
 *.sqlite*
 *.log

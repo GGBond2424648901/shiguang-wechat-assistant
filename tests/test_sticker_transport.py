@@ -129,6 +129,46 @@ def test_draft_verification_compares_pixels_not_just_nonempty(tmp_path):
     assert not matches_draft(wrong,prepared)
 
 
+@pytest.mark.parametrize('caret',[False,True])
+def test_empty_sticker_preview_does_not_scan_animation_frames(tmp_path, monkeypatch, caret):
+    import cv2
+    from xiaomao.stickers import StickerLibrary, matches_draft
+
+    library(tmp_path)
+    lib = StickerLibrary(tmp_path)
+    sticker = lib.prepare(lib.items[0])
+    editor = Image.new('RGB',(180,150),(237,237,237))
+    if caret:
+        ImageDraw.Draw(editor).rectangle((9,2,10,23), fill=(7,193,96))
+    monkeypatch.setattr(cv2,'matchTemplate',lambda *args:pytest.fail('等待渲染的空输入区不应逐帧做图像比对'))
+    assert not matches_draft(editor, sticker)
+
+
+def test_late_gif_frame_is_checked_before_scanning_all_interior_crops(tmp_path, monkeypatch):
+    import cv2
+    from types import SimpleNamespace
+    from xiaomao.stickers import matches_draft
+
+    frames = [Image.new('RGB',(150,150),(i*4,20,30)) for i in range(30)]
+    current = Image.new('RGB',(150,150),(40,170,190))
+    frames.append(current)
+    path = tmp_path/'long.gif'
+    frames[0].save(path, save_all=True, append_images=frames[1:], duration=100)
+    sticker = SimpleNamespace(verified_bytes=path.read_bytes)
+    editor = Image.new('RGB',(225,143),(237,237,237))
+    editor.paste(current.crop((0,0,150,116)),(10,6))
+    original = cv2.matchTemplate
+    searches = []
+
+    def search(*args):
+        searches.append(1)
+        return original(*args)
+
+    monkeypatch.setattr(cv2,'matchTemplate',search)
+    assert matches_draft(editor, sticker, 1.25)
+    assert len(searches) <= 9*len(frames)
+
+
 def test_short_editor_can_verify_scrolled_bottom_of_sticker(tmp_path):
     from xiaomao.stickers import StickerLibrary,matches_draft
     import hashlib,json
@@ -141,6 +181,26 @@ def test_short_editor_can_verify_scrolled_bottom_of_sticker(tmp_path):
     frame=Image.open(prepared.path).convert('RGB').resize((150,150),Image.Resampling.LANCZOS)
     draft=Image.new('RGB',(600,124),(237,237,237));draft.paste(frame.crop((0,34,150,150)),(10,0))
     assert matches_draft(draft,prepared,1.25)
+
+
+def test_scrolled_sticker_can_be_clipped_even_when_editor_crop_is_taller_than_thumbnail(tmp_path):
+    from xiaomao.stickers import StickerLibrary,matches_draft
+    import hashlib,json
+    entries=library(tmp_path);path=tmp_path/entries[0]['path']
+    art=Image.new('RGB',(200,200),'white');draw=ImageDraw.Draw(art)
+    for y in range(0,200,8):draw.rectangle((8,y,192,y+6),fill=(y,100,200-y))
+    art.save(path);entries[0].update(sha256=hashlib.sha256(path.read_bytes()).hexdigest(),animated=False)
+    (path.parent/'catalog.json').write_text(json.dumps({'items':entries[:1]}),encoding='utf-8')
+    lib=StickerLibrary(tmp_path);prepared=lib.prepare(lib.items[0])
+    thumb=Image.open(prepared.path).convert('RGB').resize((150,150),Image.Resampling.LANCZOS)
+    # Qt keeps the caret in view and clips the top of the image, while the
+    # broader preview crop still includes blank footer space below the editor.
+    draft=Image.new('RGB',(240,193),(237,237,237))
+    draft.paste(thumb.crop((0,30,150,150)),(12,10))
+    assert matches_draft(draft,prepared,1.25)
+    insufficient=Image.new('RGB',(240,193),(237,237,237))
+    insufficient.paste(thumb.crop((0,100,150,150)),(12,10))
+    assert not matches_draft(insufficient,prepared,1.25)
 
 
 def test_manual_text_crop_does_not_hide_sticker_below_send_footer(tmp_path):

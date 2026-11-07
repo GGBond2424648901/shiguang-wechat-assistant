@@ -45,6 +45,41 @@ def test_selected_recipient_controls_follow_queue_selection_not_global_mode(work
     assert ('global','pause') not in calls
 
 
+def test_workbench_calibrates_only_the_selected_conversation(workspace):
+    panel,view,calls,window=workspace
+    panel.calibrate=lambda group,*,auto_match:calls.append((group,auto_match))
+    saved=Settings.load(panel.directory)
+    view.watch_table.selection_set('乙群');window.update()
+    view.actions['calibrate'].invoke()
+    assert calls==[('乙群',True)] and Settings.load(panel.directory)==saved
+
+
+def test_database_listener_in_background_displays_its_read_state(workspace):
+    _,view,_,window=workspace
+    view.status['groups'][0].update(receive_mode='database',last_observed=100,window_state='在后台')
+    view.update_text();window.update()
+    assert view.watch_table.set('甲群','state')=='监听中'
+    assert '最近读取' in view.target_info.get()
+    view.status['groups'][0]['receive_retrying']=True
+    view.update_text()
+    assert view.watch_table.set('甲群','state')=='接收重试'
+
+
+def test_new_calibration_remains_selected_until_backend_can_enable_it(workspace):
+    _,view,calls,window=workspace
+    ready=view.status
+    view.status={**ready,'group_names':['甲群'],'groups':ready['groups'][:1],'window_reload_pending':True}
+    view.focus_conversation('乙群');window.update()
+    assert view.target_name.get()=='乙群' and view.actions['enable'].instate(('disabled',))
+    assert view.watch_table.selection()==('乙群',)
+    view.control_selected('enable')
+    assert not calls
+    view.status=ready
+    view.update_text();window.update()
+    view.actions['enable'].invoke()
+    assert calls==[('乙群','enable')]
+
+
 def test_each_visible_row_has_real_independent_control_and_global_pause_is_separate(workspace):
     _,view,calls,window=workspace
     assert set(view.watch_controls)=={'甲群','乙群','朋友'}

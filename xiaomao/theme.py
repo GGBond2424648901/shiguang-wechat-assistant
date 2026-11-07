@@ -16,7 +16,8 @@ from .workspace_ui import BG, FONT, GREEN, INK, LINE, MUTED, NAVY, PAPER, PEACH,
 TEXT, PANEL, GOLD, FIELD, AMBER = INK, BG, '#854E34', PAPER, PEACH
 PAGES={'assistant':'工作台','sessions':'会话','persona':'人格','companion':'记忆与陪伴','stickers':'表情包','settings':'运行设置'}
 TITLES={**PAGES,'contacts':'选择会话'}
-MODES={'auto':'自动回复中','observe':'只观察','paused':'已暂停','stopped':'已停止','disconnected':'未连接助手'}
+MODES={'auto':'自动回复中','observe':'只观察','paused':'已暂停','stopped':'已停止',
+       'starting':'正在启动后台','disconnected':'未连接助手','applying':'等待后台应用'}
 
 
 def _install_resize_edges(root, view, hwnd):
@@ -283,7 +284,21 @@ def _scroll_when_needed(parent,widget,*,stable_width=False):
     widget.configure(yscrollcommand=position)
 
 
-def _receipt_rows(path, digest, scope, peer, name):
+def _verified_receipts(directory,scope,salt):
+    """Read existing confirmation evidence without opening a writable store."""
+    import sqlite3
+    from contextlib import closing
+    path=directory/'state.sqlite3'
+    if not path.is_file():return []
+    scoped=hmac.new(salt,scope.encode(),hashlib.sha256).hexdigest()
+    with closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True,timeout=.5)) as db:
+        found=db.execute('''SELECT r.reply_digest,r.baseline,r.at FROM send_receipts r
+            JOIN tasks t ON t.id=r.task_id
+            WHERE r.group_digest=? AND t.state='verified' ORDER BY r.at DESC LIMIT 64''',(scoped,)).fetchall()
+    return [(text,set(json.loads(baseline)),at) for text,baseline,at in found]
+
+
+def _receipt_rows(path, digest, scope, peer, name, *, confirmations=(),salt=b''):
     """Read the v1 archive without creating directories, keys or ACLs."""
     import win32crypt
     from .memory import ConversationMemory
@@ -302,12 +317,22 @@ def _receipt_rows(path, digest, scope, peer, name):
         identity=record.get('message_id','')
         if (record.get('direction')!='out' or record.get('speaker_id')!='self'
                 or record.get('kind') not in ('text','emoji','image')
-                or not stable.fullmatch(identity) or not stable.fullmatch(record.get('reply_to_id',''))
-                or not re.fullmatch(r'p_[a-f0-9]{16}',record.get('reply_to_speaker',''))):
+                or not stable.fullmatch(identity)):
             continue
         at=record.get('created_at')
         if not isinstance(at,(float,int)) or not 0<at<4102444800:continue
         text=' '.join(record.get('text','').split())
+        linked=(stable.fullmatch(record.get('reply_to_id',''))
+                and re.fullmatch(r'p_[a-f0-9]{16}',record.get('reply_to_speaker','')))
+        if not linked:
+            # Proactive/local sends have no inbound source link. Admit them
+            # only with the same scoped, timed, non-baseline proof accepted by
+            # the real sender. A manual self-message alone is never evidence.
+            from .domain import normalized
+            hashed=hmac.new(salt,normalized(record.get('text','')).encode(),hashlib.sha256).hexdigest()
+            hashed_id=hmac.new(salt,identity.encode(),hashlib.sha256).hexdigest()
+            if not any(hashed==expected and -5<=at-sent<=120 and hashed_id not in baseline
+                       for expected,baseline,sent in confirmations):continue
         if text:rows[identity]=(at,name,text[:55]+('…' if len(text)>55 else ''))
     return sorted(rows.values(),reverse=True)[:4]
 
@@ -336,7 +361,8 @@ def receipt_previews(cfg,watched,previous,cancelled=lambda:False):
             if scope in previous and previous[scope][0]==stamp:
                 found=previous[scope][1]
             else:
-                found=_receipt_rows(path,digest,scope,target['id'],name)
+                confirmed=_verified_receipts(cfg.runtime,scope,salt)
+                found=_receipt_rows(path,digest,scope,target['id'],name,confirmations=confirmed,salt=salt)
             rows.extend(found);cache[scope]=(stamp,found)
         except FileNotFoundError:continue
         except Exception:failed=True
@@ -531,6 +557,8 @@ class GlassView(tk.Frame):
         label(whead,'监听范围',14,bold=True).pack(side='left')
         self.actions['manage']=button(whead,'管理监听',lambda:self.select('sessions'),compact=True,icon_name='settings')
         self.actions['manage'].pack(side='right')
+        self.actions['calibrate']=button(whead,'校准此会话',self.calibrate_selected,compact=True)
+        self.actions['calibrate'].pack(side='right',padx=(4,5))
         global_actions=tk.Frame(watch,bg=PAPER);global_actions.pack(fill='x',side='bottom',pady=(7,0))
         label(global_actions,'全部会话',9,color=MUTED).pack(side='left')
         for key,text,op in (('pause_all','暂停全部','pause'),('enable_all','开启全部','enable')):
@@ -583,9 +611,19 @@ class GlassView(tk.Frame):
 
     def control_selected(self,operation,name=None):
         if self.busy or getattr(self.panel,'switch_busy',False):return
+        mode=self.status.get('mode')
+        if mode=='starting':return
+        if operation=='enable' and mode in ('disconnected','stopped'):
+            self.panel.connect_worker()
+            return
         chosen=name or self.queue_group or self.panel.settings.group
         if chosen not in self.panel.settings.allowed_groups:return
+        if chosen not in self.status.get('group_names',self.panel.settings.allowed_groups):return
         self.panel.control_conversation(chosen,operation)
+
+    def calibrate_selected(self):
+        if self.busy or getattr(self.panel,'switch_busy',False):return
+        self.panel.calibrate(self.queue_group or self.panel.settings.group,auto_match=True)
 
     def _watch_action(self,name):
         row=next((r for r in self.status.get('groups',[]) if r.get('name')==name),{})
@@ -614,9 +652,17 @@ class GlassView(tk.Frame):
     def _choose_queue(self,name):
         if name is not None and name not in self.panel.settings.allowed_groups:return
         self.queue_group=name
-        if name is None:self.watch_table.selection_remove(*self.watch_table.selection())
         self.update_text()
-        self.refresh_pending()
+        if name is None:
+            self.watch_table.selection_remove(*self.watch_table.selection())
+        elif self.watch_table.exists(name):
+            self.watch_table.selection_set(name)
+            self.watch_table.see(name)
+        if self.page=='assistant':self.refresh_pending()
+
+    def focus_conversation(self,name):
+        self._choose_queue(name)
+        self.select('assistant')
 
     def _resize_shell(self,event):
         compact=event.width<(1040 if self._compact is None else 1052 if self._compact else 1028)
@@ -768,8 +814,13 @@ class GlassView(tk.Frame):
             from .settings_ui import SettingsPage
             cls=SettingsPage
         else:
-            from .persona_ui import PersonaPage
-            cls=PersonaPage
+            from .persona_modules import modules_revision
+            if modules_revision(self.panel.directory) is not None:
+                from .persona_modules_ui import PersonaModulesPage
+                cls=PersonaModulesPage
+            else:
+                from .persona_ui import PersonaPage
+                cls=PersonaPage
         page=cls(self.body,self.panel)
         feedback=getattr(self.panel,'feedback',None)
         if feedback:
@@ -795,9 +846,10 @@ class GlassView(tk.Frame):
         self.update_text()
 
     def _current_scope(self):
-        names=tuple(self.status.get('group_names') or self.panel.settings.allowed_groups)
+        saved=self.panel.settings.allowed_groups
+        names=tuple(self.status.get('group_names') or saved)
         chosen=getattr(self,'queue_group',None)
-        return _queue_scope(self.panel),(chosen,) if chosen in names else names
+        return _queue_scope(self.panel),(chosen,) if chosen in saved else names
 
     def _show_recent(self,rows,note):
         display=(tuple(rows),note)
@@ -823,6 +875,8 @@ class GlassView(tk.Frame):
                 preview.tag_add('progress',f'{index}.0',f'{index}.end')
 
     def refresh_pending(self,*,background=False):
+        if self.status.get('mode') in ('starting','disconnected','stopped'):
+            return
         p=self.panel
         scope=self._current_scope()
         same_scope=getattr(self,'_queue_scope',None)==scope
@@ -864,21 +918,27 @@ class GlassView(tk.Frame):
     def update_text(self):
         p=self.panel;cfg=p.settings;data=self.status
         mode=data.get('mode','')
-        online=bool(data) and data.get('running',True) and mode not in ('stopped','disconnected')
-        names=tuple(data.get('group_names') or cfg.allowed_groups) if online else cfg.allowed_groups
+        online=bool(data) and data.get('running',True) and mode not in ('starting','stopped','disconnected')
+        names=cfg.allowed_groups
+        live_names=tuple(data.get('group_names',names))
         name=self.queue_group if self.queue_group in names else cfg.group
         selected_row=next((row for row in data.get('groups',[]) if row.get('name')==name),{})
-        selected_mode=selected_row.get('mode',mode)
+        applying=online and name not in live_names
+        selected_mode='applying' if applying else selected_row.get('mode',mode)
         auto=online and selected_mode=='auto'
-        self.actions['enable'].configure(text='本会话回复中' if auto else '开启此会话',
-                                         state='disabled' if auto or self.busy else 'normal',
+        enable_text={'starting':'正在启动后台','disconnected':'重连后台','stopped':'重连后台'}.get(mode)
+        if applying:enable_text='正在应用校准'
+        self.actions['enable'].configure(text=enable_text or ('本会话回复中' if auto else '开启此会话'),
+                                         state='disabled' if auto or applying or self.busy or mode=='starting' else 'normal',
                                          bg='#30495E' if auto else PEACH,highlightbackground='#30495E' if auto else PEACH,
                                          disabledforeground='#D1DEE5' if auto else MUTED)
         self.actions['pause'].configure(text='暂停此会话',state='normal' if online and selected_mode in ('auto','observe') and not self.busy else 'disabled')
         self.actions['pause_all'].configure(state='normal' if online and any(row.get('mode') in ('auto','observe') for row in data.get('groups',[])) and not self.busy else 'disabled')
-        self.actions['enable_all'].configure(state='disabled' if self.busy else 'normal')
+        self.actions['enable_all'].configure(state='normal' if online and not self.busy and not data.get('window_reload_pending') else 'disabled')
+        self.actions['observe'].configure(state='normal' if online and not self.busy else 'disabled')
+        self.actions['calibrate'].configure(state='disabled' if self.busy or mode=='starting' else 'normal')
         if not online:
-            self._queue_request=None;self.queue_refresh.configure(state='normal',text='刷新')
+            self._queue_request=None;self.queue_refresh.configure(state='disabled',text='刷新')
             if self._receipt_cache:
                 self._receipt_cache={};self._show_recent([],'等待读取当前监听范围')
         state=MODES.get(mode,'正在连接' if not data else '读取状态中')
@@ -891,20 +951,33 @@ class GlassView(tk.Frame):
         self.target_name.set(name if len(name)<=limit else name[:limit-1]+'…')
         policy={'natural':'自然参与','all':'逐条回复','mentions':'仅点名'}.get(selected_row.get('reply_mode',data.get('reply_mode',cfg.reply_mode)),'')
         split=data.get('split_replies_effective',cfg.split_replies and cfg.receive_mode=='database')
-        self.target_info.set(' · '.join((kind,policy,'多气泡' if split else '单气泡',MODES.get(selected_mode,'未连接'))))
+        target_info=' · '.join((kind,policy,'多气泡' if split else '单气泡',MODES.get(selected_mode,'未连接')))
+        if online and selected_mode in ('auto','observe'):
+            observed=selected_row.get('last_observed')
+            if selected_row.get('receive_retrying'):
+                target_info+='\n微信消息接收重试中'
+            elif observed:
+                target_info+='\n最近读取 '+time.strftime('%H:%M:%S',time.localtime(observed))
+            elif selected_row.get('receive_mode')=='database':
+                target_info+='\n正在建立监听基线'
+        self.target_info.set(target_info)
         counts=data.get('counts') or {}
         self.metrics['selected'].set(str(len(names)))
         self.metrics['pending'].set(str(data.get('pending_count','—')) if online else '—')
         self.metrics['verified'].set(str(counts.get('verified',0)) if online else '—')
         self.unknown_note.set(f"{counts['unknown']} 条待核对" if online and counts.get('unknown') else '')
-        modes={row['name']:row.get('mode') for row in data.get('groups',[]) if row.get('name')}
         live={row['name']:row for row in data.get('groups',[]) if row.get('name')}
         def watch_state(n):
-            mode_for_room=modes.get(n,mode)
             if not online:return '已选择'
+            if n not in live_names:return '待应用'
+            row=live.get(n,{})
+            mode_for_room=row.get('mode',mode)
+            window=row.get('window_state')
+            if mode_for_room in ('auto','observe') and window in ('需重新绑定','待校准'):return window
             if mode_for_room=='auto':
-                window=live.get(n,{}).get('window_state')
-                if window in ('已最小化','在后台','窗口不可见','需重新绑定','待校准'):return window
+                if row.get('receive_retrying'):return '接收重试'
+                if row.get('receive_mode')=='database':return '监听中' if row.get('last_observed') else '正在接收'
+                if window in ('已最小化','在后台','窗口不可见'):return window
             return {'auto':'回复中','observe':'观察中','paused':'暂停'}.get(mode_for_room,'已选择')
         rows=tuple((n,{'group':'群聊','private':'个人'}.get(cfg.conversation_targets.get(n,{}).get('kind'),'会话'),
                     watch_state(n)) for n in names)
@@ -934,11 +1007,13 @@ class GlassView(tk.Frame):
             self._request_watch_layout()
         for title,control in self.watch_controls.items():
             active=live.get(title,{}).get('mode',mode)=='auto'
-            control.configure(text='暂停' if active else '开启',state='disabled' if self.busy or not online else 'normal')
+            pending=online and title not in live_names
+            control.configure(text='等待' if pending else '暂停' if active else '开启',
+                              state='disabled' if self.busy or not online or pending else 'normal')
         self.queue_filter.configure(text=self.queue_group or '全部监听会话 · 点击监听对象查看对应队列')
         if self.page=='settings':self.pages['settings'].refresh_route()
         self.all_queues.configure(state='normal' if self.queue_group else 'disabled')
-        self.actions['recover'].configure(state='disabled' if self.busy or self.queue_group not in (None,cfg.group) else 'normal')
+        self.actions['recover'].configure(state='disabled' if not online or self.busy or self.queue_group not in (None,cfg.group) else 'normal')
         selected=live.get(self.queue_group)
         title,detail=recent_result({**data,**selected,'last_result':selected.get('last_result')} if selected else data,p.reason.get())
         self.outcome_title.set(title);self.outcome_detail.set(detail)

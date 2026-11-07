@@ -3,6 +3,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone, timedelta
 import random
 import uuid
+from .routines import RoutineScheduler,validate_routines
 
 LOCAL = timezone(timedelta(hours=8))
 
@@ -23,6 +24,7 @@ class CompanionPreferences:
     style: str = ''
     interests: str = ''
     dates: list = field(default_factory=list)
+    routines: list = field(default_factory=list)
     idle_min_minutes: int = 50
     idle_max_minutes: int = 70
     followup_min_minutes: int = 2
@@ -35,6 +37,7 @@ class CompanionPreferences:
     followup_probability: float = .55
 
     def __post_init__(self):
+        validate_routines(self.routines)
         if any(type(v) is not bool for v in (self.enabled,self.followup,self.idle,self.gentle_followups)):
             raise ValueError('开关必须是布尔值')
         if type(self.daily_max) is not int or not 1<=self.daily_max<=24:
@@ -71,7 +74,7 @@ def quiet_now(now,prefs):
 def fresh_state():
     return dict(revision=0,seen=[],last_in=0,last_activity=0,followup_at=0,
                 last_reply='',next_idle=0,unanswered=False,unanswered_at=0,high_water=0,dates_seen=[],
-                checkin_at=0,signoff_at=0,opener_at=0)
+                checkin_at=0,signoff_at=0,opener_at=0,routine_history=[])
 
 
 @dataclass(frozen=True)
@@ -83,6 +86,8 @@ class Candidate:
     revision: int
     day: str
     label: str = ''
+    routine_id: str = ''
+    prefer_sticker: bool = False
 
 
 class Planner:
@@ -93,6 +98,7 @@ class Planner:
         self.boot_at=boot_at
         self.rng=rng or random.SystemRandom()
         self._delivered_id=''
+        self.routines=RoutineScheduler(self.state)
         # Persisted future timers survive restart; the revision invalidates old
         # candidates. Expired follow-ups are consumed by decide, never replayed.
         self.state['revision']+=1
@@ -102,10 +108,12 @@ class Planner:
     def due_at(self):
         p,s=self.preferences,self.state
         if not p.enabled:return 0
+        scheduled=self.routines.due_at(p.routines,max(s['high_water'],self.boot_at))
         if s['unanswered']:
-            return (s['checkin_at'] or s['signoff_at']) if p.gentle_followups else 0
-        if not s['last_in']:return 0
-        due=[]
+            sequence=(s['checkin_at'] or s['signoff_at']) if p.gentle_followups else 0
+            return min(filter(None,(scheduled,sequence)),default=0)
+        if not s['last_in']:return scheduled
+        due=[scheduled] if scheduled else []
         if p.followup and p.followup_probability and s['followup_at']:due.append(s['followup_at'])
         if p.idle and p.idle_probability:
             due.append(max(s['next_idle'],s['last_activity']+p.idle_min_minutes*60))
@@ -119,6 +127,7 @@ class Planner:
         old,self.preferences=self.preferences,preferences
         s=self.state
         s['revision']+=1
+        self.routines.invalidate()
         if not preferences.enabled:
             s['followup_at']=0
             self.end_sequence()
@@ -146,6 +155,7 @@ class Planner:
     def observe(self,message,baseline=False):
         key=message.message_id
         if not key or key in self.state['seen']:return
+        revision=self.state['revision']
         unanswered_at=self.state.get('unanswered_at') or self.state['last_activity']
         self.state['seen']=(self.state['seen']+[key])[-256:]
         if message.created_at>self.state['last_activity']:
@@ -163,6 +173,7 @@ class Planner:
                 self.state['followup_at']=0
                 self.state['unanswered']=False
                 self.end_sequence()
+        if revision!=self.state['revision']:self.routines.invalidate()
 
     def replied(self,message_id,now):
         if message_id==self.state['last_reply']:return
@@ -174,6 +185,7 @@ class Planner:
     def _clock_ok(self,now):
         if now<self.state['high_water']:
             self.state['revision']+=1
+            self.routines.invalidate()
             self.state['followup_at']=0
             self.end_sequence()
             self.reason='系统时间回拨，等待时间恢复'
@@ -182,6 +194,13 @@ class Planner:
         return True
 
     def valid(self,candidate,now,*,continuing=False):
+        if candidate and candidate.kind=='routine':
+            return bool(self._clock_ok(now) and self.preferences.enabled
+                and candidate.revision==self.state['revision']
+                and candidate.created<=now<=candidate.expires and candidate.day==local_day(now)
+                and not quiet_now(now,self.preferences)
+                and (not continuing or self._delivered_id==candidate.id and self.state['unanswered'])
+                and self.routines.valid(candidate,self.preferences.routines,now,continuing=continuing))
         waiting_for_reply=continuing or (candidate and candidate.kind in ('checkin','signoff'))
         return bool(candidate and self._clock_ok(now) and self.preferences.enabled
             and self.state['unanswered']==waiting_for_reply and (not continuing or self._delivered_id==candidate.id)
@@ -193,10 +212,17 @@ class Planner:
         if not self._clock_ok(now):return
         p,s=self.preferences,self.state
         if not p.enabled:self.reason='主动聊天未开启';return
-        if now-self.boot_at<60:self.reason='等待启动稳定';return
+        self.routines.maintain(p.routines,now)
         if quiet_now(now,p):
             self.end_sequence()
             self.reason='免打扰时段';return
+        routine=self.routines.plan(p.routines,now,s['revision'])
+        if routine:
+            self.reason='定时关怀已到点，正在准备'
+            definition=routine['definition']
+            return Candidate(routine['candidate_id'],'routine',now,routine['expires_at'],s['revision'],
+                             routine['day'],definition['intent'],routine['routine_id'],definition['prefer_sticker'])
+        if now-self.boot_at<60:self.reason='等待启动稳定';return
         if s['unanswered']:
             for field,kind in (('checkin_at','checkin'),('signoff_at','signoff')):
                 due=s[field]
@@ -228,6 +254,7 @@ class Planner:
         return Candidate(uuid.uuid4().hex,kind,now,now+120,s['revision'],today,label)
 
     def delivered(self,candidate,now):
+        if candidate.kind=='routine':self.routines.mark(candidate,'sending')
         self._delivered_id=candidate.id
         self.state['unanswered']=True
         self.state['unanswered_at']=now

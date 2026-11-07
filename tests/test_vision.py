@@ -173,6 +173,18 @@ def test_even_an_ocr_missed_period_is_a_nonempty_draft():
     assert not Vision(RecordedOCR()).read(image, binding()).draft_empty
 
 
+@pytest.mark.parametrize('shade,extra,empty',[(145,False,True),(0,False,False),(145,True,False)])
+def test_gray_voice_input_placeholder_is_empty_but_real_text_is_not(shade,extra,empty):
+    from xiaomao.vision import Vision,TextLine
+    image=screenshot();draw=ImageDraw.Draw(image)
+    draw.rectangle((2,483,3,502),fill=(20,190,70))
+    draw.text((9,484),'Ctrl Win voice input',fill=(shade,shade,shade))
+    if extra:draw.text((9,520),'real draft',fill='black')
+    lines=[TextLine('按住 Ctrl Win 使用语音输入文字',(8,0,230,23),.99)]
+    frame=Vision(RecordedOCR(draft=lines)).read(image,binding())
+    assert frame.draft_empty is empty
+
+
 def test_exact_draft_line_orders_high_confidence_runs_without_inserting_spaces():
     from xiaomao.vision import TextLine,exact_draft_line
     left=TextLine('借到就好，',(0,2,84,19),.99)

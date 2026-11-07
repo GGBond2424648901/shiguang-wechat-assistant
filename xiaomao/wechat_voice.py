@@ -1,13 +1,14 @@
 """Delivery rules for the editable v2.2 WeChat language layer."""
 import re
 import json
+from collections import Counter
 
 from .dafeiyu import formatted_reply
+from .kaomoji import FACES, FACE_RE, canonical, varied, guidance
 
 
 SECTION = '【语言习惯（全面拟人层）】'
-FACES = ('(｡･ω･｡)', '(´･ω･`)', '(￣▽￣)', '(´▽`ʃ♡ƪ)', '(๑•̀ㅂ•́)و✧', '( ´ ▽ ` )ﾉ')
-_FACE = re.compile('|'.join(map(re.escape,FACES))+r'|[（(](?=[^()（）\n]{0,20}[ωД▽∀♡•╥｀｡￣≧≦ಥ])[^()（）\n]{1,22}[)）]')
+_FACE = re.compile(FACE_RE.pattern+r'|[（(](?=[^()（）\n]{0,20}[ωД▽∀♡•╥｀｡￣≧≦ಥ])[^()（）\n]{1,22}[)）]')
 _EMOJI = re.compile(r'[\U0001f300-\U0001faff\u2600-\u26ff\u2700-\u27bf]')
 _ACKS = {'行':('行吧','可以啊'),'好':('好啊','好嘛'),'嗯':('嗯呢','懂了'),'哦':('晓得','懂了'),'对':('对呀','没错')}
 _OPENERS = sorted(('唔…','诶','那个','啊这','不是','你别说','等一下','我看看','让我想下','话说','对了','其实','讲真','说实话',
@@ -59,13 +60,27 @@ def _recent(history):
     return [m.text.strip() for m in history if m.direction=='out' and m.kind=='text' and m.text.strip()][-10:]
 
 
+def _face_history(history):
+    recent=[m.text for m in history if m.direction=='out' and m.kind=='text'
+            and m.delivery_status in ('','verified')][-24:]
+    used=Counter()
+    for text in recent:
+        for token in _TOKENS.split(text)[1::2]:
+            if _FACE.fullmatch(token):used[canonical(token)]+=1
+    return used,'\n'.join(recent)
+
+
 def _opening(text):
     if re.match(r'^唔(?:…+|\.{2,})',text):return '唔…'
     return next((s for s in _OPENERS if text.startswith(s)),text.split('，',1)[0][:6])
 
 
-def history_hint(history):
+def history_hint(history,*,adaptive=False):
     recent=_recent(history)
+    if adaptive:
+        used,seed=_face_history(history)
+        return ('\n本会话刚发出的文字只供衔接：按当前气氛表达，不按条数禁用颜文字、动作或问句，'
+                '相同词语在自然应声时可以再次出现；若已反复说相同内容，就贡献新的内容。'+guidance(used,seed))
     if not recent:return ''
     first=_opening(recent[-1])
     # Only copy tokens from our language list into instructions, never arbitrary history.
@@ -77,21 +92,24 @@ def history_hint(history):
     return ('\n本会话刚发出的文字节奏：'+hint) if hint else ''
 
 
-def render_bubble(text,history,sources):
+def render_bubble(text,history,sources,*,adaptive=False):
     if keep_verbatim(text,sources):return text
     recent=_recent(history)
     previous=_opening(recent[-1]) if recent else ''
     serious=any(_SERIOUS.search(m.text) for m in sources) or _SERIOUS.search(text)
-    allow_face=not (serious or any(_FACE.search(s) for s in recent[-5:]) or _EMOJI.search(_FACE.sub('',text)))
+    allow_face=adaptive or not (serious or any(_FACE.search(s) for s in recent[-5:]) or _EMOJI.search(_FACE.sub('',text)))
     # Protect quoted words, code and paths at their exact offsets. A face containing
     # a backtick is a single token when it occurs outside a literal span.
     tokens=_TOKENS.split(text)
     plain=not formatted_reply(_FACE.sub('',text))
     result=[]
+    used,seed=_face_history(history) if adaptive else (Counter(),'')
     for i,token in enumerate(tokens):
         if i%2:
             if _FACE.fullmatch(token):
-                if allow_face:result.append(token);allow_face=False
+                if allow_face:
+                    token=varied(token,used,seed+'\n'+text) if adaptive else token
+                    result.append(token);used[canonical(token)]+=1;allow_face=adaptive
             else:result.append(token)
         else:
             end=re.search(r'。+(?=\s*$)',token) if i==len(tokens)-1 else None
@@ -103,19 +121,19 @@ def render_bubble(text,history,sources):
     body=''.join(result)
     middle=body.strip()
     match=re.match(r'^(行|好|嗯|哦|对)(?:[，,、！!…~～\n]\s*|$)',middle)
-    if match:
+    if match and not adaptive:
         a,b=_ACKS[match[1]]
         rest=middle[match.end():].lstrip()
         if rest and previous in (match[1],a,b):middle=rest
         else:middle=(b if previous==a else a)+('，'+rest if rest else '')
-    elif previous in _OPENERS and _opening(middle)==previous:
+    elif not adaptive and previous in _OPENERS and _opening(middle)==previous:
         remainder=re.sub(r'^唔(?:…+|\.{2,})','',middle) if previous=='唔…' else middle[len(previous):]
         cut=re.match(r'^[，,、…~～\s]+(.+)$',remainder,re.S)
         if cut:middle=(_KEEP_MEANING[previous]+'，' if previous in _KEEP_MEANING else '')+cut[1]
         elif previous=='唔…' and remainder:middle=remainder
         elif not remainder and previous in ('行吧','好啊','好嘛','嗯呢','收到','成','可以啊'):
             middle='好嘛' if previous=='可以啊' else '可以啊'
-    if len(recent)>=2:
+    if not adaptive and len(recent)>=2:
         tails=[_TAIL.search(s) for s in [*recent[-2:],middle]]
         if all(tails) and tails[0][1]==tails[1][1]==tails[2][1] and not re.search(r'(?:网吧|酒吧|贴吧|氧吧|毛呢|花呢|哈[哈]+)[？！!?～~…\s]*$',middle):
             middle=middle[:tails[2].start()]+middle[tails[2].start()+1:]

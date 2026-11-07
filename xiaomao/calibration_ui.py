@@ -22,8 +22,9 @@ class CalibrationFlow:
     """The picker is visible during discovery and remains usable after a capture error."""
     AUTO='识别窗口中的会话'
 
-    def __init__(self,panel,target):
+    def __init__(self,panel,target,*,auto_match=False):
         self.panel=panel
+        self.auto_match=auto_match
         self.cancelled=threading.Event()
         self.lease=None
         self.editor=None
@@ -92,11 +93,10 @@ class CalibrationFlow:
             if len(set(titles))!=len(titles):
                 titles=[f'{title} · 窗口 {w["hwnd"]}' for title,w in zip(titles,windows)]
             self.picker.configure(values=titles)
-            if windows:
-                self.preselect()
+            matched=self.preselect()
             self._pending(False)
             self.status.set('选择要校准的微信窗口。其他会话保留现有绑定。' if windows else '没有可校准的聊天窗口。可打开微信，进入聊天后刷新。')
-            if auto and len(windows)==1:self.capture()
+            if auto and (len(windows)==1 or self.auto_match and matched):self.capture()
         self.panel.work(list_calibration_windows,found,self.fail,mutates=False)
 
     def preselect(self):
@@ -115,9 +115,14 @@ class CalibrationFlow:
         # and regions twice. Ambiguous names require an explicit window choice.
         exact=next((i for i,w in enumerate(self.windows) if existing and
                     (w['hwnd'],w['pid'])==(existing.hwnd,existing.pid)),None)
-        if len(matches)==1:self.picker.current(matches[0])
-        elif len(matches)>1 and exact not in matches:self.picker.set('')
-        else:self.picker.current(exact if exact is not None else 0)
+        if len(matches)==1:
+            self.picker.current(matches[0])
+            return True
+        if len(matches)>1 and exact not in matches:
+            self.picker.set('')
+            return False
+        self.picker.current(exact if exact is not None else 0)
+        return exact is not None
 
     def open_wechat(self):
         from .windows import open_wechat_for_calibration

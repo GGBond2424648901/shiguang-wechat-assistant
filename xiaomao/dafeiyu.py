@@ -20,6 +20,7 @@ _FORMATTED = re.compile(
 )
 _END = re.compile('[' + re.escape(chat_layout.SENTENCE_END) + ']+'
                   + r'''["'”’）)】」》〉]*\s*|\n\s*''')
+_HESITATION = re.compile(r'\s*(?:唔|呃|嗯|那个|不过嘛|这个嘛|怎么说呢)?[….]+\s*')
 
 
 def formatted_reply(text):
@@ -56,6 +57,10 @@ def split_reply(text, enabled=True, max_bubbles=3):
         start = end
     if start < len(text):
         chain.append(_Plain(text[start:]))
+    # A hesitation starts the following thought; it is not a separate message.
+    for index in range(len(chain)-2,-1,-1):
+        if _HESITATION.fullmatch(chain[index].text):
+            chain[index:index+2] = [_Plain(chain[index].text+chain[index+1].text)]
     bubbles = chat_layout.group_bubbles(chain, _Plain, max_bubbles=min(max_bubbles, 3))
     parts = [''.join(part.text for part in bubble) for bubble in bubbles]
     parts[0] = leading + parts[0]

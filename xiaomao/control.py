@@ -6,6 +6,7 @@ import os
 from pathlib import Path
 import secrets
 import threading
+from time import monotonic
 from .privacy import private_dir, make_private
 
 
@@ -35,6 +36,25 @@ class ControlServer:
                 except ConnectionError:
                     pass
 
+            def discard_rejected_body(self,length):
+                # Closing a Windows socket with unread POST data can reset it
+                # before the client receives 413. Drain only small authenticated
+                # bodies, under a hard time/size cap; never parse or execute them.
+                if not 0<length<=128*1024:return
+                previous=self.connection.gettimeout();deadline=monotonic()+.2
+                try:
+                    while length:
+                        remaining=deadline-monotonic()
+                        if remaining<=0:break
+                        self.connection.settimeout(remaining)
+                        chunk=self.rfile.read1(min(length,16384))
+                        if not chunk:break
+                        length-=len(chunk)
+                except OSError:
+                    pass
+                finally:
+                    self.connection.settimeout(previous)
+
             def route(self, method):
                 if self.headers.get("Origin") is not None or self.headers.get("Sec-Fetch-Site") is not None:
                     return self.answer(403, {"error": "不接受浏览器跨站控制"})
@@ -50,6 +70,7 @@ class ControlServer:
                                    "/stop_if_idle":lambda:engine.stop_if_idle(),
                                    "/reload_windows":lambda:engine.reload_windows(),
                                    "/queue_text":lambda:engine.queue_text(**payload),
+                                   "/queue_outbound":lambda:engine.queue_outbound(**payload),
                                    "/configure_reply_rules":lambda:engine.configure_reply_rules(**payload),
                                    "/configure_reply_defaults":lambda:engine.configure_reply_defaults(**payload),
                                    "/enable_selected":lambda:engine.enable_selected(**payload),
@@ -66,7 +87,9 @@ class ControlServer:
                     length = int(self.headers.get("Content-Length", "0"))
                 except ValueError:
                     return self.answer(400, {"error": "请求长度无效"})
-                if length > 4096:
+                limit=32768 if self.path=='/companion_configure' else 4096
+                if length > limit:
+                    self.discard_rejected_body(length)
                     return self.answer(413, {"error": "请求过大"})
                 if length < 0:
                     return self.answer(400, {"error": "请求长度无效"})
@@ -78,6 +101,13 @@ class ControlServer:
                         if self.path=='/queue_text':
                             if not isinstance(payload,dict) or set(payload)!={'group','text','request_id'} or not all(isinstance(v,str) for v in payload.values()):
                                 return self.answer(400, {"error": "需要指定会话、文字和请求编号"})
+                        elif self.path=='/queue_outbound':
+                            if (not isinstance(payload,dict) or set(payload)!={'group','scope','text','sticker_ids','request_id'}
+                                    or not all(isinstance(payload[k],str) for k in ('group','scope','text','request_id'))
+                                    or not payload['group'] or not payload['scope']
+                                    or not isinstance(payload['sticker_ids'],list)
+                                    or not all(isinstance(s,str) for s in payload['sticker_ids'])):
+                                return self.answer(400,{'error':'需要指定会话身份、文字、素材编号和请求编号'})
                         elif self.path=='/configure_reply_defaults':
                             if not isinstance(payload,dict) or set(payload)!={'preferences'}:
                                 return self.answer(400, {"error": "需要回复偏好设置"})

@@ -17,7 +17,7 @@ def test_proactive_can_select_allowlisted_sticker_with_text_in_one_call(tmp_path
     plan=model.proactive_plan([],candidate,choices=lib.items)
     assert plan==ReplyPlan(text='突然想起那个镜头了',sticker='s_1')
     assert len(requests)==1
-    content=requests[0]['messages'][0]['content']
+    content='\n'.join(m['content'] for m in requests[0]['messages'][1:] if m['role']=='system')
     assert 's_1' in content and '图片' in content
 
 
@@ -26,6 +26,16 @@ def test_proactive_cannot_invent_sticker_id_or_fake_sent_action(tmp_path):
     model,_=completion(tmp_path,json.dumps({'send':True,'text':'','sticker':'../../not-allowed.gif'}))
     with pytest.raises(ModelError):
         model.proactive_plan([],Candidate('p','idle',100,220,1,'2026-11-06'),choices=[])
+
+
+def test_routine_sticker_preference_reaches_model_without_forcing_unsuitable_images(tmp_path):
+    library(tmp_path);lib=StickerLibrary(tmp_path)
+    model,requests=completion(tmp_path,json.dumps({'send':True,'text':'早呀，吃点热乎的再忙','sticker':'s_1'}))
+    candidate=Candidate('p','routine',100,220,1,'2026-11-07','自然提醒早餐','morning',True)
+    plan=model.proactive_plan([],candidate,choices=lib.items)
+    instructions='\n'.join(m['content'] for m in requests[0]['messages'] if m['role']=='system')
+    assert '本次定时关怀偏好' in instructions and '没有贴切' in instructions
+    assert plan.sticker=='s_1'
 
 
 @pytest.mark.parametrize('outcome',['verified','unknown','skipped'])

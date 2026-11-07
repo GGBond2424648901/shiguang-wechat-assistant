@@ -167,10 +167,10 @@ def test_image_volume_triggers_summary_even_when_text_is_short(tmp_path):
         instance.remember(Message('图', kind='image', message_id=str(i), image_data=png))
     class Summarizer:
         def compact(self, previous, older):
-            assert len(older) == 1 and older[0].image_data == png
-            return '首张图像的可见内容。'
+            assert len(older) == 4 and all(m.image_data == png for m in older)
+            return '前四张图像的可见内容。'
     assert instance.compact_if_needed(Summarizer())
-    assert len(instance.messages) == 24
+    assert len(instance.messages) == 21
 
 
 def test_image_upgrade_during_compaction_retains_material_for_fresh_summary(tmp_path):

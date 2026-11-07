@@ -87,6 +87,7 @@ class Panel:
         root.minsize(min(930,width),min(620,height))
         root.configure(bg=BG)
         root.protocol("WM_DELETE_WINDOW",self.close)
+        root.bind('<Unmap>',self._minimize_to_tray,add='+')
         self.mode=tk.StringVar(value="只观察")
         self.reason=tk.StringVar(value="等待校准或观察目标群")
         self.notice=tk.StringVar(value="")
@@ -101,6 +102,7 @@ class Panel:
         self.owner_tone=tk.BooleanVar(value=self.settings.owner_confirmed)
         self.model_name=tk.StringVar(value=self.settings.model_name)
         self.secret=tk.StringVar(value="")
+        self.remember_account_form()
         self.secret_state=tk.StringVar(value="已使用 Windows DPAPI 加密保存；留空保留" if CredentialStore(self.settings.runtime).available else "尚未设置 DeepSeek 加密凭据")
         from .theme import GlassView,titlebar
         self.view=GlassView(self)
@@ -111,7 +113,7 @@ class Panel:
         titlebar(root,self.view)
         root.after(100,self.drain)
         root.after(120,self.poll)
-        self.work(self.client.start,self.show_status)
+        self.connect_worker()
 
     def work(self, action, success=None, failure=None,*,mutates=True,allow_exit=False,label=None,controls=()):
         # Only user actions have labels. Polling never creates a toast or steals focus.
@@ -177,7 +179,8 @@ class Panel:
         if self.connection_error and self.notice.get()==self.connection_error:
             self.notice.set("")
         self.connection_error=None
-        modes={"observe":"只观察","auto":"自动回复已开启","paused":"已暂停","stopped":"已停止"}
+        modes={"observe":"只观察","auto":"自动回复已开启","paused":"已暂停","stopped":"已停止",
+               "starting":"正在启动后台","disconnected":"未连接本地助手"}
         self.mode.set(modes.get(data.get("mode"),"未连接"))
         self.reason.set(data.get("reason",""))
         groups=data.get('group_names',self.settings.allowed_groups)
@@ -194,33 +197,99 @@ class Panel:
         self.view.update_text()
         aliases=dict.fromkeys((*self.settings.wake_aliases,self.settings.assistant_name))
         at='点名：'+' / '.join('@'+name for name in aliases)
-        if data.get('at_enabled'):at+=' · 额外群昵称已配置'
+        if data.get('receive_mode')=='database':at+=' · 群聊原生 @ 按微信账号识别'
+        elif data.get('at_enabled'):at+=' · 额外群昵称已配置'
         calibrated="窗口已校准" if data.get("calibrated") else "需要校准窗口"
         counts=data.get("counts",{})
         self.details.set(f"{calibrated}  ·  {at}  ·  已核对 {counts.get('verified',0)}  ·  结果未知 {counts.get('unknown',0)}  ·  待处理 {data.get('pending_count',0)}")
 
+    _account_fields={'display_name':'self_display_name','at_unique':'self_name_unique_confirmed',
+                     'auto_on_launch':'auto_on_launch','split_replies':'split_replies','idle_wake':'idle_wake',
+                     'owner_tone':'owner_confirmed','model_name':'model_name'}
+
+    def remember_account_form(self):
+        from .account_switching import configured_account
+        try:self._form_account=configured_account(self.settings)
+        except ValueError:self._form_account=''
+        self._form_baseline={name:getattr(self,name).get() for name in Panel._account_fields if hasattr(self,name)}
+
+    def sync_account_settings(self,data):
+        """Follow a resident account transition without discarding local edits."""
+        from .account_switching import configured_account
+        account=data.get('account_scope')
+        if not account:return
+        try:current_account=configured_account(self.settings)
+        except ValueError:
+            self.notice.set('已保存对象包含不同微信账号，请在会话页核对监听范围')
+            return
+        form_account=getattr(self,'_form_account',current_account)
+        if not account or (account==current_account and account==form_account
+                and data.get('account_display_name','')==self.settings.account_display_name):return
+        fields=Panel._account_fields
+        baseline=getattr(self,'_form_baseline',{})
+        dirty=any(hasattr(self,name) and getattr(self,name).get()!=baseline.get(name,getattr(self.settings,field))
+                  for name,field in fields.items())
+        dirty=dirty or bool(self.secret.get()) or bool(getattr(self,'pending_mutations',0))
+        for page in self.view.pages.values():
+            checker=getattr(page,'dirty',None)
+            if checker and checker():dirty=True
+            if any(entry.get().strip() for entry in getattr(page,'key_entries',())):dirty=True
+        if dirty:
+            self.notice.set('后台已自动识别新微信；本页未保存的修改已保留，请撤销旧账号修改后继续编辑')
+            return
+        fresh=Settings.load(self.directory)
+        if configured_account(fresh)!=account:return
+        self.settings=fresh
+        for name,field in fields.items():
+            if hasattr(self,name):getattr(self,name).set(getattr(fresh,field))
+        self.target_group.set(fresh.group)
+        Panel.remember_account_form(self)
+        self.view.render()
+
+    def connect_worker(self):
+        if self.closing or getattr(self,'exiting',False) or self.view.status.get('mode')=='starting':
+            return
+        self.worker_start=object()
+        self.show_status({'running':False,'mode':'starting','reason':'正在启动本机后台，连接后自动读取队列'})
+        if self.view.page=='assistant':
+            self.set_preview('正在连接本机后台…')
+
+        def connected(data):
+            self.show_status(data)
+            if self.view.page=='assistant':
+                self.view.refresh_pending(background=True)
+
+        self.work(self.client.start,connected,self._connection_failed)
+
+    def _connection_failed(self,error):
+        if self.view.status.get('mode')=='disconnected':
+            return
+        self.show_status({'running':False,'mode':'disconnected','reason':error})
+        self.connection_error=error
+        if self.view.page=='assistant':
+            self.set_preview('后台未连接。点「重连后台」后读取待回复队列。')
+        self.notice.set(error)
+
     def poll(self):
         if self.closing:
             return
-        if not self.poll_busy:
+        if (not self.poll_busy and not getattr(self,'exiting',False)
+                and not getattr(self,'pending_mutations',0) and self.view.status.get('mode')!='starting'):
             self.poll_busy=True
+            start=getattr(self,'worker_start',None)
             def done(data):
                 self.poll_busy=False
+                if start is not getattr(self,'worker_start',None):return
                 previous=self.view.status
+                Panel.sync_account_settings(self,data)
                 self.show_status(data)
                 if self.view.page in ('assistant','pending') and (self.view._queue_scope!=self.view._current_scope()
                         or data.get('pending_count') or any(previous.get(k)!=data.get(k) for k in ('group','mode','reason','pending_count','counts'))):
                     self.view.refresh_pending(background=True)
             def failed(error):
                 self.poll_busy=False
-                self.mode.set("未连接本地助手")
-                self.connection_error=error
-                self.view.status={'running':False,'mode':'disconnected','reason':error}
-                self.view.update_text()
-                if self.view.page in ('assistant','pending'):
-                    self.view._queue_request=None
-                    self.set_preview('暂时无法读取队列：'+error)
-                self.notice.set(error)
+                if start is getattr(self,'worker_start',None) and not getattr(self,'pending_mutations',0):
+                    self._connection_failed(error)
             self.work(self.client.status,done,failed,mutates=False)
         self.root.after(1500,self.poll)
 
@@ -231,9 +300,12 @@ class Panel:
         split_replies=self.split_replies.get()
         idle_wake=self.idle_wake.get() if hasattr(self,'idle_wake') else self.settings.idle_wake
         private_key,owner_tone=self.settings.private_tone_key,self.owner_tone.get()
+        from .account_switching import configured_account
+        account=getattr(self,'_form_account',configured_account(self.settings))
         self.secret.set("")
         def save():
             original=Settings.load(self.directory)
+            if configured_account(original)!=account:raise ValueError('微信账号已自动切换，未把旧页面设置应用到新账号；请先撤销旧修改')
             cfg=replace(original)
             if cfg.private_tone_key!=private_key:raise ValueError('回复对象已变化，请在当前会话重新保存设置')
             cfg.self_display_name=display
@@ -250,6 +322,7 @@ class Panel:
             return apply_saved_settings(self.client,original,cfg,key)
         def saved(result):
             self.settings=Settings.load(self.directory)
+            self.remember_account_form()
             self.secret_state.set("已使用 Windows DPAPI 加密保存；留空保留" if CredentialStore(self.settings.runtime).available else "尚未设置 DeepSeek 加密凭据")
             self.show_status(result)
             self.notice.set('设置已保存并应用到后台助手')
@@ -292,11 +365,23 @@ class Panel:
     def control_conversation(self,group,operation):
         if operation not in ('enable','pause'):raise ValueError('会话控制操作无效')
         cfg=self.settings
-        if group not in cfg.allowed_groups or group not in cfg.conversation_targets:
+        if group not in cfg.allowed_groups:
+            self.show_error('请先选择并绑定准确的回复对象');return
+        if operation=='enable':
+            bound=cfg.binding_for(group)
+            row=next((r for r in self.view.status.get('groups',[]) if r.get('name')==group),{})
+            if (group not in cfg.conversation_targets or not bound or not bound.bottom_confirmed
+                    or row.get('window_state') in ('待校准','需重新绑定')):
+                self.calibrate(group,auto_match=True)
+                return
+        if group not in cfg.conversation_targets:
             self.show_error('请先选择并绑定准确的回复对象');return
         scope=cfg.conversation_scope(group)
         def action():
-            if operation=='enable':self.client.start(initial_mode='paused')
+            if operation=='enable':
+                status=self.client.start(initial_mode='paused')
+                if status.get('window_reload_pending') and group not in status.get('group_names',[]):
+                    raise ValueError('该会话已保存，等待后台应用校准后即可开启')
             return getattr(self.client,operation+'_selected')(group,scope)
         def done(data):
             self.settings=Settings.load(self.directory)
@@ -437,29 +522,27 @@ class Panel:
         if self.switch_busy:return
         self.view.select('companion')
 
-    def calibrate(self,target=None):
+    def calibrate(self,target=None,*,auto_match=False):
         from .calibration_ui import CalibrationFlow
         flow=getattr(self,'calibration_flow',None)
         if flow:
             flow.present()
             return
         if self.switch_busy:return
-        self.calibration_flow=CalibrationFlow(self,target or self.settings.group)
+        self.calibration_flow=CalibrationFlow(self,target or self.settings.group,auto_match=auto_match)
 
     def save_calibration(self,calibration,cancelled,close,failed):
         def save():
             from .selection import bind_reviewed_window,verify_reviewed_window,stop_confirmed
             cfg=Settings.load(self.directory)
             checked,contact=verify_reviewed_window(cfg,calibration,cancelled)
-            updated=bind_reviewed_window(cfg,checked,contact)
+            updated=bind_reviewed_window(cfg,checked,contact,stage_for_enable=True)
             if cancelled.is_set():raise ValueError('校准已取消')
             if Settings.load(self.directory)!=cfg:raise ValueError('校准期间设置已变化，请重新核对')
             updated.save(expected=cfg)
-            try:previous=self.client.status()
-            except ControlUnavailable:
-                if (self.directory/'runtime/control.json').exists():
-                    raise ValueError('校准已保存，后台暂时无法连接；下次启动将使用新窗口') from None
-                return checked.target_group,self.client.start(initial_mode='observe')
+            try:previous=self.client.start(initial_mode='observe')
+            except ControlUnavailable as error:
+                raise ValueError('校准已保存，后台未能连接。'+str(error)) from None
             try:result=self.client.reload_windows()
             except ControlUnavailable as error:
                 if '没有这个控制操作' not in str(error):
@@ -475,12 +558,23 @@ class Panel:
             self.owner_tone.set(self.settings.owner_confirmed)
             self.at_unique.set(self.settings.self_name_unique_confirmed)
             self.view.render();self.show_status(result)
-            self.notice.set(f'“{target}”窗口校准已保存'+('，当前发送完成后应用' if result.get('window_reload_pending') else '并已应用'))
             close()
+            self.view.focus_conversation(target)
+            if result.get('window_reload_pending'):
+                next_step='，正在等待后台应用'
+            elif self.settings.is_conversation_paused(target):
+                next_step='，已在工作台选中，点「开启此会话」开始监听'
+            else:
+                next_step='并已应用'
+            self.notice.set(f'“{target}”窗口校准已保存'+next_step)
         self.work(save,saved,failed,label='保存窗口校准')
 
     def close(self):
         if self.closing or getattr(self,'exiting',False):return
+        status=getattr(self.view,'status',{})
+        if 'tray' in status and not status['tray'].get('running'):
+            self.show_error('系统托盘入口暂不可用，保留面板；可以稍后重试，或使用“停止并退出”')
+            return
         if self.switch_busy or getattr(self,'pending_mutations',0):
             if self.switch_busy:self.switch_cancel.set()
             self.reason.set('正在完成设置操作，随后关闭面板并保留后台…')
@@ -494,13 +588,61 @@ class Panel:
         self.closing=True
         self.root.destroy()
 
+    def _minimize_to_tray(self,event):
+        if event.widget is not self.root or self.closing:return
+        if self.root.state()=='iconic' and getattr(self.view,'status',{}).get('tray',{}).get('running'):
+            def hide():
+                if not self.closing and self.root.state()=='iconic':self.root.withdraw()
+            self.root.after_idle(hide)
+
+    def _exit_has_unsaved_changes(self):
+        """Inspect existing form snapshots without saving or exposing their text."""
+        settings=getattr(self,'settings',None)
+        baseline=getattr(self,'_form_baseline',{})
+        if settings is not None:
+            for name,field in Panel._account_fields.items():
+                if hasattr(self,name) and getattr(self,name).get()!=baseline.get(name,getattr(settings,field)):
+                    return True
+        if hasattr(self,'secret') and self.secret.get().strip():return True
+        for key,page in self.view.pages.items():
+            if hasattr(page,'can_leave') and not page.can_leave():return True
+            if hasattr(page,'dirty') and page.dirty():return True
+            if any(entry.get().strip() for entry in getattr(page,'key_entries',())):return True
+            if key=='persona':
+                if getattr(page,'document_drafts',{}):return True
+                if getattr(page,'loaded',False):
+                    from .persona import join_persona
+                    if join_persona(page.sections)!=page.source:return True
+                    if not page.previewing and page.editor.get('1.0','end-1c')!=page.shown:return True
+                dialog=getattr(page,'import_dialog',None)
+                if dialog is not None and dialog.winfo_exists() and dialog.editor.get('1.0','end-1c').strip():return True
+            pacing=getattr(page,'pacing_editor',None)
+            if pacing is not None and settings is not None:
+                from .sessions_ui import parse_rate
+                try:
+                    value=parse_rate([variable.get() for variable in pacing.rate_values])
+                    saved=Settings.load(self.directory)
+                    persisted=(saved.min_interval,saved.hourly_limit,saved.minute_limit,saved.pacing_jitter)
+                    original=(settings.min_interval,settings.hourly_limit,settings.minute_limit,settings.pacing_jitter)
+                    if value not in (persisted,original):return True
+                except ValueError:return True
+            if key=='companion' and getattr(page,'ready',False):
+                try:
+                    if page.values()!=page.loaded_preferences:return True
+                    if page.routines_editor.values()!=page.loaded_preferences.routines:return True
+                except ValueError:return True
+        return False
+
     def stop_and_exit(self):
-        if self.closing:
-            return
-        if any(hasattr(page,'can_leave') and not page.can_leave() for page in self.view.pages.values()):
+        if getattr(self,'exiting',False):return True
+        if self.closing or getattr(self,'_exit_prompting',False):return False
+        if self._exit_has_unsaved_changes():
             from tkinter import messagebox
-            if not messagebox.askokcancel('停止并退出','有未保存修改。要放弃这些修改，停止后台并退出吗？',parent=self.root):
-                return
+            self._exit_prompting=True
+            try:
+                if not messagebox.askokcancel('停止并退出','有未保存修改。要放弃这些修改，停止后台并退出吗？',parent=self.root):
+                    return False
+            finally:self._exit_prompting=False
         self.exiting=True
         self.switch_cancel.set()
         self.reason.set("正在停止助手…")
@@ -513,9 +655,21 @@ class Panel:
         def failed(error):
             self.exiting=False;self.show_error(error)
         self.work(stop,stopped,failed,allow_exit=True)
+        return True
 
 
 def launch(directory: Path):
-    root=tk.Tk()
-    Panel(root,directory)
-    root.mainloop()
+    from .panel_entry import PanelLease,signal_panel,watch_panel_signal
+    lease=PanelLease(directory)
+    try:
+        if not lease.owner:
+            for _ in range(20):
+                if signal_panel(directory):return
+                threading.Event().wait(.1)
+            raise ValueError('助手面板正在打开，请稍后从托盘重试')
+        lease.open_signal()
+        root=tk.Tk()
+        panel=Panel(root,directory)
+        root.after(200,lambda:watch_panel_signal(root,lease,on_exit=panel.stop_and_exit,on_show=panel.connect_worker))
+        root.mainloop()
+    finally:lease.close()

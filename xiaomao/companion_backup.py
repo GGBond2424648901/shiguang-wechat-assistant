@@ -133,7 +133,12 @@ def _merge_import(data,memory,notes):
     notes.data['facts']=bounded_facts(sorted(merged.values(),key=lambda f:f['at']))
     diaries={d['day']:d for d in data['diary']+notes.data['diary']}
     notes.data['diary']=sorted(diaries.values(),key=lambda d:d['day'])[-30:]
+    # Reset future work, never the destination's durable send evidence. A
+    # restored profile must not replay today's verified or uncertain routine.
+    from copy import deepcopy
+    routine_history=deepcopy(notes.data['planner'].get('routine_history',[]))
     notes.data['planner']=fresh_state()
+    notes.data['planner']['routine_history']=routine_history
     notes.save()
 
 

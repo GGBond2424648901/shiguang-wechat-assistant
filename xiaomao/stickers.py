@@ -28,6 +28,9 @@ class StickerRequest:
     static_only: bool = False
     suppressed: bool = False
     source_id: str = ''
+    explain_after: bool = False
+    varied: bool = False
+    avoid_repeats: bool = False
 
     def accepts(self,item):
         return (not self.suppressed and (not self.character or item.character==self.character)
@@ -38,8 +41,16 @@ _ANIMATED = re.compile(r'动图|动态图|动态|gif|会动的',re.I)
 _STATIC = re.compile(r'静态|静图|静止|不动的')
 _QUANTITY = re.compile(r'([0-9]{1,6}|[一二两三四五六七八九十])\s*[个张只幅]')
 _CANCEL = re.compile(r'(?:别|不用|不要|不必|不想|停止|取消).{0,5}(?:发|要|表情|动图|gif|静态)|^(?:算了|不用了|不要了|取消|停止)[吧啊啦。！!\s]*$',re.I)
+_NOVELTY = re.compile(
+    r'(?:不要|别|不用)(?:再)?(?:重复(?:(?:之前|以前|刚才|已经|昨天))?(?:发过的|发过|发送|发)?(?:表情包?|图片|的)?'
+    r'|(?:发|发送)(?:相同|一样|同样|之前|以前|刚才)(?:的|那[张个]|这张)?(?:表情包?|图片)?)'
+    r'(?:了|吧|啦)?|不(?:重复|重样)(?:的|吧)?')
+_EXPLAIN_AFTER = re.compile(r'(?:发完|发好后|先发.{0,10}再).{0,12}(?:告诉|说|解释|讲).{0,20}(?:为什么|原因|理由)|(?:发完|发好后).{0,8}解释')
+_VARIED = re.compile(r'不同(?:的)?(?:风格|类型)|风格.{0,4}(?:不一样|不同)')
 _SHORT_FORMAT = re.compile(r'(?:gif|动图|动态图|静态(?:图|的)?)(?:吧|呀|啊|呢)?[。！!？?]?',re.I)
 _MEDIA_CHANGE = re.compile(r'(?:换|改|再来|再发|需要发).{0,12}(?:gif|动图|动态|静态|表情)',re.I)
+_MORE_QUANTITY = re.compile(r'(?:再来|再发|再给我)\s*'+_QUANTITY.pattern+r'(?:吧|呀|啦|呗)?[。！!？?\s]*')
+_ONE_TOO_FEW = re.compile(r'(?:才|就|只有)?\s*[一1]\s*[个张只幅]\s*(?:也)?(?:太少|不够)(?:了|啦|吧|啊)?[。！!？?\s]*')
 _CATALOG_ORDER = re.compile(
     r'\s*(?:@?(?:小玲|小猫)[\s，,：:]*)?(?:(?:请|麻烦你?|帮我|给我|能不能|再)\s*){0,3}'
     r'(?:搞|整|弄)\s*(?:[一二两三123]?\s*[个张只幅])?\s*'
@@ -49,6 +60,15 @@ _CATALOG_ORDER = re.compile(
 
 def catalog_order(text):
     return _CATALOG_ORDER.fullmatch(text) is not None
+
+
+def _more_quantity(text):
+    """A bounded new request, only meaningful after a same-member media request."""
+    if _ONE_TOO_FEW.fullmatch(text.strip()):return 2
+    match=_MORE_QUANTITY.fullmatch(text.strip())
+    if not match:return 0
+    value=match[1]
+    return max(1,min(3,int(value) if value.isascii() else {'一':1,'二':2,'两':2,'三':3}.get(value,3)))
 
 
 def _sticker_cue(message,prior):
@@ -62,6 +82,11 @@ def _sticker_cue(message,prior):
         animated=bool(_ANIMATED.search(clause))
         static=bool(_STATIC.search(clause))
         media=animated or static or '表情' in clause
+        # A restriction on reusing an image is not cancellation of the order.
+        # Match a whole clause so an appended real cancellation still wins.
+        if _NOVELTY.fullmatch(clause):
+            state=replace(state,avoid_repeats=True)
+            continue
         if _CANCEL.search(clause):
             state=replace(state,explicit=False,suppressed=True,source_id=message.message_id)
             continue
@@ -71,9 +96,10 @@ def _sticker_cue(message,prior):
             if any(alias in clause for alias in aliases)),'')
         directive=catalog_order(clause) or bool(re.search(r'发|来|给|换|要|求|改|看看',clause))
         short_format=bool(_SHORT_FORMAT.fullmatch(clause))
+        more_count=_more_quantity(clause) if state.explicit else 0
         quantity_only=number and re.fullmatch(r'(?:只要|只发|改成|改为|换成|还是|要|发|就)?\s*'+_QUANTITY.pattern+r'(?:就够了|即可|就行|吧)?[？?]?',clause)
         new_character=character and re.fullmatch(r'(?:改成|换成|换个|要)(?:菲比|八条|呆猫八条|鲸鱼娘|鲸鱼|大肥鱼)(?:的|吧)?',clause)
-        if not (media and directive or state.explicit and (short_format or quantity_only or new_character)):
+        if not (media and directive or state.explicit and (short_format or quantity_only or new_character or more_count)):
             continue
         # “不要 GIF，改成静态的” changes the format of this request. An
         # earlier complete cancellation, in a different message, stays final.
@@ -82,9 +108,14 @@ def _sticker_cue(message,prior):
         if number:
             value=number[1]
             count=max(1,min(3,int(value) if value.isascii() else {'一':1,'二':2,'两':2,'三':3}.get(value,3)))
+        if more_count:count=more_count
         state=StickerRequest(True,character or (base.character if base.explicit else ''),
                              animated or (not static and base.explicit and base.animated),count,
-                             static or (not animated and base.explicit and base.static_only),source_id=message.message_id)
+                             static or (not animated and base.explicit and base.static_only),source_id=message.message_id,
+                             avoid_repeats=base.avoid_repeats)
+    if state is not prior and state.explicit:
+        state=replace(state,explain_after=state.explain_after or bool(_EXPLAIN_AFTER.search(message.text)),
+                      varied=state.varied or bool(_VARIED.search(message.text)))
     return state if state is not prior else None
 
 
@@ -110,16 +141,19 @@ def turn_sticker_request(sources,*,history=()):
     if not re.fullmatch(r'p_[a-f0-9]{16}',latest.speaker_id):
         sources=[latest]
     state=StickerRequest()
-    for message in sources:
+    for index,message in enumerate(sources):
         if message.speaker_id==latest.speaker_id:
             base=state
             if (history and not state.explicit and not state.suppressed
-                    and (_SHORT_FORMAT.fullmatch(message.text.strip()) or _MEDIA_CHANGE.search(message.text))):
-                previous=_previous_request(history,message,require_time=True)
+                    and (_SHORT_FORMAT.fullmatch(message.text.strip()) or _MEDIA_CHANGE.search(message.text)
+                         or _more_quantity(message.text))):
+                # A newer topic in this batch is just as authoritative as one
+                # already persisted in history. Never jump over it to an old request.
+                previous=_previous_request([*history,*sources[:index]],message,require_time=True)
                 if previous.explicit:
                     # A new "GIF" / "换个GIF" may carry the recent character,
                     # never an old batch quantity or an old receipt identity.
-                    base=replace(previous,count=1,source_id='')
+                    base=replace(previous,count=1,source_id='',explain_after=False,varied=False,avoid_repeats=False)
             state=_sticker_cue(message,base) or state
     return state
 
@@ -317,7 +351,17 @@ class StickerLibrary:
         ranked=unique
         # Avoid spending the entire choice budget on near-duplicate labels.
         result=[];tags={}
+        if request.explicit and request.varied and not request.character:
+            # Reserve one option per available style before filling the ranked
+            # pool, rather than allowing a preferred category to occupy all 24.
+            characters=set()
+            for item in ranked:
+                if item.character in characters:continue
+                result.append(item);characters.add(item.character)
+                if len(result)==24:break
         for item in ranked:
+            if item in result:continue
+            if len(result)==24:break
             key=item.tags[:2]
             if tags.get(key,0)>=3:continue
             result.append(item);tags[key]=tags.get(key,0)+1
@@ -365,36 +409,58 @@ class StickerLibrary:
             raise StickerUnavailable('表情素材未通过校验，本轮使用文字') from None
 
 
-def matches_draft(image,prepared,scale=1.0):
+def matches_draft(image,prepared,scale=1.0,*,include_interior=True,exclusive=False):
     """Match an actual GIF frame in the editor, not a generic nonempty draft."""
     import cv2
     import numpy as np
-    data=prepared.verified_bytes()
     # The editor limits stickers to a 120 DIP box. Test adjacent rounding sizes.
-    screen=np.array(image.convert('RGB'))
+    screen=np.asarray(image.convert('RGB'))
     if screen.shape[0]<40 or screen.shape[1]<40:return False
-    screen=screen[:,:min(screen.shape[1],round(180*scale))]
+    if not exclusive:screen=screen[:,:min(screen.shape[1],round(180*scale))]
+    # While WeChat is loading the preview, a blank editor or a thin caret
+    # contains no image evidence. Avoid decoding and scanning every GIF frame.
+    if np.count_nonzero(np.any(screen!=screen[0,-1],axis=(0,2)))<=3:return False
+    data=prepared.verified_bytes()
+    screen_signed=screen.astype('int16')
+    preview_edge=round(120*scale)
     with Image.open(io.BytesIO(data)) as source:
-        for index in range(source.n_frames):
-            source.seek(index);frame=source.convert('RGBA')
-            for edge in (round(120*scale),round(120*scale)-1,round(120*scale)+1):
-                thumb=frame.copy();thumb.thumbnail((edge,edge),Image.Resampling.LANCZOS)
-                base=Image.new('RGBA',thumb.size,(237,237,237,255));base.alpha_composite(thumb)
-                template=np.array(base.convert('RGB'))
-                if template.shape[1]>screen.shape[1]:continue
-                height=template.shape[0]
-                fragments=[template]
-                if height>screen.shape[0]:
-                    # WeChat scrolls a tall attachment to the caret in a short
-                    # editor. Match >=70% of the frame at full width, not a tiny
-                    # arbitrary patch. The exact file hash is checked after send.
+        # A later frame can be visible while the animation is playing. Check
+        # whole previews and single clipped edges across all frames before the
+        # uncommon case where both ends are clipped. Every proof is full width.
+        for interior in (False,True) if include_interior and not exclusive else (False,):
+            for index in range(source.n_frames):
+                source.seek(index);frame=source.convert('RGBA')
+                for edge in (preview_edge,preview_edge-1,preview_edge+1):
+                    thumb=frame.copy();thumb.thumbnail((edge,edge),Image.Resampling.LANCZOS)
+                    width,height=thumb.size
                     visible=round(height*.70)
-                    if visible>screen.shape[0]:continue
-                    fragments=[template[top:top+visible] for top in range(0,height-visible+1,2)]
-                for fragment in fragments:
-                    scores=cv2.matchTemplate(screen,fragment,cv2.TM_SQDIFF)
-                    _,_,location,_=cv2.minMaxLoc(scores)
-                    x,y=location;crop=screen[y:y+fragment.shape[0],x:x+fragment.shape[1]]
-                    error=np.abs(crop.astype('int16')-fragment.astype('int16'))
-                    if float(error.mean())<9 and float((error>35).mean())<.08:return True
+                    if width>screen.shape[1] or visible>screen.shape[0]:continue
+                    base=Image.new('RGBA',thumb.size,(237,237,237,255));base.alpha_composite(thumb)
+                    template=np.asarray(base.convert('RGB'))
+                    if exclusive:
+                        spans=((0,height),)
+                    elif interior:
+                        spans=((top,top+visible) for top in range(2,height-visible,2))
+                    else:
+                        spans=((0,height),(0,visible),(height-visible,height))
+                    for top,bottom in spans:
+                        if bottom-top>screen.shape[0]:continue
+                        fragment=template[top:bottom]
+                        scores=cv2.matchTemplate(screen,fragment,cv2.TM_SQDIFF)
+                        _,_,(x,y),_=cv2.minMaxLoc(scores)
+                        crop=screen_signed[y:y+bottom-top,x:x+width]
+                        error=np.abs(crop-fragment)
+                        if float(error.mean())<9 and float((error>35).mean())<.08:
+                            if exclusive:
+                                # Reject text/another image/scrollbar outside the
+                                # complete thumbnail. Only one thin editor caret
+                                # may remain; never treat a partial match as ownership.
+                                mask=np.any(np.abs(screen_signed-screen_signed[0,-1])>20,axis=2).astype('uint8')
+                                mask[max(0,y-1):y+height+1,max(0,x-1):x+width+1]=0
+                                count,_,stats,_=cv2.connectedComponentsWithStats(mask)
+                                if count>2:continue
+                                if count==2:
+                                    _,_,w,h,area=stats[1]
+                                    if not (w<=max(2,round(2*scale)) and h<=round(28*scale) and h>=4*w):continue
+                            return True
     return False

@@ -25,6 +25,7 @@ class SettingsPage(tk.Frame):
         self.rate_text=tk.StringVar(self)
         self.receive_text=tk.StringVar(self)
         self.route_note=tk.StringVar(self)
+        self.account_text=tk.StringVar(self)
         self._wide=None
         self._build()
         self.on_show()
@@ -104,6 +105,10 @@ class SettingsPage(tk.Frame):
 
     def refresh_scope(self):
         cfg=self.panel.settings
+        live=getattr(getattr(self.panel,'view',None),'status',{})
+        account=live.get('account_display_name') or cfg.account_display_name or '等待自动检测'
+        state=live.get('account_status') or '常驻后台自动检测换号，按账号保存监听规则与记忆'
+        self.account_text.set('当前微信：'+account+'\n'+state)
         if self.scope is not None and self.scope!=(cfg.memory_scope,cfg.private_tone_key):
             self.panel.owner_tone.set(cfg.owner_confirmed)
             self.panel.at_unique.set(cfg.self_name_unique_confirmed)
@@ -328,6 +333,8 @@ class SettingsPage(tk.Frame):
                  ).grid(row=2,column=0,columnspan=2,sticky='w')
         self.route_calibrate=_action(right,'校准该窗口',lambda:self.panel.calibrate(self.route_picker.get()))
         self.route_calibrate.grid(row=2,column=2,sticky='e')
+        tk.Label(wechat,textvariable=self.account_text,fg=MUTED,bg=PAPER,anchor='w',justify='left',
+                 font=(FONT,9),wraplength=330).pack(fill='x',padx=16,pady=(7,2))
         tk.Frame(wechat,bg=LINE,height=1).pack(fill='x',padx=16,pady=(12,5))
         def check(parent,text,var):
             return tk.Checkbutton(parent,text=text,variable=var,fg=INK,bg=PAPER,activebackground=PAPER,

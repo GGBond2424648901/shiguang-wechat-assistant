@@ -101,7 +101,7 @@ def test_reply_extracts_body_and_malformed_envelope_is_retryable(tmp_path):
     from xiaomao.domain import Message
     from xiaomao.model import ModelError
     responses=iter([json.dumps({'speaker':'self','message':'m_'+'1'*16,'body':'正常接话喵 (・ω・)'},ensure_ascii=True),
-                    '{"speaker":"self","body":"截断'])
+                    '{"speaker":"self","body":"截断','{"speaker":"self","body":"截断'])
     model=local_model(tmp_path,lambda _:httpx.Response(200,json={'choices':[{'message':{'content':next(responses)}}]}))
     assert model.reply([Message('你好')])=='正常接话喵 (・ω・)'
     with pytest.raises(ModelError) as caught:model.reply([Message('你好')])
@@ -193,7 +193,8 @@ def test_model_passes_static_image_and_followup_to_vision_endpoint(tmp_path, kin
     sent = payloads[0]['messages']
     assert [m for m in sent if m['role']!='system'][-2] == {'role':'user', 'content':[
         {'type':'text', 'text':'这张图是什么意思'},
-        {'type':'image_url', 'image_url':{'url':'data:image/png;base64,'+base64.b64encode(png).decode('ascii')}}]}
+        {'type':'image_url', 'image_url':{'url':'data:image/png;base64,'+base64.b64encode(png).decode('ascii'),
+                                         'detail':'low' if kind=='emoji' else 'auto'}}]}
     assert sent[-1]['content'] == '它是在打招呼吗'
     assert 'tools' not in payloads[0]
 

@@ -136,11 +136,18 @@ class Settings:
     # only belong to their verified account/recipient entry.
     calibration: dict | None = None
     calibration_account: str = ''
+    account_display_name: str = ''
+    account_process_id: int = 0
     window_bindings: dict = field(default_factory=dict)
     idle_wake: bool = False
 
     def __post_init__(self):
         self.root = Path(self.root).resolve()
+        from .member_names import safe_name
+        if self.account_display_name and safe_name(self.account_display_name)!=self.account_display_name:
+            raise ValueError('微信账号显示名无效')
+        if type(self.account_process_id) is not int or self.account_process_id<0:
+            raise ValueError('微信账号进程无效')
         if self.receive_mode not in ('database','screen'):raise ValueError('消息读取方式无效')
         if not isinstance(self.auto_on_launch,bool):raise ValueError('启动自动回复偏好必须为布尔值')
         if type(self.split_replies) is not bool:raise ValueError('多气泡设置必须为布尔值')
@@ -306,6 +313,8 @@ class Settings:
         target=self.conversation_targets.get(name)
         if target:
             return target['account']+'/'+target['id']
+        if self.calibration_account:
+            return self.calibration_account+'/\0title:'+name
         # An unbound display name may itself spell an account/recipient pair.
         return '\0title:'+name if '/' in name else name
 
@@ -389,6 +398,18 @@ class Settings:
             data['hourly_limit'] = math.ceil(old_hour)
         if data.get('wake_aliases')==['小猫','小铃']:
             data['wake_aliases']=['小猫','小玲']
+        # Preserve legacy explicit pauses when unbound titles acquire an account
+        # namespace. Never migrate title-only chat memory across account scopes.
+        if data.get('calibration_account'):
+            keys=set(data.get('paused_conversations',()))
+            for name in data.get('group_names') or (data.get('group',TARGET_GROUP),):
+                if name in data.get('conversation_targets',{}):continue
+                legacy='\0title:'+name if '/' in name else name
+                old=hashlib.sha256(legacy.encode()).hexdigest()
+                if old in keys:
+                    keys.remove(old)
+                    keys.add(hashlib.sha256((data['calibration_account']+'/\0title:'+name).encode()).hexdigest())
+            data['paused_conversations']=sorted(keys)
         return cls(root=Path(root), **data)
 
     def save(self, *, expected=None) -> None:

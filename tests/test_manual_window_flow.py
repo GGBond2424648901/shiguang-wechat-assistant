@@ -12,17 +12,20 @@ from xiaomao.layout import default_calibration_regions
 from xiaomao.gui import Panel
 
 
-def test_calibrating_secondary_preselects_its_detached_window_not_shared_main(tmp_path,native_root):
+@pytest.mark.parametrize('auto_match',[False,True])
+def test_calibrating_secondary_preselects_its_detached_window_not_shared_main(tmp_path,native_root,monkeypatch,auto_match):
     from xiaomao.calibration_ui import CalibrationFlow
     from test_window_routing import selected,window,ROOM,PEER
     cfg=selected(tmp_path,ROOM,PEER).with_window_binding(ROOM.name,window(ROOM,11,'main'))
-    callbacks=[]
+    callbacks=[];captured=[]
+    monkeypatch.setattr(CalibrationFlow,'capture',lambda flow:captured.append(flow.picker.current()))
     p=SimpleNamespace(root=native_root,settings=cfg,work=lambda fn,ok,*args,**kw:callbacks.append(ok))
-    flow=CalibrationFlow(p,PEER.name)
+    flow=CalibrationFlow(p,PEER.name,auto_match=auto_match)
     try:
         callbacks.pop()([dict(kind='main',hwnd=11,title='微信',minimized=False,pid=71),
                          dict(kind='detached',hwnd=22,title=PEER.name,minimized=False,pid=71)])
         assert flow.picker.current()==1
+        assert captured==([1] if auto_match else [])
     finally:flow.close()
 
 
@@ -69,6 +72,41 @@ def test_saving_second_window_keeps_primary_scope_and_existing_mode(tmp_path):
     assert saved.auto_on_launch==cfg.auto_on_launch
     with pytest.raises(ValueError):
         selection.bind_reviewed_window(cfg,dedicated,replace(b,id='different@chatroom'))
+
+
+def test_calibrating_a_new_conversation_offers_enable_and_preserves_single_listener(tmp_path,monkeypatch):
+    from threading import Event
+    from test_window_routing import selected,screen_resident,window,ROOM,PEER,OTHER
+    from xiaomao.store import StateStore
+    cfg=replace(selected(tmp_path,ROOM,PEER),monitor_all_groups=False,auto_on_launch=True,
+                receive_mode='screen').with_window_binding(ROOM.name,window(ROOM,11))
+    cfg.save()
+    store=StateStore(cfg.runtime)
+    live=screen_resident(cfg,store)
+    main=live.engines[0]
+    pending=[]
+    panel=Panel.__new__(Panel)
+    panel.settings=cfg;panel.directory=tmp_path
+    panel.client=SimpleNamespace(start=lambda **_:live.status(),reload_windows=live.reload_windows)
+    panel.view=SimpleNamespace(render=lambda:None,focus_conversation=pending.append)
+    panel.show_status=lambda _:None
+    for key in ('target_group','owner_tone','at_unique','notice'):
+        setattr(panel,key,SimpleNamespace(set=lambda _:None))
+    panel.work=lambda action,done,*_,**__:done(action())
+    draft=window(OTHER,33)
+    monkeypatch.setattr(selection,'verify_reviewed_window',lambda *_:(draft,OTHER))
+    try:
+        panel.save_calibration(draft,Event(),lambda:None,pytest.fail)
+        assert pending==[OTHER.name]
+        assert panel.settings.allowed_groups==(ROOM.name,PEER.name,OTHER.name)
+        assert live.engines[0] is main
+        assert [(e.settings.group,e.mode) for e in live.engines]==[(ROOM.name,'auto'),(PEER.name,'paused'),(OTHER.name,'paused')]
+        live.enable_selected(OTHER.name,panel.settings.conversation_scope(OTHER.name))
+        assert [e.mode for e in live.engines]==['auto','paused','auto']
+        restarted=screen_resident(Settings.load(tmp_path),store)
+        try:assert [e.mode for e in restarted.engines]==['auto','paused','auto']
+        finally:restarted.stop()
+    finally:live.stop();store.close()
 
 
 def test_directory_can_use_a_secondary_bound_windows_process_without_routing_primary_to_it(tmp_path,monkeypatch):

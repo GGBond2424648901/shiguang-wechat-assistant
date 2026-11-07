@@ -1,5 +1,6 @@
 """Conversation-scoped companion controls embedded in the main window."""
-from dataclasses import asdict
+from dataclasses import asdict,replace
+from copy import deepcopy
 import re
 import threading
 import tkinter as tk
@@ -87,6 +88,7 @@ class CompanionPage(tk.Frame):
         self.probability_vars = {kind+'_probability':tk.StringVar(self) for kind in ('idle','followup')}
         self.metrics = [tk.StringVar(self, '—') for _ in range(3)]
         self.action_buttons = []
+        self.loaded_preferences=CompanionPreferences()
 
         banner = tk.Frame(self, bg=INK)
         banner.pack(fill='x')
@@ -99,9 +101,9 @@ class CompanionPage(tk.Frame):
         top = tk.Frame(self, bg=BG)
         top.pack(fill='x', pady=(11, 11))
         self.tabs = {}
-        for key, name in [('policy', '陪伴策略'), ('memory', '会话记忆')]:
+        for key, name in [('policy', '陪伴策略'), ('routines', '定时关怀'), ('memory', '会话记忆')]:
             tab = button(top, name, lambda k=key: self.select(k),
-                         icon_name='companion' if key=='policy' else 'list')
+                         icon_name='companion' if key=='policy' else 'clock' if key=='routines' else 'list')
             tab.pack(side='left', padx=(0, 8))
             self.tabs[key] = tab
         holder = tk.Frame(self, bg=BG)
@@ -127,6 +129,8 @@ class CompanionPage(tk.Frame):
         self.memory = card(self.content,pad=12)
         self._build_policy()
         self._build_memory()
+        from .routines_ui import RoutinesEditor
+        self.routines_editor=RoutinesEditor(self.content,on_save=self.save_routines)
         footer = tk.Frame(self, bg=BG)
         footer.pack(fill='x', pady=(6, 0))
         tk.Frame(footer, bg=LINE, height=1).pack(fill='x')
@@ -134,6 +138,7 @@ class CompanionPage(tk.Frame):
         self.message.pack(fill='x', pady=4)
         self.wheel_tag = f'CompanionScroll{self.winfo_id()}'
         self.bind_class(self.wheel_tag, '<MouseWheel>', self._wheel)
+        self.routines_editor.on_widgets=self._bind_wheel
         self._bind_wheel(self)
         self.bind('<Destroy>', self._destroyed, add='+')
         self.select('policy')
@@ -157,6 +162,7 @@ class CompanionPage(tk.Frame):
         line_height = tkfont.Font(self, font=(FONT, 10)).metrics('linespace')
         self.notes_view.configure(height=max(6, min(24, (event.height-208)//line_height)))
         self._arrange_backup(width)
+        self.routines_editor.arrange(width)
 
     def _arrange_backup(self, width):
         buttons = self.backup_actions
@@ -165,7 +171,8 @@ class CompanionPage(tk.Frame):
             b.grid(row=idx//ncols, column=idx%ncols, sticky='ew', padx=(0, 4), pady=2)
 
     def _bind_wheel(self, widget):
-        widget.bindtags((self.wheel_tag, *widget.bindtags()))
+        if self.wheel_tag not in widget.bindtags():
+            widget.bindtags((self.wheel_tag, *widget.bindtags()))
         for child in widget.winfo_children():
             self._bind_wheel(child)
 
@@ -343,14 +350,15 @@ class CompanionPage(tk.Frame):
             b.configure(state='normal' if usable else 'disabled')
         bound = self.cfg and self.cfg.group in self.cfg.conversation_targets
         self.enable_toggle.configure(state='normal' if usable and bound else 'disabled')
+        self.routines_editor.set_enabled(bool(usable and bound))
 
     def select(self, tab):
         self.tab = tab
-        for key, page in [('policy', self.policy), ('memory', self.memory)]:
+        for key, page in [('policy', self.policy), ('routines',self.routines_editor), ('memory', self.memory)]:
             self.tabs[key].configure(bg=PEACH if key == tab else PAPER,fg=INK,
                                      font=(FONT,10,'bold' if key==tab else 'normal'))
             page.pack_forget()
-        (self.policy if tab == 'policy' else self.memory).pack(fill='x', padx=(0, 6))
+        {'policy':self.policy,'routines':self.routines_editor,'memory':self.memory}[tab].pack(fill='x', padx=(0, 6))
         self.canvas.yview_moveto(0)
         if tab == 'memory' and self.active:
             self.refresh_notes()
@@ -445,6 +453,8 @@ class CompanionPage(tk.Frame):
         self.panel.work(read, loaded, failed, mutates=False)
 
     def _apply_prefs(self, prefs):
+        self.loaded_preferences=deepcopy(prefs)
+        self.routines_editor.set_values(prefs.routines)
         self.enabled.set(bool(self.cfg.group in self.cfg.conversation_targets and prefs.enabled))
         self.followup.set(prefs.followup)
         self.idle.set(prefs.idle)
@@ -471,6 +481,11 @@ class CompanionPage(tk.Frame):
         room=next((g for g in state.get('groups',[]) if g['name']==self.cfg.group),None)
         if state is not self.baseline_state and (room or state.get('group') == self.cfg.group):
             companion = (room or state).get('companion') or {}
+            self.routines_editor.set_status(companion.get('routines',[]),companion.get('routine_history',[]))
+            if not companion.get('enabled'):
+                self.routines_editor.next_hint.set('本会话主动聊天未开启；日程已保留，开启后才执行。')
+            elif (room or state).get('mode')=='paused':
+                self.routines_editor.next_hint.set('本会话已暂停；仅在恢复后且仍处于到点窗口内尝试。')
             lines = [companion.get('reason') or '当前没有陪伴状态']
             if room and room['mode']=='paused':lines=[room.get('reason') or '该会话已暂停']
             elif companion.get('next_stage') and companion.get('next_candidate_at'):
@@ -587,7 +602,8 @@ class CompanionPage(tk.Frame):
                                     idle=self.idle.get(), gentle_followups=self.gentle.get(), daily_max=limit,
                                     quiet_start=minutes(self.start.get()), quiet_end=minutes(self.end.get()),
                                     style=self.style.get('1.0', 'end-1c').strip(),
-                                    interests=self.interests.get().strip(), dates=dates,**frequency,**probability)
+                                    interests=self.interests.get().strip(), dates=dates,
+                                    routines=deepcopy(self.loaded_preferences.routines),**frequency,**probability)
 
     def save(self):
         try:
@@ -599,9 +615,25 @@ class CompanionPage(tk.Frame):
         def write(cfg,ticket):
             return self.panel.client.companion_configure(cfg.group,cfg.memory_scope,asdict(prefs))
         def saved(state):
+            self.loaded_preferences=deepcopy(prefs)
             self.panel.show_status(state)
             self.feedback.set('本会话策略已保存')
         self._run(write,saved,message='正在应用本会话策略…')
+
+    def save_routines(self):
+        try:
+            prefs=replace(self.loaded_preferences,routines=self.routines_editor.values())
+        except ValueError as error:
+            self.feedback.set(str(error))
+            return
+        def write(cfg,ticket):
+            return self.panel.client.companion_configure(cfg.group,cfg.memory_scope,asdict(prefs))
+        def saved(state):
+            self.loaded_preferences=deepcopy(prefs)
+            self.routines_editor.set_values(prefs.routines)
+            self.panel.show_status(state)
+            self.feedback.set('本会话定时关怀已保存'+('；当前主动聊天未开启' if not prefs.enabled else ''))
+        self._run(write,saved,message='正在保存本会话定时关怀…')
 
     def _command(self, operation, message):
         def work(cfg, ticket):

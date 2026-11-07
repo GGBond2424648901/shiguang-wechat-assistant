@@ -50,6 +50,7 @@ _SEND_WAITS = {
     'window':'等待目标微信窗口可安全输入',
     'window_turn':'等待共用微信窗口完成上一会话的发送',
     'clipboard':'等待剪贴板可用，尚未输入',
+    'sticker_draft':'表情草稿保留中，等待空闲后核对；继续接收新消息',
 }
 
 
@@ -157,6 +158,7 @@ class Engine:
             task.reply = ""
             task.raw_bubble=None
             task.remaining_stickers.clear()
+            task.remaining_text=();task.media_first=False
             task.remaining_text=()
         self.tasks.clear()
 
@@ -183,6 +185,9 @@ class Engine:
             self.tracker = SequenceTracker()
             self.source_rebaseline=True
             self.receive_cutoff=self.clock()
+            if self.message_source:
+                self.last_observed=None
+                self.source_failures=0
             self.baseline_position_checked=False
             self.last_input_generation = None
             self.last_frame_keys = None
@@ -247,6 +252,8 @@ class Engine:
             return {"mode": self.mode, "group": self.settings.group, "assistant": self.settings.assistant_name,
                     "reason": self.reason, "model_configured": self.settings.model_ready,
                     "model": self.settings.model_name, "at_enabled": bool(self.settings.at_display_name), "at_note": self.settings.at_note,
+                    "model_health":self.model.health_snapshot() if hasattr(self.model,'health_snapshot') else {},
+                    "model_usage":self.model.usage_snapshot() if hasattr(self.model,'usage_snapshot') else {},
                     "calibrated": self.settings.binding is not None, "pending_count": len(self.tasks),
                     "counts": self.store.counts(), "last_observed": self.last_observed,
                     "last_result":dict(self.last_result) if self.last_result else None,
@@ -262,6 +269,7 @@ class Engine:
                     "send_interval_range":[self.settings.min_interval,self.settings.min_interval+(self.settings.pacing_jitter if self.settings.natural_pacing else 0)],
                     "minute_limit":self.settings.minute_limit if self.settings.natural_pacing else 0,"hourly_limit":self.settings.hourly_limit,
                     "receive_mode":"database" if self.message_source else "screen",
+                    "receive_retrying":bool(self.message_source and self.source_failures),
                     "companion":self.companion.status() if self.companion else {'enabled':False,'reason':'陪伴模块暂不可用'},
                     "data_destination": self.settings.model_base_url.split("/", 3)[:3][-1] if self.settings.model_base_url else ""}
 
@@ -274,6 +282,7 @@ class Engine:
                 progress={'staged':'正在核对输入内容','sending':'已开始发送','awaiting_receipt':'等待微信回执',
                           'generated':'已准备，等待发送条件','unknown':'发送结果待核对'}.get(task.state)
                 if task.sticker_clipboard_wait:progress=_STICKER_CLIPBOARD_WAIT[task.sticker_clipboard_wait]
+                elif task.draft_waiting:progress=task.wait_detail or _SEND_WAITS['sticker_draft']
                 elif task.state=='generated' and task.wait_reason:progress=task.wait_detail or _SEND_WAITS[task.wait_reason]
                 if not progress:
                     if task.media_attempts and task.retry_at>now:progress='等待微信图片加载'
@@ -357,12 +366,14 @@ class Engine:
             if self.mode!='auto' or self.cancelled.is_set() or task not in self.tasks:return False
             if task.proactive and task.state not in ('sending','awaiting_receipt') and (not self.companion or
                     not self.companion.valid(task.proactive,continuing=bool(task.continuation_of))):
-                if task.state=='staged':self.pause('主动话题已失效，已保留输入草稿且不会发送')
+                if task.draft_waiting:self._retire(task,'skipped','draft_expired')
+                elif task.state=='staged':self.pause('主动话题已失效，已保留输入草稿且不会发送')
                 else:self._retire(task,'skipped','proactive_expired')
                 return False
             if task.created<=self.clock()<=self._deadline(task):return True
             if task.state in ('staged','sending'):
-                self.pause('输入或发送过程超过时效，已保留草稿且不会重发')
+                if task.draft_waiting:self._retire(task,'skipped','draft_expired')
+                else:self.pause('输入或发送过程超过时效，已保留草稿且不会重发')
             return False
 
     def _retire(self, task: ReplyTask, state: str, reason=""):
@@ -384,6 +395,8 @@ class Engine:
                     'expired':'未发送：等待超过时限',
                     'insufficient_input_time':'未发送：等待超过安全输入时限',
                     'uncertain_send':'发送结果未知，未重发'}
+            labels.update(draft_expired='表情等待已到期，保留草稿且未补发；继续监听',
+                          draft_removed='表情草稿已被清空，未重新粘贴或发送')
             self.last_result={'state':state,'reason':reason,'at':self.clock(),'group':self.settings.group,
                               'summary':'上一条回复已确认发送' if state=='verified' else
                               ('到期未发送：'+_SEND_WAITS[task.wait_reason] if reason=='expired_'+task.wait_reason
@@ -697,7 +710,12 @@ class Engine:
             return self.model.proactive(context,candidate,profile)
         choices=[]
         if self._proactive_sticker_ready():
-            choices=self.stickers.candidates(context,excluded=self.store.recent_stickers(self.settings.memory_scope,self.clock()))
+            selection_context=context
+            if candidate.kind=='routine' and candidate.label:
+                # The owner's scheduled intent ranks reactions; it is not an
+                # invented inbound message or an addition to chat memory.
+                selection_context=[*context,Message(candidate.label,kind='context')]
+            choices=self.stickers.candidates(selection_context,excluded=self.store.recent_stickers(self.settings.memory_scope,self.clock()))
         return self.model.proactive_plan(context,candidate,profile,choices=choices)
 
     def _companion_tick(self):
@@ -888,6 +906,9 @@ class Engine:
         now=self.clock()
         for task in list(self.tasks):
             if task.state=='awaiting_receipt':continue
+            if task.state=='staged' and task.draft_waiting:
+                if not task.created<=now<=self._deadline(task):self._retire(task,'skipped','draft_expired')
+                continue
             if task.state in ('staged','sending','unknown'):
                 self.pause('上次输入或发送尚未完成，已保留草稿且不会重发')
                 return
@@ -915,6 +936,7 @@ class Engine:
         except DesktopTemporarilyHidden as error:
             with self.lock:
                 if epoch!=self.epoch or self.cancelled.is_set():return
+                if self._defer_sticker_draft(task):return
                 if task.state in ('staged','sending','awaiting_receipt','unknown'):
                     self.pause('输入或发送被弹窗、失焦或遮挡打断，已保留草稿；请核对微信')
                 else:
@@ -928,6 +950,7 @@ class Engine:
                 logging.getLogger(__name__).warning('Send preparation interrupted: %s',str(error))
             with self.lock:
                 if epoch!=self.epoch or self.cancelled.is_set():return
+                if isinstance(error,DesktopUnavailable) and self._defer_sticker_draft(task):return
                 if task.state in ('staged','sending','awaiting_receipt','unknown'):
                     self.pause('输入或发送状态发生变化，已保留草稿，请核对微信')
                 else:
@@ -941,11 +964,49 @@ class Engine:
                 if task.state in ('staged','sending','awaiting_receipt','unknown'):self.pause('发送状态需核对，已保留草稿')
                 else:self.reason='发送准备暂未完成，正在自动重试'
 
+    def _defer_sticker_draft(self,task):
+        # Only the same in-memory, never-clicked GIF transaction may resume.
+        # Recovery never pastes again; a stricter complete-editor proof is required.
+        if (task.state!='staged' or not task.sticker or task.sent_at or
+                not callable(getattr(self.desktop,'verify_owned_sticker_input',None))):return False
+        task.draft_waiting=True
+        task.retry_at=self.clock()+3
+        task.wait_reason='sticker_draft'
+        task.wait_detail=_SEND_WAITS['sticker_draft']
+        self.reason=task.wait_detail
+        return True
+
+    def _resume_sticker_draft(self,task):
+        if not self._active(task):return
+        if self.desktop.idle_for()<self.settings.idle_seconds:
+            self._defer_sticker_draft(task);return
+        self.message_source.assert_identity()
+        if not self.desktop.is_foreground():
+            wake=getattr(self.desktop,'try_idle_wake',None)
+            if not (self.settings.idle_wake and wake and wake(self.settings.idle_seconds)):
+                self._defer_sticker_draft(task);return
+        generation=self.desktop.prepare_send(self.settings.idle_seconds)
+        before=self._frame()  # validate this exact bound chat without selecting or clearing it
+        if before.draft_empty:
+            self._retire(task,'skipped','draft_removed');return
+        if self.desktop.input_generation()!=generation:
+            self._defer_sticker_draft(task);return
+        self.desktop.click_input(generation)
+        if not self.desktop.verify_owned_sticker_input(task.sticker):
+            self._defer_sticker_draft(task)
+            task.wait_detail='表情草稿与原内容不一致或未完整显示，保留内容；继续监听'
+            self.reason=task.wait_detail
+            return
+        if not self._active(task):return
+        self._send_verified(task,task.reply,before)
+
     def _prepare_sticker_plan(self,plan,choices,request):
         from .stickers import StickerUnavailable
         ids=(plan.sticker,*plan.extra_stickers)
         if len(ids)>(request.count if request.explicit else 1) or len(set(ids))!=len(ids):
             raise StickerUnavailable('数量无效')
+        if request.explain_after and len(ids)!=request.count:
+            raise StickerUnavailable('素材数量不足，不能提前解释完整发送结果')
         prepared=[]
         for identity in ids:
             item=next((s for s in choices if s.id==identity),None)
@@ -955,9 +1016,10 @@ class Engine:
         return prepared
 
     def _sticker_unavailable(self,task,reason):
-        if task.continuation_of or task.proactive:
+        if task.continuation_of or task.proactive or task.operator_plan:
             self._retire(task,'skipped','media_unavailable')
-            self.reason='剩余表情暂不可用，已保留之前的发送回执' if task.continuation_of else '本次主动表情暂不可用，保持安静'
+            self.reason=('剩余表情暂不可用，已保留之前的发送回执' if task.continuation_of else
+                         '指定表情暂不可用，未改写为其他消息' if task.operator_plan else '本次主动表情暂不可用，保持安静')
         else:
             task.sticker=None;task.reply='';task.sticker_failed=True;task.state='candidate'
             task.raw_bubble=None
@@ -965,6 +1027,8 @@ class Engine:
             self.reason=reason
 
     def _reply_and_send(self, task: ReplyTask):
+        if task.state=='staged' and task.draft_waiting:
+            return self._resume_sticker_draft(task)
         if task.state not in ('candidate','generated') or not self._active(task):return
         if not task.pacing_planned:
             task.reply_not_before=task.created+(random.uniform(2,5) if self.settings.natural_pacing else 0)
@@ -994,7 +1058,7 @@ class Engine:
                         and hasattr(self.model,'reply_plan'))
                 ready=request.explicit or self.store.sticker_ready(self.settings.memory_scope,self.clock(),self.settings.sticker_frequency)
                 if sticker_mode and not task.sticker_failed and ready:
-                    choices=self.stickers.candidates(context,request=request,excluded=self.store.recent_stickers(self.settings.memory_scope,self.clock()))
+                    choices=self.stickers.candidates(context,request=request,excluded=self.store.recent_stickers(self.settings.memory_scope,self.clock(),all_history=request.avoid_repeats))
                 if sticker_mode and local_order:
                     prepared=self.stickers.prepare_order(choices,request)
                     if prepared:
@@ -1009,16 +1073,22 @@ class Engine:
                     if plan is None:reply=None
                     elif plan.sticker:
                         from .stickers import StickerUnavailable
-                        reply=clean_reply(plan.text) if plan.text and not request.explicit else ''
+                        reply=clean_reply(plan.text) if plan.text and (not request.explicit or request.explain_after) else ''
                         try:
                             prepared=self._prepare_sticker_plan(plan,choices,request)
-                            if reply:
+                            if reply and request.explicit and request.explain_after:
+                                task.media_first=True
+                                task.remaining_text=(reply,)
+                                task.sticker=prepared[0];task.remaining_stickers=prepared[1:]
+                                reply=task.sticker.description
+                            elif reply:
                                 task.remaining_stickers=prepared
                             else:
                                 task.sticker=prepared[0];task.remaining_stickers=prepared[1:]
                                 reply=task.sticker.description
                         except StickerUnavailable:
                             task.sticker_failed=True
+                            if request.explain_after:reply=''
                             if not reply:
                                 task.retry_at=self.clock()+1
                                 self.reason='这张表情暂不可用，正在改用文字回复'
@@ -1058,6 +1128,9 @@ class Engine:
                         self.reason='回复格式异常，正在重新生成' if format_error else '模型服务暂不可用，稍后自动重试'
                     else:
                         self._retire(task,'skipped','model_format_failed' if format_error else 'model_unavailable')
+                        if not format_error and self.last_result:
+                            self.last_result['summary']='未发送：'+str(error)
+                            self.last_result['model_error']=error.code
                         self.reason=self.last_result['summary']+'；继续监听新消息'
                     return
                 else:
@@ -1077,7 +1150,7 @@ class Engine:
                 split=getattr(self.model,'split_wechat_bubbles',None)
                 parts=split(reply,task.messages,enabled=enabled) if split else split_reply(reply,enabled=enabled)
                 reply, task.remaining_text=parts[0],tuple(parts[1:])
-            if task.remaining_text:
+            if task.remaining_text and not task.sticker:
                 others=sum(1 for other in self.tasks if other is not task and other.messages)
                 # The queue may grow while a generated reply waits for idle
                 # time or its rate slot. Combine only the still-unsent text.
@@ -1125,8 +1198,11 @@ class Engine:
         if foreground is not None and not foreground():
             wake=getattr(self.desktop,'try_idle_wake',None)
             if not (self.settings.idle_wake and wake and self.message_source and
-                    hasattr(self.message_source,'assert_identity') and self.desktop.idle_for()>=self.settings.idle_seconds):
+                    hasattr(self.message_source,'assert_identity')):
                 self._waiting(task,'foreground')
+                return
+            if self.desktop.idle_for()<self.settings.idle_seconds:
+                self._waiting(task,'desktop_busy')
                 return
             # No restore or focus request before account, freshness and quota checks.
             if not self._ready_for_input(task):return
@@ -1246,10 +1322,15 @@ class Engine:
         exact_readback=False
         if task.sticker:
             exact_readback=True
-            for _ in range(3):
+            verify_preview=self.desktop.verify_sticker_input
+            probe_preview=getattr(self.desktop,'probe_sticker_input',verify_preview)
+            reveal=getattr(self.desktop,'reveal_sticker_preview',None)
+            for attempt in range(6):
                 if not self._active(task):return
-                if self.desktop.verify_sticker_input(task.sticker):matched=True;break
-                if self.cancelled.wait(.18):return
+                check=verify_preview if attempt==5 else probe_preview
+                if check(task.sticker):matched=True;break
+                if attempt==1 and reveal and self._active(task):reveal()
+                if attempt<5 and self.cancelled.wait(.24):return
         elif hasattr(self.desktop,'read_input_text'):
             from .clipboard import ClipboardUnavailable
             try:
@@ -1275,12 +1356,18 @@ class Engine:
                           all(unicodedata.category(c).startswith(('P','Z')) for c in reply[i1:i2]+actual[j1:j2]))
                          for kind,i1,i2,j1,j2 in SequenceMatcher(None,reply,actual).get_opcodes() if kind!='equal']
                 logging.getLogger(__name__).warning('Input readback mismatch: expected_length=%d actual_length=%d edits=%s',len(reply),len(actual),changes)
+            if self.message_source and self._defer_sticker_draft(task):return
             self.pause("输入表情未能完整核对，已保留草稿" if task.sticker else "输入内容未能完整核对，请检查微信草稿")
             return
+        self._send_verified(task,reply,before)
+
+    def _send_verified(self,task,reply,before):
         if not self._active(task):
             return
         allowed, _ = self.store.allow_send(self.clock(), max(self.settings.min_interval,task.send_interval), self.settings.hourly_limit,minute_limit=self.settings.minute_limit if self.settings.natural_pacing else 0)
         if not allowed:
+            if task.draft_waiting:
+                self._defer_sticker_draft(task);return
             self.pause("输入后触及发送限制，已保留草稿")
             return
         self.desktop.assert_input_focus()
@@ -1311,6 +1398,8 @@ class Engine:
             self.desktop.click_send()
             if self.message_source:
                 self._confirm_database_send(task,reply)
+                release=getattr(self.desktop,'release_send_focus',None)
+                if release:release()
                 return
             original = sum(m.direction == "out" and bubble_matches(task,m.text,visual=True) for m in before.messages)
             stable = None
@@ -1379,7 +1468,11 @@ class Engine:
 
     def _prepare_media(self,task):
         if not self.message_source or not hasattr(self.message_source,'resolve_media'):return True
-        recent=[m for m in task.context+task.messages if m.kind in ('image','emoji') and not m.image_data][-5:]
+        # Current media gets priority over optional old frames; don't re-scan
+        # five historical missing files before answering a new text question.
+        current=[m for m in task.messages if m.kind in ('image','emoji') and not m.image_data]
+        old=[m for m in task.context if m.kind in ('image','emoji') and not m.image_data][-2:]
+        recent=current+old
         resolved={}
         for message in recent:
             if message.message_id in resolved:continue
@@ -1448,7 +1541,10 @@ class Engine:
                 # Only one successor exists at a time. It keeps the original
                 # source deadline, queue position and member, but earns its own
                 # send attempt and new text/hash receipt.
-                if text:
+                if stickers and task.media_first:
+                    sticker=stickers.pop(0)
+                    reply,rest_text=sticker.description,text
+                elif text:
                     reply,rest_text=text[0],text[1:]
                     sticker=None
                 else:
@@ -1460,7 +1556,7 @@ class Engine:
                         messages=source,reply=reply,state='generated',proactive=task.proactive,
                         continuation_of=task.continuation_of or task.id,remaining_text=rest_text,
                         sticker=sticker,sticker_requested=task.sticker_requested,sticker_source_id=task.sticker_source_id,
-                        remaining_stickers=stickers))
+                        remaining_stickers=stickers,operator_plan=task.operator_plan,media_first=task.media_first))
                 elif task.proactive:self._companion_call('finish',task.proactive,'partial')
                 return True
             return False

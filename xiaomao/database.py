@@ -20,6 +20,29 @@ class DatabaseUnavailable(RuntimeError):
     pass
 
 
+def wechat_mention(source, self_id):
+    """Return the native recipient check when this row carries an @ list."""
+    limit = 64 * 1024
+    if not isinstance(source, (bytes, str)) or len(source) > limit:
+        return None
+    try:
+        if isinstance(source, bytes):
+            if source.startswith(b'\x28\xb5\x2f\xfd'):
+                with zstandard.ZstdDecompressor().stream_reader(source) as stream:
+                    source = stream.read(limit + 1)
+            source = source.decode('utf-8-sig')
+        if len(source) > limit or '<!DOCTYPE' in source.upper() or '<!ENTITY' in source.upper():
+            return None
+        root = ET.fromstring(source.strip('\0\ufeff \t\r\n'))
+    except (ET.ParseError, UnicodeError, zstandard.ZstdError):
+        return None
+    lists = root.findall('atuserlist') if root.tag == 'msgsource' else []
+    if len(lists) != 1 or len(lists[0]):
+        return None
+    recipients = (lists[0].text or '').strip(' ,;\t\r\n')
+    return self_id in re.split(r'[,;\s]+', recipients) if recipients else None
+
+
 def quoted_reply_text(raw):
     """Only the newly written body of appmsg 57, never its quoted old text."""
     if len(raw)>2*1024*1024 or '<!DOCTYPE' in raw.upper() or '<!ENTITY' in raw.upper():return None
@@ -209,7 +232,9 @@ class DatabaseFeed:
                     message_id=identity,created_at=at,media_raw=raw if kind!=1 else '',media_key=cache_key,
                     sender_source=display.source if display else '',
                     sender_observed_at=now if display else 0,
-                    speaker_id='self' if sender==self.self_id else self._speaker_token(sender))
+                    speaker_id='self' if sender==self.self_id else self._speaker_token(sender),
+                    mentioned_self=wechat_mention(d.get('source'),self.self_id)
+                    if group and kind==1 and sender!=self.self_id else None)
                 # Server timestamps can lead the local fractional second. Do
                 # not consume that fresh ID as history and lose its receipt.
                 is_new=(fresh or was_uploading) and identity not in self.seen

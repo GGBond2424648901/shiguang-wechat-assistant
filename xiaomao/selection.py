@@ -282,10 +282,13 @@ def preview_window(cfg,candidate,expected):
     return image,draft
 
 
-def bind_reviewed_window(cfg,binding,contact):
+def bind_reviewed_window(cfg,binding,contact,*,stage_for_enable=False):
     """Keep subscription order and mode while installing one verified calibration."""
     name=binding.target_group
     if not name or not binding.bottom_confirmed:raise ValueError('请先核对会话与校准区域')
+    previous_binding=cfg.binding_for(name) if name in cfg.allowed_groups else None
+    needs_enable=stage_for_enable and (previous_binding is None or not previous_binding.bottom_confirmed
+                                      or (contact and name not in cfg.conversation_targets))
     paused=cfg.is_conversation_paused(name) or all(cfg.is_conversation_paused(n) for n in cfg.allowed_groups)
     evidence=getattr(binding,'_capture_contact',None)
     if evidence and (not contact or contact.binding!=evidence.binding or contact.name!=evidence.name):
@@ -305,6 +308,13 @@ def bind_reviewed_window(cfg,binding,contact):
         names=(name,)
     elif name not in names:names=(*names,name)
     updated=cfg.with_saved_conversations(names).with_window_binding(name,binding)
+    if needs_enable:
+        if name not in updated.allowed_groups:
+            updated=replace(updated,monitor_all_groups=True)
+            for saved in updated.allowed_groups:
+                if saved not in cfg.allowed_groups:
+                    updated=updated.with_conversation_pause(saved,True)
+        return updated.with_conversation_pause(name,True)
     return updated.with_conversation_pause(name,True) if paused else updated
 
 

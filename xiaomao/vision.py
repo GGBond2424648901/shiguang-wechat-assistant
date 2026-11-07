@@ -375,6 +375,20 @@ class Vision:
                 caret |= caret_labels == index
                 caret_components+=1
         remaining_ink = ink & ~caret
+        # WeChat's empty editor can show this gray voice shortcut hint. Require
+        # the complete known caption AND gray neutral ink in its OCR bounds;
+        # typed black text, a missed dot, images or extra marks still block.
+        hint=re.sub(r'[\s+＋·,，]','',draft).casefold()
+        if (hint=='按住ctrlwin使用语音输入文字' and draft_lines
+                and all(line.score>=.90 for line in draft_lines) and remaining_ink.any()):
+            hint_bounds=np.zeros_like(ink)
+            for line in draft_lines:
+                x1,y1,x2,y2=line.box
+                hint_bounds[max(0,y1-2):min(ink.shape[0],y2+2),max(0,x1-2):min(ink.shape[1],x2+2)]=True
+            pixels=array[remaining_ink]
+            if (not (remaining_ink & ~hint_bounds).any() and pixels.min()>=105
+                    and np.ptp(pixels,axis=1).max()<10):
+                draft='';draft_lines=[];remaining_ink[:]=False
         # 真实光标即使被裁到顶部也可能被 OCR 扩框后读成“一”。只有单条
         # 窄绿色光标且不存在任何其他墨迹时，按像素判空，不依赖误读字符。
         if caret_components==1 and not remaining_ink.any():

@@ -3,6 +3,26 @@ import pytest
 from xiaomao.domain import Message
 
 
+def test_backup_restore_preserves_target_routine_delivery_ledger(tmp_path):
+    from copy import deepcopy
+    from xiaomao.memory import ConversationMemory
+    from xiaomao.companion_store import CompanionStore
+    from xiaomao.companion_backup import export_backup,restore_backup
+    source=ConversationMemory(tmp_path/'source','account/a')
+    source_notes=CompanionStore(tmp_path/'source','account/a')
+    path=tmp_path/'backup.xlc';export_backup(path,'long-password',source,source_notes)
+    dest=ConversationMemory(tmp_path/'dest','account/a')
+    notes=CompanionStore(tmp_path/'dest','account/a')
+    history=[dict(routine_id='morning',day='2026-11-07',status='verified'),
+             dict(routine_id='evening',day='2026-11-07',status='unknown')]
+    notes.data['planner']['routine_history']=deepcopy(history)
+    notes.save()
+    restore_backup(path,'long-password',dest,notes)
+    assert notes.data['planner']['routine_history']==history
+    assert CompanionStore(tmp_path/'dest','account/a').data['planner']['routine_history']==history
+    assert not notes.data['preferences']['enabled']
+
+
 def test_reflection_accepts_only_exact_inbound_sources_and_owns_identity():
     from xiaomao.companion_memory import accept_reflection,source_ref,recall
     a=Message('我喜欢无糖咖啡',speaker_id='p_'+'a'*16,message_id='a',created_at=100)
@@ -120,7 +140,7 @@ def test_model_proactive_can_choose_silence_and_profile_does_not_replace_boundar
     assert '咖啡' in model.proactive([Message('咖啡泡好了')],c,'温柔些')
     with pytest.raises(ModelError):model.proactive([],c,'')
     assert model.reply_profile([Message('你好')],'偶尔颜文字')=='接着聊呀'
-    assert '偶尔颜文字' in payloads[-1]['messages'][0]['content']
+    assert any('偶尔颜文字' in m['content'] for m in payloads[-1]['messages'] if m['role']=='system')
     assert '固定运行边界' in payloads[-1]['messages'][0]['content']
     assert all('tools' not in p for p in payloads)
 
@@ -136,7 +156,7 @@ def test_requested_opening_uses_explicit_intent_but_still_respects_model_silence
         return httpx.Response(200,json={'choices':[{'message':{'content':'{"send":false,"text":""}'}}]})
     model=ChatModel(Settings(tmp_path,model_base_url='http://127.0.0.1:11434/v1'),httpx.Client(transport=httpx.MockTransport(endpoint)))
     assert model.proactive([Message('今天不要再联系我')],Candidate('x','requested',100,220,1,'2026-11-04')) is None
-    system=captured[0]['messages'][0]['content']
+    system='\n'.join(m['content'] for m in captured[0]['messages'] if m['role']=='system')
     assert '没有合适话题就 send=false' not in system
     assert '明确要求停止联系' in system
     assert '普通表情或旧话题结束' in system
@@ -154,7 +174,7 @@ def test_proactive_history_is_data_not_assistant_json_examples(tmp_path):
     model=ChatModel(Settings(tmp_path,model_base_url='http://127.0.0.1:11434/v1'),httpx.Client(transport=httpx.MockTransport(endpoint)))
     context=[Message('之前回答',direction='out',speaker_id='self'),Message('收到',speaker_id='p_'+'a'*16)]
     assert model.proactive(context,Candidate('x','requested',100,220,1,'2026-11-04'))=='来聊个小点子呀。'
-    history=captured[0]['messages'][1:]
+    history=[m for m in captured[0]['messages'] if m['role']!='system']
     assert all(m['role']=='user' for m in history)
     assert '助手历史发言' in history[0]['content']
     assert 'self' in history[0]['content'] and 'p_'+'a'*16 in history[1]['content']

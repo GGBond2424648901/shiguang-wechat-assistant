@@ -25,7 +25,8 @@ def test_non_replyable_messages_never_trigger(fields):
 def test_reply_controls_cannot_turn_into_send_keys():
     from xiaomao.policy import clean_reply
     assert clean_reply("  好的\r\n没问题\x00\t🙂  ") == "  好的\n没问题\t🙂  "
-    assert len(clean_reply("喵" * 230)) == 200
+    assert clean_reply("喵" * 230) == "喵" * 230
+    with pytest.raises(ValueError):clean_reply("喵" * 4001)
     with pytest.raises(ValueError):
         clean_reply("\x00 \n")
 
@@ -39,7 +40,7 @@ def test_internal_reply_envelope_is_decoded_before_text_limit():
     assert clean_reply(value)==body
     assert clean_reply('```json\n'+value+'\n```')==body
     assert clean_reply(json.dumps(value))==body
-    assert clean_reply(value,limit=8)==body[:8]
+    with pytest.raises(ValueError):clean_reply(value,limit=8)
 
 
 @pytest.mark.parametrize('value',[

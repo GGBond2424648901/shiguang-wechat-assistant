@@ -537,6 +537,15 @@ class WindowsDesktop:
     def finish_input(self):
         """Release geometry only after the engine verifies a send receipt."""
         self._input_cookie=None
+        self.release_send_focus()
+
+    def release_send_focus(self):
+        """Return the borrowed foreground after the click, even if DB commit lags.
+
+        Preserve the editor/receipt guard until verification. In a multi-chat
+        worker the next chat must not borrow this WeChat window as the user's
+        original app simply because its GIF receipt is still being written.
+        """
         returning,self._return_window=self._return_window,None
         self._wake_generation=None
         generation,self._sent_generation=self._sent_generation,None
@@ -628,12 +637,22 @@ class WindowsDesktop:
             if U.IsIconic(b.hwnd):return False
         if not valid() or not U.IsWindowVisible(b.hwnd):return False
         if not self.is_foreground():U.SetForegroundWindow(b.hwnd)
-        if not self.is_foreground() and b.window_kind=='detached' and valid():
-            checked=self._activate_idle_editor(valid)
+        if not self.is_foreground() and valid():
+            # A private window has a bound native title. Acquire it by its
+            # verified caption even when the inactive editor is inconclusive.
+            prefer_caption = b.window_kind == 'main' or b.target_kind == 'private'
+            checked = self._prepare_idle_caption(valid) if prefer_caption else False
+            if not checked and b.window_kind == 'detached':
+                checked = self._activate_idle_editor(valid)
             if checked and not self.is_foreground() and valid():
                 own_generation=self._click_idle_caption(valid)
                 if own_generation is not None:generation=own_generation
         acquired=self.is_foreground() and valid()
+        if acquired:
+            # Rate-limit refusals, not a new part of a verified multi-bubble
+            # delivery. Every new wake still checks fresh user input and idle.
+            self._last_wake=0
+            self.wake_reason=''
         if acquired and original and original!=b.hwnd:
             import win32process
             try:
@@ -641,6 +660,32 @@ class WindowsDesktop:
                 self._wake_generation=generation
             except OSError:self._return_window=None
         return acquired
+
+    def _prepare_idle_caption(self,valid):
+        """Prove a bound window's blank caption without touching its editor.
+
+        The shared shell may currently display another selected conversation.
+        That is not permission to type there: Engine still selects and validates
+        the exact recipient after activation. Only a normal caption click is
+        authorized by this proof, never an input-area or send-button click.
+        """
+        import win32gui
+        from .layout import idle_caption_point
+        b=self.calibration
+        self._wake_caption=None
+        if (U.GetLastActivePopup(b.hwnd)!=b.hwnd
+                or not win32gui.IsWindowEnabled(b.hwnd)):return False
+        points=[]
+        for _ in range(2):
+            if not valid():return False
+            info=self._bound_details()
+            if info.get('kind','main')!=b.window_kind or info['pid']!=b.pid:return False
+            image=self.capture();b=self.calibration
+            points.append(idle_caption_point(image,self._dpi_scale()))
+        if points[0] is None or points[0]!=points[1] or not valid():return False
+        self._wake_caption=(*points[0],b.width,b.height,time.monotonic())
+        self.wake_reason='微信窗口等待正常标题栏激活'
+        return True
 
     def _activate_idle_editor(self,valid):
         """A normal click in this chat may activate Qt. Never enter text here."""
@@ -703,31 +748,54 @@ class WindowsDesktop:
             return (valid() and self._bound_details()['rect']==info['rect']
                     and U.GetLastActivePopup(b.hwnd)==b.hwnd and win32gui.IsWindowEnabled(b.hwnd)
                     and not any(U.GetAsyncKeyState(key)&0x8000 for key in (1,2,4,16,17,18)))
-        if not guarded():return None
+        def deferred(reason):
+            self.wake_reason=reason
+            return None
+        if not guarded():return deferred('标题栏激活前检测到人工操作或窗口变化，等待空闲')
         if not caption():
             self.wake_reason='未能确认微信标题栏，等待窗口可交互';return None
-        if not guarded():return None
-        win32gui.SetWindowPos(b.hwnd,0,0,0,0,0,0x13)  # no move/resize/activate, never topmost
-        if not guarded() or U.GetAncestor(U.WindowFromPoint(point),2)!=b.hwnd:return None
-        if not caption():return None
-        if not U.SetCursorPos(point.x,point.y) or not guarded():return None
-        own_generation=K.GetTickCount64()&0xffffffff
-        events=(INPUT*2)()
-        events[0].value.mouse.flags=2;events[1].value.mouse.flags=4
-        for event in events:event.value.mouse.time=own_generation
-        sent=U.SendInput(2,events,ctypes.sizeof(INPUT))
-        if sent!=2:
-            if sent==1:U.SendInput(1,(INPUT*1)(events[1]),ctypes.sizeof(INPUT))
-            return None
-        # Activation can be delivered asynchronously by Qt.
-        for _ in range(8):
-            if self.cancelled.is_set() or self.input_generation()!=own_generation:return None
-            if self.is_foreground():break
-            self.cancelled.wait(.025)
-        if (not self.is_foreground() or self._bound_details()['rect']!=info['rect']
-                or self.input_generation()!=own_generation):return None
-        self.navigation.note(own_generation,idle_credit)
-        return own_generation
+        if not guarded():return deferred('标题栏核验后检测到人工操作或窗口变化，等待空闲')
+        win32gui.SetWindowPos(b.hwnd,0,0,0,0,0,0x213)  # no move/resize/activate/owner change
+        lifted=False
+        try:
+            if not guarded():return deferred('微信抬升后窗口或输入状态发生变化，等待重试')
+            if U.GetAncestor(U.WindowFromPoint(point),2)!=b.hwnd:
+                # Foreground locking can leave HWND_TOP behind the active app.
+                # Briefly surface only this verified caption, without activation,
+                # to make the ordinary click reachable. Undo before any editor
+                # transaction, including every cancellation/error branch. Never
+                # change another app or use Alt/attached thread input.
+                if not win32gui.GetWindowLong(b.hwnd,-20)&8:  # preserve an existing pin
+                    lifted=True
+                    win32gui.SetWindowPos(b.hwnd,-1,0,0,0,0,0x213)
+                if not guarded():return deferred('微信抬升后检测到人工操作，已取消激活')
+                if U.GetAncestor(U.WindowFromPoint(point),2)!=b.hwnd:
+                    return deferred('微信标题栏仍被其他窗口遮挡，尚未点击')
+            if not caption():return deferred('微信抬升后标题栏校验未通过，尚未点击')
+            if not U.SetCursorPos(point.x,point.y):return deferred('无法移动到微信标题栏，尚未点击')
+            if not guarded():return deferred('移向微信标题栏后输入状态变化，尚未点击')
+            own_generation=K.GetTickCount64()&0xffffffff
+            events=(INPUT*2)()
+            events[0].value.mouse.flags=2;events[1].value.mouse.flags=4
+            for event in events:event.value.mouse.time=own_generation
+            sent=U.SendInput(2,events,ctypes.sizeof(INPUT))
+            if sent!=2:
+                if sent==1:U.SendInput(1,(INPUT*1)(events[1]),ctypes.sizeof(INPUT))
+                return deferred('标题栏激活点击未完整投递，未输入聊天内容')
+            # Activation can be delivered asynchronously by Qt.
+            for _ in range(8):
+                if self.cancelled.is_set() or self.input_generation()!=own_generation:
+                    return deferred('标题栏点击后检测到新的人工输入，未输入聊天内容')
+                if self.is_foreground():break
+                self.cancelled.wait(.025)
+            if (not self.is_foreground() or self._bound_details()['rect']!=info['rect']
+                    or self.input_generation()!=own_generation):
+                return deferred('微信未响应标题栏激活或窗口发生变化，未输入聊天内容')
+            self.navigation.note(own_generation,idle_credit)
+            return own_generation
+        finally:
+            if lifted:
+                win32gui.SetWindowPos(b.hwnd,-2,0,0,0,0,0x213)
 
     def park_editor_pointer(self,idle_seconds):
         """Move an idle pointer halo away; the caller must take a fresh draft reading."""
@@ -1054,12 +1122,44 @@ class WindowsDesktop:
                 raise StickerClipboardBlocked('rich' if isinstance(error,RichClipboard) else 'busy') from None
             raise DesktopUnavailable('表情粘贴未能完成，已保留草稿') from None
 
-    def verify_sticker_input(self,prepared):
+    def reveal_sticker_preview(self):
+        """Bring the start of this draft into view without editing it."""
+        self._shortcut(0x11,0x24)  # Ctrl+Home inside the verified editor.
+
+    def probe_sticker_input(self,prepared):
+        return self.verify_sticker_input(prepared,include_interior=False)
+
+    def verify_owned_sticker_input(self,prepared):
+        """Recovery proof: full attachment, no added text/images or scrollbars."""
+        from .stickers import matches_draft
+        self.assert_input_focus()
+        self.reveal_sticker_preview()
+        image=self.capture()
+        self.assert_input_focus()
+        from PIL import ImageDraw
+        x1,y1,_,_=self.calibration.rect('input')
+        scale=self._dpi_scale();edge=max(2,round(2*scale))
+        # The text OCR crop can omit footer content and the scrollbar. Read
+        # the full right/bottom editor extent, masking only the verified Send
+        # control itself; any other mark makes recovery refuse to click.
+        right=self.calibration.width-edge;bottom=self.calibration.height-edge
+        if right<=x1 or bottom<=y1:return False
+        draft=image.crop((x1,y1,right,bottom))
+        sx1,sy1,sx2,sy2=self.calibration.rect('send')
+        if not (x1<=sx1<sx2<right and y1<sy1<sy2<bottom):return False
+        background=draft.getpixel((draft.width-1,0))
+        ImageDraw.Draw(draft).rectangle((sx1-x1-1,sy1-y1-1,sx2-x1+1,sy2-y1+1),fill=background)
+        result=matches_draft(draft,prepared,scale,exclusive=True)
+        self.assert_input_focus()
+        return result
+
+    def verify_sticker_input(self,prepared,*,include_interior=True):
         from .stickers import matches_draft
         self.assert_input_focus()
         image=self.capture()
         self.assert_input_focus()
-        result=matches_draft(image.crop(self._sticker_preview_rect()),prepared,self._dpi_scale())
+        result=matches_draft(image.crop(self._sticker_preview_rect()),prepared,self._dpi_scale(),
+                             include_interior=include_interior)
         self.assert_input_focus()
         return result
 

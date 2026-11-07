@@ -1,6 +1,7 @@
 """可编辑的角色表达。Markdown 原稿是编辑器和模型共同使用的唯一来源。"""
 from dataclasses import dataclass
 from pathlib import Path
+from functools import lru_cache
 import re
 
 from .privacy import atomic_private_write
@@ -82,6 +83,7 @@ def join_persona(sections) -> str:
     return ''.join(parts)
 
 
+@lru_cache(maxsize=16)
 def render_persona(text):
     """Give the model section roles while retaining the author's order and wording."""
     parts = []
@@ -90,6 +92,7 @@ def render_persona(text):
     return '\n\n'.join(parts)
 
 
+@lru_cache(maxsize=32)
 def uses_default_voice(text, heading):
     """Hand-authored voice instructions must survive the delivery postprocessor."""
     def style_sections(raw):
@@ -99,23 +102,48 @@ def uses_default_voice(text, heading):
 
 
 def load_persona(root: Path) -> str:
+    from .persona_modules import load_modules, export_modules
+    modules=load_modules(root)
+    if modules is not None:
+        return export_modules(modules)
+    from .persona_documents import file_revision
     path = Path(root)/'config'/'persona.md'
-    if not path.exists():
+    revision = file_revision(path)
+    if revision is None:
         return DEFAULT
+    return _read_persona(path, revision)
+
+
+@lru_cache(maxsize=32)
+def _read_persona(path, revision):
+    if revision[0] > 1024*1024:
+        raise ValueError('人格设定超过 1 MB，未读取或截断原稿')
     text = path.read_bytes().decode('utf-8')
     validate_persona(text)
     return text
 
 
 def validate_persona(text: str):
-    if not text.strip() or len(text) > 16000:
-        raise ValueError('人格设定需为1至16000字的文字')
+    if not isinstance(text,str) or not text.strip() or len(text) > 200000:
+        raise ValueError('人格设定需为1至200000字的文字')
     if re.search(r'sk-[A-Za-z0-9_-]{9,}', text):
         raise ValueError('人格设定不能包含API密钥，请使用加密密钥输入框')
 
 
 def save_persona(root: Path, text: str):
+    from .persona_modules import modules_revision
+    if modules_revision(root) is not None:
+        raise ValueError('当前使用模块化人格，请在人格工作室编辑模块；旧编辑器不能覆盖整套规则')
     validate_persona(text)
+    from .persona_documents import archive_persona_source
     directory = Path(root)/'config'
     directory.mkdir(parents=True, exist_ok=True)
+    previous = directory/'persona.md'
+    if previous.exists():
+        data = previous.read_bytes()
+        # An unreadable/invalid active file remains recoverable through the
+        # existing explicit restore workflow; never archive credential paste.
+        try: archive_persona_source(root, data)
+        except (ValueError, UnicodeDecodeError): pass
+    archive_persona_source(root, text.encode('utf-8'))
     atomic_private_write(directory/'persona.md', text.encode('utf-8'))

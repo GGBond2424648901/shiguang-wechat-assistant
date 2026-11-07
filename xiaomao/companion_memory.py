@@ -76,10 +76,13 @@ def _tokens(text):
 
 def recall(facts,query,speaker,*,now=None):
     tokens=_tokens(query)
-    ranked=[];continuity=[]
+    ranked=[];continuity=[];preferences=[]
     known=bool(re.fullmatch(r'p_[a-f0-9]{16}',speaker))
     for fact in facts:
         if fact['kind']!='topic' and (not known or fact['speaker']!=speaker):continue
+        if now is not None and _evidence_time(fact)>now:continue
+        if fact['kind']=='preference' and fact['at']>0:
+            preferences.append(fact)
         if fact['kind'] in ('feeling','interaction','thread'):
             # A timestamped utterance is evidence of what someone expressed,
             # never a diagnosis or a claim that they still feel it now.
@@ -118,10 +121,16 @@ def recall(facts,query,speaker,*,now=None):
     # lexical match on the old hurt must not hide the later resolution.
     threads=sorted((f for f in continuity if f['kind']=='thread'),key=_evidence_time)[-2:]
     continuity=sorted((f for f in continuity if f['kind']!='thread'),key=lambda f:f['at'])[-3:]+threads
-    selected=list(continuity)
+    selected=[]
     personal=(f for _,f in ranked if f['kind'] in ('preference','fact','thread'))
     latest=max(personal,key=_evidence_time,default=None)
-    if latest is not None and latest not in selected:selected.append(latest)
+    if latest is not None:selected.append(latest)
+    # Expression preferences remain useful when the next topic has completely
+    # different vocabulary. Keep the two newest original statements together
+    # so a correction is visible, without merging people or rewriting history.
+    for fact in sorted(preferences,key=_evidence_time,reverse=True)[:2]+sorted(continuity,key=_evidence_time,reverse=True):
+        if len(selected)>=6:break
+        if fact not in selected:selected.append(fact)
     for _,fact in ranked:
         if len(selected)>=6:break
         if fact not in selected:selected.append(fact)

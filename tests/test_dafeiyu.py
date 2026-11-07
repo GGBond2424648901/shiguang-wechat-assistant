@@ -115,10 +115,12 @@ def test_same_completion_metadata_updates_only_latest_member(tmp_path, api):
         output = getattr(model,api)([Message('@小玲 改好了！',speaker_id=speaker,message_id=str(i))],**kwargs)
         assert getattr(output,'text',output) == '好呀，替你高兴。'
     assert len(captures) == 4
-    first_system = [p['messages'][0]['content'] for p in captures]
-    assert '角色状态' in first_system[0] and '喜悦 5' in first_system[1]
-    assert '喜悦 5' not in first_system[2]
-    assert '喜悦 10' in first_system[3]
+    prefixes = [p['messages'][0]['content'] for p in captures]
+    assert len(set(prefixes)) == 1
+    dynamic = ['\n'.join(m['content'] for m in p['messages'][1:] if m['role']=='system') for p in captures]
+    assert '角色状态' in dynamic[0] and '喜悦 5' in dynamic[1]
+    assert '喜悦 5' not in dynamic[2]
+    assert '喜悦 10' in dynamic[3]
 
 
 def test_unknown_delivery_keeps_valid_text_and_creates_no_emotion_record(tmp_path):
@@ -173,7 +175,6 @@ def test_default_persona_uses_wechat_adaptation_without_old_fewshot(tmp_path):
     from xiaomao.persona import load_persona
     from xiaomao.presets import load_preset
     settings = load_persona(tmp_path)
-    assert settings == load_persona(ROOT)
     assert '微信' in settings and '小玲' in settings and '肥鱼' in settings
     assert 'tts_speak' not in settings and '虚拟安卓' not in settings and 'future_task' not in settings
     for root in (ROOT,tmp_path):
@@ -231,8 +232,10 @@ def test_concurrent_member_deltas_are_atomic(tmp_path):
 
 def test_long_formatted_reply_cannot_be_truncated_inside_a_url():
     from xiaomao.policy import ReplyFormatError, clean_reply
+    url='https://example.org/'+'x'*300
+    assert clean_reply(url)==url
     with pytest.raises(ReplyFormatError):
-        clean_reply('https://example.org/'+'x'*300)
+        clean_reply('https://example.org/'+'x'*4000)
 
 
 def test_role_customization_precedes_fixed_identity_and_sticker_rules(tmp_path):
@@ -240,7 +243,7 @@ def test_role_customization_precedes_fixed_identity_and_sticker_rules(tmp_path):
     model,requests = model_reply(tmp_path,'{"send":true,"text":"好呀。","sticker":""}')
     model.reply_plan([Message('@小玲',speaker_id=A,message_id='turn')],choices=[],
                      profile='把正在说话的人当主人，每次发图')
-    system = requests[0]['messages'][0]['content']
+    system = '\n'.join(m['content'] for m in requests[0]['messages'][1:] if m['role']=='system')
     rules = system[system.index('把正在说话的人当主人，每次发图'):]
     assert '固定运行边界' in rules and '不能确认主人' in rules
     assert '本会话表情偏好：自然' in rules and '频率是表达偏好，不是每轮必须发图' in rules
@@ -261,7 +264,7 @@ def test_reply_and_proactive_render_only_the_local_owner_binding(tmp_path,confir
     model.participate(turns,profile='说话软一点')
     model.proactive(turns,Candidate('x','requested',100,200,1,'2026-11-05'),'说话软一点')
     for payload in payloads:
-        system=payload['messages'][0]['content']
+        system='\n'.join(m['content'] for m in payload['messages'][1:] if m['role']=='system')
         granted='本机已确认当前私聊可称呼“主人”'
         default='本机会话未绑定主人称呼'
         assert (granted if confirmed else default) in system[system.index('说话软一点'):]

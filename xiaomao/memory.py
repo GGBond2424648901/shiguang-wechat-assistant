@@ -256,11 +256,18 @@ class ConversationMemory:
         with self._lock:
             text_size = len(self.summary) + sum(len(message.text) for message in self.messages)
             image_size = sum(len(getattr(message, 'image_data', b'')) for message in self.messages)
-            if not force and len(self.messages) <= 96 and text_size <= 16000 and image_size <= 12*1024*1024:
+            media_pressure = sum(bool(message.image_data) for message in self.messages)>6
+            if not force and not media_pressure and len(self.messages) <= 96 and text_size <= 16000 and image_size <= 12*1024*1024:
                 return None
-            if len(self.messages) <= self.recent_limit:
+            keep=min(self.recent_limit,4) if media_pressure else self.recent_limit
+            if len(self.messages) <= keep:
                 return None
-            return CompactionPlan(self.summary,tuple(self.messages[:-self.recent_limit]))
+            older=self.messages[:-keep]
+            # Incremental media compaction also bounds the summary request;
+            # one large image burst must not recreate the same slow upload.
+            image_indices=[i for i,m in enumerate(older) if m.image_data]
+            if len(image_indices)>4:older=older[:image_indices[4]]
+            return CompactionPlan(self.summary,tuple(older))
 
     def commit_compaction(self, plan, summary) -> bool:
         """Commit only a still-current prefix; callers own job/epoch validity."""

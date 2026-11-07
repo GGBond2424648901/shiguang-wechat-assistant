@@ -30,6 +30,9 @@ class StateStore:
             CREATE TABLE IF NOT EXISTS send_receipts (
               task_id TEXT PRIMARY KEY, group_digest TEXT NOT NULL,
               reply_digest TEXT NOT NULL, baseline TEXT NOT NULL, at REAL NOT NULL);
+            CREATE TABLE IF NOT EXISTS sticker_history (
+              group_digest TEXT NOT NULL, sticker_id TEXT NOT NULL,
+              PRIMARY KEY(group_digest,sticker_id));
             CREATE TABLE IF NOT EXISTS proactive (
               id TEXT PRIMARY KEY, scope TEXT NOT NULL, account TEXT NOT NULL,
               day TEXT NOT NULL, at REAL NOT NULL, state TEXT NOT NULL);
@@ -37,6 +40,9 @@ class StateStore:
         columns={r[1] for r in self.db.execute('PRAGMA table_info(send_receipts)')}
         for name in ('sticker_md5','sticker_id'):
             if name not in columns:self.db.execute(f"ALTER TABLE send_receipts ADD COLUMN {name} TEXT NOT NULL DEFAULT ''")
+        # Keep only identity pairs after detailed receipts expire. Include uncertain
+        # sends conservatively so an explicit novelty request cannot resend them.
+        self.db.execute("INSERT OR IGNORE INTO sticker_history SELECT group_digest,sticker_id FROM send_receipts WHERE sticker_id!=''")
         self.db.commit()
 
     def fingerprint(self, value: str) -> str:
@@ -162,6 +168,9 @@ class StateStore:
                     (task_id,self.fingerprint(group),self.fingerprint(normalized(reply)),
                      json.dumps([self.fingerprint(i) for i in baseline_ids if i]),now,
                      self.fingerprint(sticker_md5) if sticker_md5 else '',sticker_id))
+                if sticker_id:
+                    self.db.execute('INSERT OR IGNORE INTO sticker_history VALUES (?,?)',
+                                    (self.fingerprint(group),sticker_id))
 
     def confirm_receipt(self,task_id,group,message):
         if message.direction!='out' or not message.message_id:return False
@@ -178,9 +187,11 @@ class StateStore:
             cursor=self.db.execute("UPDATE tasks SET state='verified',reason='database_receipt' WHERE id=? AND state IN ('sending','unknown')",(task_id,))
             return cursor.rowcount==1
 
-    def recent_stickers(self,group,now):
+    def recent_stickers(self,group,now,*,all_history=False):
         with self.lock:
-            return [r[0] for r in self.db.execute("SELECT sticker_id FROM send_receipts WHERE group_digest=? AND at>? AND sticker_id!=''",(self.fingerprint(group),now-1800))]
+            if all_history:
+                return [r[0] for r in self.db.execute('SELECT sticker_id FROM sticker_history WHERE group_digest=?',(self.fingerprint(group),))]
+            return [r[0] for r in self.db.execute("SELECT DISTINCT sticker_id FROM send_receipts WHERE group_digest=? AND at>? AND sticker_id!=''",(self.fingerprint(group),now-1800))]
 
     def sticker_ready(self,group,now,frequency='natural'):
         from .reply_preferences import STICKER_PACING

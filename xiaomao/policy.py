@@ -25,6 +25,8 @@ class TriggerPolicy:
         text = normalized(message.text)
         if any(text.startswith(name) for name in self.aliases):
             return True
+        if message.mentioned_self is not None:
+            return message.mentioned_self
         names=(*self.aliases,self.self_display_name) if self.self_display_name else self.aliases
         return any(re.search(r'@'+re.escape(name)+r'(?=$|[^\w])',text) for name in names)
 
@@ -89,24 +91,23 @@ def _has_role_field(text):
     return True
 
 
-def clean_reply(text: str, limit: int = 200) -> str:
+MAX_REPLY_CHARS = 4000  # Transport sanity ceiling, not a conversational style quota.
+
+
+def clean_reply(text: str, limit: int = MAX_REPLY_CHARS) -> str:
     text=reply_body(text)
     if re.search(r'[\[【]\s*已发送表情\s*[:：]',text):
         raise ReplyFormatError('回复含内部媒体回执，未发送')
-    from .dafeiyu import formatted_reply
-    formatted = formatted_reply(text)
     # Plain prose can also have intentional line breaks and spaces. Keep
     # them for the bubble planner and paste adapter, never as key events.
     text = text.replace('\r\n','\n').replace('\r','\n')
     result = ''.join(c for c in text if c in '\t\n' or not unicodedata.category(c).startswith('C'))
-    if formatted and len(result)>limit:
-        raise ReplyFormatError('格式化回复超出发送字数，请缩短后重新生成')
+    if len(result)>limit:
+        raise ReplyFormatError('回复超出单次发送容量，未截断或发送，请重新生成完整答复')
     if _has_role_field(result):
         raise ReplyFormatError('回复含内部角色状态，未发送')
     if re.search(r'[\[【]\s*已发送表情\s*[:：]',result):
         raise ReplyFormatError('回复含内部媒体回执，未发送')
-    if not formatted:
-        result = result[:limit]
     if not result.strip():
         raise ValueError("模型未生成可发送的文字")
     return result

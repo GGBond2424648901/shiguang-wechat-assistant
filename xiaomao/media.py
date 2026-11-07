@@ -20,6 +20,8 @@ import struct
 import subprocess
 import time
 import warnings
+from collections import OrderedDict
+import threading
 import xml.etree.ElementTree as ET
 
 from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
@@ -254,6 +256,25 @@ class LocalMediaResolver:
         self._seed_provider = seed_provider
         self._seed = None
         self._next_probe = 0.0
+        self._frames = OrderedDict()
+        self._frame_lock = threading.Lock()
+
+    def _decode_frame(self,data,kind):
+        if not data:return None
+        digest=(kind,hashlib.sha256(data).digest())
+        with self._frame_lock:
+            result=self._frames.get(digest)
+            if result is not None:
+                self._frames.move_to_end(digest)
+                return result
+        plain=self._plain(data,kind)
+        result=_wxgf_frame(plain) if plain and plain.startswith(b'wxgf') else _static_png(plain)
+        if result:
+            with self._frame_lock:
+                self._frames[digest]=result
+                while len(self._frames)>32 or sum(map(len,self._frames.values()))>16*1024*1024:
+                    self._frames.popitem(last=False)
+        return result
 
     def _safe_path(self, path):
         path.relative_to(self.root)
@@ -403,8 +424,7 @@ class LocalMediaResolver:
                     return None
                 try:
                     data = self._read(path)
-                    plain = self._plain(data, kind) if data else None
-                    result = _wxgf_frame(plain) if plain and plain.startswith(b'wxgf') else _static_png(plain)
+                    result = self._decode_frame(data,kind)
                     if result:
                         return result
                 except (OSError, ValueError, SyntaxError, RuntimeError, Image.DecompressionBombError, Image.DecompressionBombWarning):

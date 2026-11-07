@@ -57,6 +57,47 @@ def test_closing_panel_keeps_standalone_worker_running(tmp_path):
     assert events==['closed'] and p.closing
 
 
+def test_panel_waits_for_worker_before_polling_status_or_queue(tmp_path):
+    p,events=panel(tmp_path)
+    p.poll_busy=False
+    p.root.after=lambda *_:None
+    p.view.status={}
+    p.view.page='assistant'
+    p.view.refresh_pending=lambda **_:events.append('queue')
+    p.show_status=lambda data:setattr(p.view,'status',data)
+    p.set_preview=lambda _:None
+    requests=[]
+    p.client=SimpleNamespace(start=lambda:{'mode':'auto'},status=lambda:pytest.fail('polled before startup'))
+    p.work=lambda action,success,failure,**_:requests.append((action,success))
+    p.connect_worker()
+    assert p.view.status['mode']=='starting'
+    p.poll()
+    assert len(requests)==1 and not events
+    action,success=requests.pop()
+    success(action())
+    assert p.view.status['mode']=='auto' and events==['queue']
+
+
+def test_reopen_reconnect_keeps_existing_worker_paused(tmp_path,monkeypatch):
+    from xiaomao.client import ControlClient
+    from xiaomao import launch
+    p,events=panel(tmp_path)
+    p.view.status={'mode':'disconnected'};p.view.page='settings'
+    p.client=ControlClient(tmp_path)
+    p.client.status=lambda:{'running':True,'mode':'paused','reason':'用户已暂停'}
+    p.show_status=lambda data:setattr(p.view,'status',data)
+    monkeypatch.setattr(launch,'spawn_worker',lambda *args,**kwargs:pytest.fail('existing worker must not be restarted'))
+    p.connect_worker()
+    assert p.view.status=={'running':True,'mode':'paused','reason':'用户已暂停'}
+
+
+def test_missing_tray_does_not_discard_last_visible_entry(tmp_path):
+    p,events=panel(tmp_path)
+    p.view.status={'tray':{'running':False,'error':'通知图标暂不可用'}}
+    p.close()
+    assert not p.closing and events==['error']
+
+
 def test_explicit_stop_and_exit_waits_for_worker_exit(tmp_path):
     p,events=panel(tmp_path);p.stop_and_exit()
     assert events==['stop','wait','closed'] and p.closing

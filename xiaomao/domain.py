@@ -27,6 +27,7 @@ class Message:
     delivery_status: str = field(default='',compare=False)
     sender_source: str = ''
     sender_observed_at: float = field(default=0, compare=False)
+    mentioned_self: bool | None = None
 
     @property
     def key(self) -> tuple:
@@ -76,3 +77,6 @@ class ReplyTask:
     wait_reason: str = ''
     wait_detail: str = ''
     idle_deadline: float = 0
+    operator_plan: bool = False
+    media_first: bool = False
+    draft_waiting: bool = False

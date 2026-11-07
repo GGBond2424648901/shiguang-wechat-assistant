@@ -37,6 +37,7 @@ def daemon(root: Path,initial_mode=None):
     except DesktopUnavailable as error:
         raise ValueError(str(error)) from None
     store = None
+    tray = None
     try:
         settings = Settings.load(root)
         store = StateStore(settings.runtime)
@@ -45,6 +46,8 @@ def daemon(root: Path,initial_mode=None):
         worker = threading.Thread(target=engine.run, daemon=True, name="xiaomao-observer")
         hotkey = threading.Thread(target=hotkey_loop, args=(engine.stop_event, engine.pause), daemon=True, name="xiaomao-hotkey")
         with ControlServer(root, engine):
+            from .panel_entry import resident_tray
+            tray=engine.tray=resident_tray(root,engine)
             worker.start()
             hotkey.start()
             try:
@@ -56,6 +59,7 @@ def daemon(root: Path,initial_mode=None):
                 worker.join(40)
                 hotkey.join(2)
     finally:
+        if tray:tray.stop()
         if store:
             store.close()
         mutex.close()

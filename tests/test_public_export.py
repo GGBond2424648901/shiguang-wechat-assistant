@@ -34,6 +34,8 @@ def test_export_preserves_approved_brand_and_is_rebuildable(tmp_path,monkeypatch
         for node in ast.walk(tree):
             if isinstance(node,ast.ImportFrom) and node.module and node.module.startswith('test_'):
                 assert (target/'tests'/(node.module+'.py')).is_file(), (test.name,node.module)
+            if isinstance(node,ast.ImportFrom) and node.module and node.module.startswith('scripts.'):
+                assert (target/(node.module.replace('.','/')+'.py')).is_file(), (test.name,node.module)
     monkeypatch.setattr(module,'ROOT',target);monkeypatch.setattr(module,'MANIFEST',target/'packaging/public-files.txt')
     module.export(tmp_path/'again')
     assert (tmp_path/'again/xiaomao/ui_assets/app.png').read_bytes()==(target/'xiaomao/ui_assets/app.png').read_bytes()

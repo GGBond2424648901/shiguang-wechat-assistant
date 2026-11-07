@@ -16,6 +16,21 @@ SEED = 123456789
 ACCOUNT = 'wxid_test'
 
 
+def test_repeated_media_decode_is_cached_and_changed_file_invalidates(tmp_path,monkeypatch):
+    import xiaomao.media as module
+    original=module._static_png;decoded=[]
+    def decode(data):decoded.append(1);return original(data)
+    monkeypatch.setattr(module,'_static_png',decode)
+    path=emoji_path(tmp_path);path.write_bytes(picture())
+    resolver=module.LocalMediaResolver(tmp_path)
+    first=resolver.resolve(xml('emoji'),47,GROUP,AT)
+    assert resolver.resolve(xml('emoji'),47,GROUP,AT)==first
+    assert len(decoded)==1
+    path.write_bytes(picture('blue'))
+    assert resolver.resolve(xml('emoji'),47,GROUP,AT)!=first
+    assert len(decoded)==2
+
+
 def picture(color='red', size=(80, 60), fmt='PNG'):
     out = io.BytesIO()
     Image.new('RGB', size, color).save(out, format=fmt)
