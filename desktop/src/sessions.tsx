@@ -1,5 +1,5 @@
 import {
-  ArrowLeft, Check, ChevronRight, CircleHelp, Crosshair, Info, Layers2, MessageCircle, Monitor, PauseCircle,
+  ArrowLeft, ChevronRight, CircleHelp, Crosshair, Info, Layers2, MessageCircle, Monitor, PauseCircle,
   Plus, RefreshCcw, Save, Search, ShieldCheck, Smile, Star, Trash2, UserRound, UsersRound, X,
 } from "lucide-react";
 import { useEffect, useState, type ReactNode } from "react";
@@ -168,59 +168,64 @@ export function SessionsPage({ active, status, notify, calibrate, directory, set
         {!filtered.length && <Empty title="没有匹配的会话" />}
       </div>
       <div className="session-list-footer">
-        <Switch checked={monitor} disabled={!mutable} onChange={setMonitor}>同时监听已选会话（{order.length} 个）</Switch>
+        <label className="session-monitor">
+          <input type="checkbox" checked={monitor} disabled={!mutable} onChange={event => setMonitor(event.target.checked)} />
+          同时监听已选会话（{order.length} 个）
+        </label>
         <Switch checked={stickers} disabled={!mutable} onChange={setStickers}>允许表情包回复</Switch>
         <label className="field">默认回复方式<Select label="默认回复方式" options={replyOptions}
           value={defaultMode} onChange={setDefaultMode} disabled={!mutable} /></label>
       </div>
     </section>
     <section className="glass panel session-detail">
-      <div className="session-detail-title"><Avatar kind={row.kind} /><div>
-        <h2>{row.name}</h2><div className="flex muted fine-print">
-          <span>{kindLabels[row.kind]}</span>
-          {row.id === order[0].id && <span>· 主要会话</span>}
-          {base.accountLabel && <span>· {base.accountLabel}</span>}
-        </div></div>
-        <span className={row.bound ? "identity-label confirmed" : "identity-label"}><ShieldCheck size={15} />
-          {row.bound ? "身份已核实" : "身份待核实"}</span>
-        <div className="session-detail-icons flex">
-          <IconButton label="设为主要会话" icon={<Star size={16} />} disabled={!mutable || row.id === order[0].id}
-            onClick={() => setOrder([row, ...order.filter(item => item.id !== row.id)])} />
-          <IconButton label="移出监听列表" icon={<Trash2 size={16} />} disabled={!mutable || order.length <= 1}
-            onClick={() => { setOrder(order.filter(item => item.id !== row.id)); setSelected(""); }} />
+      <div className="session-detail-scroll">
+        <div className="session-detail-title"><Avatar kind={row.kind} /><div>
+          <h2>{row.name}</h2><div className="flex muted fine-print">
+            <span>{kindLabels[row.kind]}</span>
+            {row.id === order[0].id && <span>· 主要会话</span>}
+            {base.accountLabel && <span>· {base.accountLabel}</span>}
+          </div></div>
+          <span className={row.bound ? "identity-label confirmed" : "identity-label"}><ShieldCheck size={15} />
+            {row.bound ? "身份已核实" : "身份待核实"}</span>
+          <div className="session-detail-icons flex">
+            <IconButton label="设为主要会话" icon={<Star size={16} />} disabled={!mutable || row.id === order[0].id}
+              onClick={() => setOrder([row, ...order.filter(item => item.id !== row.id)])} />
+            <IconButton label="移出监听列表" icon={<Trash2 size={16} />} disabled={!mutable || order.length <= 1}
+              onClick={() => { setOrder(order.filter(item => item.id !== row.id)); setSelected(""); }} />
+          </div>
         </div>
+        <SessionBlock icon={<MessageCircle size={21} />} title="回复方式" hint="独立设置该会话如何回复"
+          controls={<div className="flex session-rule-group" role="group" aria-label="回复方式">
+            {[{ value: "", label: "继承默认" }, ...replyOptions].map(option => <Button key={option.value}
+              variant={rule.replyMode === (option.value || null) ? "primary" : undefined}
+              aria-pressed={rule.replyMode === (option.value || null)} disabled={!mutable || pending || !row.bound}
+              onClick={() => editRule({ replyMode: option.value || null })}>{option.label}</Button>)}
+          </div>} />
+        <SessionBlock icon={<Smile size={21} />} title="表情偏好" hint="控制回复表情的使用频率"
+          controls={<Select label="会话表情偏好" value={rule.stickerFrequency ?? ""}
+            options={[{ value: "", label: `继承默认 · ${frequencies.find(option => option.value === base.defaultStickerFrequency)?.label ?? ""}` }, ...frequencies]}
+            onChange={stickerFrequency => editRule({ stickerFrequency: stickerFrequency || null })}
+            disabled={!mutable || pending || !row.bound} />} />
+        <SessionBlock icon={<PauseCircle size={21} />} title="独立暂停" hint="只暂停这个会话，其他会话继续运行"
+          controls={<Switch checked={paused} disabled={!mutable || !status?.connected || !running || !row.bound}
+            onChange={value => void run("pause", async () => {
+              await request("run.selected", { session: row.id, action: value ? "pause" : "enable" });
+              const next = await request<SavedSessions>("sessions.read");
+              if (changed) setBase(next);
+              else accept(next, true);
+              notify(value ? "会话已暂停" : "会话已开启");
+            })}>暂停此会话</Switch>} />
+        <SessionBlock icon={<Monitor size={21} />} title="窗口绑定" hint="逐个校准主窗口或独立聊天窗口"
+          controls={<div className="flex"><span className={row.calibrated ? "identity-label confirmed" : "identity-label"}>
+            {row.calibrated ? "已校准" : "待校准"}</span>
+            <Button className="peach-outline" disabled={!mutable || pending} icon={<Crosshair size={15} />} onClick={() =>
+              void run("calibrate", () => calibrate(row.id))}>{row.calibrated ? "重新校准" : "校准此会话"}</Button></div>}>
+          <dl className="session-binding"><dt>窗口类型</dt><dd>{row.windowKind === "detached" ? "独立聊天窗口"
+            : row.windowKind === "main" ? "微信主窗口" : "等待校准"}</dd>
+            <dt>当前状态</dt><dd>{running?.reason || (pending ? "先保存会话再校准" : row.windowSize?.join(" × ") || "尚无绑定")}</dd></dl>
+        </SessionBlock>
       </div>
-      <SessionBlock icon={<MessageCircle size={21} />} title="回复方式" hint="独立设置该会话如何回复"
-        controls={<div className="flex session-rule-group" role="group" aria-label="回复方式">
-          {[{ value: "", label: "继承默认" }, ...replyOptions].map(option => <Button key={option.value}
-            variant={rule.replyMode === (option.value || null) ? "primary" : "ghost"}
-            aria-pressed={rule.replyMode === (option.value || null)} disabled={!mutable || pending || !row.bound}
-            onClick={() => editRule({ replyMode: option.value || null })}>{option.label}</Button>)}
-        </div>} />
-      <SessionBlock icon={<Smile size={21} />} title="表情偏好" hint="控制回复表情的使用频率"
-        controls={<Select label="会话表情偏好" value={rule.stickerFrequency ?? ""}
-          options={[{ value: "", label: `继承默认 · ${frequencies.find(option => option.value === base.defaultStickerFrequency)?.label ?? ""}` }, ...frequencies]}
-          onChange={stickerFrequency => editRule({ stickerFrequency: stickerFrequency || null })}
-          disabled={!mutable || pending || !row.bound} />} />
-      <SessionBlock icon={<PauseCircle size={21} />} title="独立暂停" hint="只暂停这个会话，其他会话继续运行"
-        controls={<Switch checked={paused} disabled={!mutable || !status?.connected || !running || !row.bound}
-          onChange={value => void run("pause", async () => {
-            await request("run.selected", { session: row.id, action: value ? "pause" : "enable" });
-            const next = await request<SavedSessions>("sessions.read");
-            if (changed) setBase(next);
-            else accept(next, true);
-            notify(value ? "会话已暂停" : "会话已开启");
-          })}>暂停此会话</Switch>} />
-      <SessionBlock icon={<Monitor size={21} />} title="窗口绑定" hint="逐个校准主窗口或独立聊天窗口"
-        controls={<div className="flex"><span className={row.calibrated ? "identity-label confirmed" : "identity-label"}>
-          {row.calibrated ? "已校准" : "待校准"}</span>
-          <Button disabled={!mutable || pending} icon={<Crosshair size={15} />} onClick={() =>
-            void run("calibrate", () => calibrate(row.id))}>{row.calibrated ? "重新校准" : "校准此会话"}</Button></div>}>
-        <dl className="session-binding"><dt>窗口类型</dt><dd>{row.windowKind === "detached" ? "独立聊天窗口"
-          : row.windowKind === "main" ? "微信主窗口" : "等待校准"}</dd>
-          <dt>当前状态</dt><dd>{running?.reason || (pending ? "先保存会话再校准" : row.windowSize?.join(" × ") || "尚无绑定")}</dd></dl>
-      </SessionBlock>
-      <div className="session-detail-footer"><span><Info size={15} />{changed || Object.keys(rules).length
+      <footer className="session-detail-footer"><span><Info size={15} />{changed || Object.keys(rules).length
         ? "有未保存的修改" : `已选 ${order.length} 个会话`}</span>
         <div className="flex"><Button disabled={!mutable || (!changed && !Object.keys(rules).length)}
           onClick={() => accept(base)}>撤销</Button>
@@ -228,7 +233,7 @@ export function SessionsPage({ active, status, notify, calibrate, directory, set
             onClick={() => void save()}>保存监听范围</Button>}
           <Button variant={changed ? undefined : "primary"} busy={busy === "rules"} icon={<Save size={16} />}
             disabled={!mutable || !ruleChanged || pending} onClick={() => void saveRules()}>保存当前会话</Button></div>
-      </div>
+      </footer>
     </section>
   </div>;
 }
@@ -266,7 +271,8 @@ function DirectoryPage({ existing, notify, close, add, capture }: {
   };
   return <div className="glass directory-page">
     <div className="directory-toolbar">
-      <Button icon={<ArrowLeft size={16} />} onClick={close}>返回会话</Button>
+      <Button className="directory-return" aria-label="返回会话" title="返回会话" icon={<ArrowLeft size={16} />}
+        onClick={close}><span>返回会话</span></Button>
       <label className="persona-search"><Search size={16} /><input aria-label="搜索通讯录" placeholder="搜索群聊或联系人"
         value={query} onChange={event => { setQuery(event.target.value); setPage(0); }} /></label>
       <div className="flex" role="group" aria-label="会话类型">
@@ -274,7 +280,8 @@ function DirectoryPage({ existing, notify, close, add, capture }: {
           variant={kind === value ? "primary" : "ghost"} aria-pressed={kind === value}
           onClick={() => { setKind(value); setPage(0); }}>{label}</Button>)}
       </div>
-      <Button icon={<RefreshCcw size={16} />} busy={busy} onClick={() => { setVersion(version + 1); setPage(0); }}>刷新目录</Button>
+      <Button className="directory-refresh peach-outline" aria-label="刷新目录" title="刷新目录" icon={<RefreshCcw size={16} />} busy={busy}
+        onClick={() => { setVersion(version + 1); setPage(0); }}><span>刷新目录</span></Button>
     </div>
     <div className="directory-body">
       <section className="glass panel directory-list">
@@ -307,9 +314,12 @@ function DirectoryPage({ existing, notify, close, add, capture }: {
           <span>选中的会话先加入草稿。返回会话页保存范围，再校准并开启自动回复。</span></div>
       </section>
     </div>
-    <div className="directory-footer flex"><Button icon={<Crosshair size={15} />} onClick={capture}>识别当前微信会话</Button>
+    <footer className="directory-footer flex">
+      <Button className="directory-capture" aria-label="识别当前微信会话" title="识别当前微信会话" icon={<Crosshair size={15} />}
+        onClick={capture}><span>识别当前微信会话</span></Button>
       <Button onClick={close}>取消</Button>
-      <Button variant="primary" icon={<Check size={16} />} disabled={!checked.length} onClick={() => add(checked)}>
-        加入监听列表 {checked.length} / {8 - existing.length}</Button></div>
+      <Button variant="primary" disabled={!checked.length} onClick={() => add(checked)}>
+        加入监听列表 {checked.length} / {8 - existing.length}</Button>
+    </footer>
   </div>;
 }

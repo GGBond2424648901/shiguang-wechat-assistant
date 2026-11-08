@@ -70,9 +70,14 @@ export interface StickerDetail extends Sticker {
 }
 
 export type WindowAction = "minimize" | "maximize" | "close" | "background" | "exit" | "discardExit" | "cancel" | "dismissPreview";
-export interface Info { readOnly: boolean; tray: boolean; connected: boolean; hasWallpaper: boolean; reduceMotion: boolean; trayExit: boolean; dirty: boolean }
-export interface Appearance { transparency: number; reduceMotion: boolean; revision: string | null }
-export const defaultAppearance: Appearance = { transparency: 21, reduceMotion: false, revision: null };
+export interface Info { readOnly: boolean; tray: boolean; connected: boolean; hasWallpaper: boolean; reduceMotion: boolean; trayExit: boolean; dirty: boolean; maximized: boolean }
+export interface Appearance { transparency: number; reduceMotion: boolean; zoomPercent: number; revision: string | null }
+export const defaultAppearance: Appearance = { transparency: 21, reduceMotion: false, zoomPercent: 100, revision: null };
+const zoomSteps = [75, 80, 90, 100, 110, 125, 150, 175, 200];
+export function stepZoom(percent: number, direction: -1 | 1) {
+  const next = direction < 0 ? zoomSteps.filter(value => value < percent).at(-1) : zoomSteps.find(value => value > percent);
+  return next ?? percent;
+}
 
 export interface StickerAnnotation { category: string; meaning: string; tags: string[]; source: string }
 export interface ImportRow extends StickerAnnotation {
@@ -90,6 +95,7 @@ declare global {
       request: (method: string, params?: Record<string, unknown>) => Promise<unknown>;
       watch: (listener: (value: Status) => void) => () => void;
       windowAction: (action: WindowAction) => Promise<void>;
+      zoom: (percent: number) => Promise<void>;
       windowState: (listener: (value: { maximized: boolean }) => void) => () => void;
       appInfo: () => Promise<Info>;
       calibrate: (session?: string) => Promise<void>;

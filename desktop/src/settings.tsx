@@ -1,6 +1,6 @@
-import { Check, Crosshair, KeyRound, Layers3, Link2, Monitor, Plus, RotateCcw, Save, Send, Trash2 } from "lucide-react";
-import { useCallback, useEffect, useState, type ReactNode } from "react";
-import { defaultAppearance, errorMessage, request, type Appearance, type PageKey, type Status } from "./api";
+import { Check, ChevronDown, ChevronUp, Copy, Crosshair, KeyRound, Layers3, Link2, MessageCircle, Minus, Monitor, Plus, RotateCcw, Save, Send, Trash2, Zap } from "lucide-react";
+import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } from "react";
+import { defaultAppearance, errorMessage, request, stepZoom, type Appearance, type PageKey, type Status } from "./api";
 import { Button, Confirm, Empty, IconButton, PanelTitle, Select, Switch, useDraftGuard } from "./components";
 
 type Notify = (message: string, error?: boolean) => void;
@@ -123,108 +123,110 @@ export function SettingsPage({ active, status, appearance, setAppearance, notify
     <Button variant={tab === "appearance" ? "primary" : "ghost"} aria-pressed={tab === "appearance"} onClick={() => setTab("appearance")}>界面外观</Button>
   </div>;
   return <div className="settings-page page-grid" data-tab={tab}>
-    <div className="settings-general page-grid" hidden={tab !== "general"}>
+    <div className="settings-general" hidden={tab !== "general"}>
       {data && draft ? <>
-        {(generalStale || rateStale) && <div className="inline-error" role="status">
-          <span>账号或设置已更新，当前草稿需核对后再保存。</span>
-          <Button busy={busy === "reload"} disabled={!!busy} onClick={reload}>读取最新设置</Button>
-        </div>}
-        <div className="settings-columns">
-          <section className="glass panel credentials-panel">
-            <PanelTitle icon={<Layers3 size={20} />}>模型与密钥</PanelTitle>
-            <div className="form-stack settings-form">
-              <p className="muted">配置对话模型和本机加密密钥。</p>
-              <div className="field settings-model"><span>对话模型</span><Select label="对话模型" value={draft.model_name}
-                options={data.models.map(value => ({ value, label: value }))} onChange={value => set("model_name", value)} disabled={editingDisabled} /></div>
-              <div className="row-heading"><strong>密钥管理</strong><span>已加密保存 {data.keys.length} 个</span></div>
-              {data.credentialError && <p className="muted">{data.credentialError}</p>}
-              <div className="credential-list">{data.keys.map((key, index) => <div className="credential-row" key={key.identifier}>
-                <KeyRound size={15} /><span>密钥 {index + 1} · •••• {key.suffix}</span>
-                <IconButton label={`删除密钥 ${index + 1}`} icon={<Trash2 size={15} />} disabled={data.keys.length <= 1 || readOnly || !!busy}
-                  onClick={() => setConfirm({ title: "删除此密钥", detail: `移除末四位为 ${key.suffix} 的密钥。`,
-                    run: () => void perform("remove", "settings.removeKey", { id: key.identifier }, "密钥已删除") })} />
-              </div>)}</div>
-              {!data.keys.length && !data.credentialError && <p className="muted">尚未添加密钥</p>}
-              {editingKeys && <><div className="key-inputs">{keys.map((value, index) => <label key={index} className="field">
-                <input type="password" autoComplete="off" spellCheck={false} aria-label={`新密钥 ${index + 1}`}
-                  placeholder={`新密钥 ${index + 1}`} value={value} maxLength={256} disabled={readOnly || !!busy}
-                  onChange={event => setKeys(values => values.map((key, at) => at === index ? event.target.value : key))} />
-              </label>)}</div>
-              <div className="flex key-tools">
-                <Button disabled={readOnly || keys.length >= 8 || !!busy} onClick={() => setKeys(previous => [...previous, ""])}>增加输入栏</Button>
-                <Button disabled={readOnly || !!busy} onClick={() => { setKeys([""]); setEditingKeys(false); }}>取消输入</Button>
+        <div className="settings-scroll">
+          {(generalStale || rateStale) && <div className="inline-error" role="status">
+            <span>账号或设置已更新，当前草稿需核对后再保存。</span>
+            <Button busy={busy === "reload"} disabled={!!busy} onClick={reload}>读取最新设置</Button>
+          </div>}
+          <div className="settings-columns">
+            <section className="glass panel credentials-panel">
+              <PanelTitle icon={<Layers3 size={20} />} description="选择对话模型。访问密钥加密保存在本机。">模型与密钥</PanelTitle>
+              <div className="form-stack settings-form">
+                <div className="field settings-model"><span>对话模型</span><Select label="对话模型" value={draft.model_name}
+                  options={data.models.map(value => ({ value, label: value }))} onChange={value => set("model_name", value)} disabled={editingDisabled} /></div>
+                <div className="row-heading"><strong>密钥管理</strong><span>已加密保存 {data.keys.length} 个</span></div>
+                {data.credentialError && <p className="muted">{data.credentialError}</p>}
+                <div className="credential-list">{data.keys.map((key, index) => <div className="credential-row" key={key.identifier}>
+                  <KeyRound size={15} /><span>密钥 {index + 1} · •••• {key.suffix}</span>
+                  <span className="identity-label confirmed credential-saved">已保存</span>
+                  <IconButton label={`删除密钥 ${index + 1}`} icon={<Trash2 size={15} />} disabled={data.keys.length <= 1 || readOnly || !!busy}
+                    onClick={() => setConfirm({ title: "删除此密钥", detail: `移除末四位为 ${key.suffix} 的密钥。`,
+                      run: () => void perform("remove", "settings.removeKey", { id: key.identifier }, "密钥已删除") })} />
+                </div>)}</div>
+                {!data.keys.length && !data.credentialError && <p className="muted">尚未添加密钥</p>}
+                {editingKeys && <><div className="key-inputs">{keys.map((value, index) => <label key={index} className="field">
+                  <input type="password" autoComplete="off" spellCheck={false} aria-label={`新密钥 ${index + 1}`}
+                    placeholder={`新密钥 ${index + 1}`} value={value} maxLength={256} disabled={readOnly || !!busy}
+                    onChange={event => setKeys(values => values.map((key, at) => at === index ? event.target.value : key))} />
+                </label>)}</div>
+                <div className="flex key-tools">
+                  <Button disabled={readOnly || keys.length >= 8 || !!busy} onClick={() => setKeys(previous => [...previous, ""])}>增加输入栏</Button>
+                  <Button disabled={readOnly || !!busy} onClick={() => { setKeys([""]); setEditingKeys(false); }}>取消输入</Button>
+                </div>
+                <div className="flex key-actions">
+                  <Button variant="primary" icon={<KeyRound size={16} />} disabled={readOnly || !!busy}
+                    onClick={() => credentials("append")}>追加密钥</Button>
+                  <Button disabled={readOnly || !!busy} onClick={() => credentials("replace")}>替换密钥</Button>
+                </div></>}
+                <div className="flex key-actions">
+                  {!editingKeys && <Button variant="primary" icon={<Plus size={16} />} disabled={readOnly || !!busy}
+                    onClick={() => setEditingKeys(true)}>添加密钥</Button>}
+                  <Button icon={<Link2 size={15} />} busy={busy === "test"} disabled={readOnly || !!busy} onClick={() => void test()}>测试连接</Button>
+                </div>
               </div>
-              <div className="flex key-actions">
-                <Button variant="primary" icon={<KeyRound size={16} />} disabled={readOnly || !!busy}
-                  onClick={() => credentials("append")}>追加密钥</Button>
-                <Button disabled={readOnly || !!busy} onClick={() => credentials("replace")}>替换密钥</Button>
-              </div></>}
-              <div className="flex key-actions">
-                {!editingKeys && <Button variant="primary" icon={<Plus size={16} />} disabled={readOnly || !!busy}
-                  onClick={() => setEditingKeys(true)}>添加密钥</Button>}
-                <Button icon={<Link2 size={15} />} busy={busy === "test"} disabled={readOnly || !!busy} onClick={() => void test()}>测试连接</Button>
+            </section>
+            <section className="glass panel wechat-settings">
+              <PanelTitle icon={<MessageCircle size={20} />} end={tabs} description="核对微信窗口，设置自动回复和发送方式。">微信与启动</PanelTitle>
+              <div className="form-stack settings-form">
+                <div className="row-heading route-status">
+                  <strong>{selected?.calibrated && <span className="route-check"><Check size={20} /></span>}{selected?.calibrated ? "微信窗口已校准" : "微信窗口待校准"}</strong>
+                  <span>{data.account || "微信账号待核对"}</span></div>
+                <div className="flex route-settings">
+                  <Select label="校准对象" options={targetOptions} value={selected?.id ?? ""} onChange={setTarget} />
+                  <Button variant="primary" icon={<Crosshair size={15} />} disabled={readOnly} onClick={() =>
+                    void window.shiguang.calibrate(selected?.id).catch(error => notify(errorMessage(error), true))}>校准所选窗口</Button>
+                  <Button onClick={() => navigate("sessions")}>管理监听</Button>
+                </div>
+                {selected?.windowState && <p className="muted">{selected.windowState}</p>}
+                <Switch checked={draft.auto_on_launch} onChange={value => set("auto_on_launch", value)} disabled={editingDisabled}>启动时自动回复</Switch>
+                <Switch checked={draft.split_replies} onChange={value => set("split_replies", value)} disabled={editingDisabled}>分气泡发送</Switch>
+                <Switch checked={draft.idle_wake} onChange={value => set("idle_wake", value)} disabled={editingDisabled}>空闲时唤起微信发送</Switch>
+                <label className="field">群内昵称<input value={draft.self_display_name} disabled={editingDisabled} maxLength={80}
+                  onChange={event => set("self_display_name", event.target.value)} /></label>
+                <Switch checked={draft.self_name_unique_confirmed} onChange={value => set("self_name_unique_confirmed", value)}
+                  disabled={editingDisabled}>已确认群内昵称唯一</Switch>
+                <Switch checked={draft.owner_confirmed} onChange={value => set("owner_confirmed", value)}
+                  disabled={editingDisabled || !data.owner_available}>可称呼当前私聊为“主人”</Switch>
               </div>
-            </div>
-          </section>
-          <section className="glass panel wechat-settings">
-            <PanelTitle icon={<Monitor size={20} />} end={tabs}>微信与启动</PanelTitle>
-            <div className="form-stack settings-form">
-              <div className="row-heading route-status">
-                <strong>{selected?.calibrated && <Check size={20} />}{selected?.calibrated ? "微信窗口已校准" : "微信窗口待校准"}</strong>
-                <span>{data.account || "微信账号待核对"}</span></div>
-              <div className="flex route-settings">
-                <Select label="校准对象" options={targetOptions} value={selected?.id ?? ""} onChange={setTarget} />
-                <Button icon={<Crosshair size={15} />} disabled={readOnly} onClick={() =>
-                  void window.shiguang.calibrate(selected?.id).catch(error => notify(errorMessage(error), true))}>校准所选窗口</Button>
-                <Button onClick={() => navigate("sessions")}>管理监听</Button>
-              </div>
-              {selected?.windowState && <p className="muted">{selected.windowState}</p>}
-              <Switch checked={draft.auto_on_launch} onChange={value => set("auto_on_launch", value)} disabled={editingDisabled}>启动时自动回复</Switch>
-              <Switch checked={draft.split_replies} onChange={value => set("split_replies", value)} disabled={editingDisabled}>分气泡发送</Switch>
-              <Switch checked={draft.idle_wake} onChange={value => set("idle_wake", value)} disabled={editingDisabled}>空闲时唤起微信发送</Switch>
-              <label className="field">群内昵称<input value={draft.self_display_name} disabled={editingDisabled} maxLength={80}
-                onChange={event => set("self_display_name", event.target.value)} /></label>
-              <Switch checked={draft.self_name_unique_confirmed} onChange={value => set("self_name_unique_confirmed", value)}
-                disabled={editingDisabled}>已确认群内昵称唯一</Switch>
-              <Switch checked={draft.owner_confirmed} onChange={value => set("owner_confirmed", value)}
-                disabled={editingDisabled || !data.owner_available}>可称呼当前私聊为“主人”</Switch>
-            </div>
+            </section>
+          </div>
+          <section className="glass panel pacing-panel">
+            <PanelTitle icon={<Send size={19} />} end={<div className="pacing-presets flex">
+              <span className="muted fine-print">节奏预设</span>
+              <Select label="节奏预设" value={data.pacingPresets.find(preset => preset.values.join(",") === rate.join(","))?.label || ""}
+                options={[{ value: "", label: "自定义节奏" }, ...data.pacingPresets.map(({ label }) => ({ value: label, label }))]}
+                onChange={label => {
+                  const preset = data.pacingPresets.find(item => item.label === label);
+                  if (preset) setRate(preset.values.map(String));
+                }} disabled={readOnly || !!busy} />
+            </div>}>发送节奏</PanelTitle>
+            <div className="rate-fields">{[0, 3, 2, 1].map(index => <label key={index} className="field">
+              {rateLabels[index].name}<input type="number" step={index === 0 || index === 3 ? "any" : 1}
+                min={rateLabels[index].min} max={rateLabels[index].max}
+                value={rate[index] ?? ""} disabled={readOnly || !!busy}
+                onChange={event => setRate(values => values.map((value, at) => at === index ? event.target.value : value))} />
+            </label>)}
+            <Button variant="primary" icon={<Save size={16} />} disabled={editingDisabled || rateStale}
+              onClick={() => void perform("rate", "settings.pacing", {
+                expected: pacing?.revision, minimum: Number(rate[0]), hourly: Number(rate[1]), minute: Number(rate[2]), jitter: Number(rate[3]),
+              }, "发送节奏已保存")}>保存节奏</Button></div>
           </section>
         </div>
-        <section className="glass panel pacing-panel">
-          <PanelTitle icon={<Send size={19} />} end={<div className="pacing-presets flex">
-            <span className="muted fine-print">节奏预设</span>
-            <Select label="节奏预设" value={data.pacingPresets.find(preset => preset.values.join(",") === rate.join(","))?.label || ""}
-              options={[{ value: "", label: "自定义节奏" }, ...data.pacingPresets.map(({ label }) => ({ value: label, label }))]}
-              onChange={label => {
-                const preset = data.pacingPresets.find(item => item.label === label);
-                if (preset) setRate(preset.values.map(String));
-              }} disabled={readOnly || !!busy} />
-          </div>}>发送节奏</PanelTitle>
-          <div className="rate-fields">{[0, 3, 2, 1].map(index => <label key={index} className="field">
-            {rateLabels[index].name}<input type="number" step={index === 0 || index === 3 ? "any" : 1}
-              min={rateLabels[index].min} max={rateLabels[index].max}
-              value={rate[index] ?? ""} disabled={readOnly || !!busy}
-              onChange={event => setRate(values => values.map((value, at) => at === index ? event.target.value : value))} />
-          </label>)}
-          <Button variant="primary" icon={<Save size={16} />} disabled={editingDisabled || rateStale}
-            onClick={() => void perform("rate", "settings.pacing", {
-              expected: pacing?.revision, minimum: Number(rate[0]), hourly: Number(rate[1]), minute: Number(rate[2]), jitter: Number(rate[3]),
-            }, "发送节奏已保存")}>保存节奏</Button></div>
-        </section>
-        <div className="settings-footer flex glass">
+        <footer className="settings-footer flex glass">
           <span>{data.receive === "database" ? "数据库监听 · 微信最小化时也可接收" : "可见窗口监听"}</span>
           <Button onClick={() => navigate("workbench")}>查看队列</Button>
           <Button onClick={() => void window.shiguang.windowAction("close")}>关闭选项</Button>
           <Button variant="primary" icon={<Save size={16} />} disabled={editingDisabled || generalStale} busy={busy === "general"}
             onClick={() => void perform("general", "settings.save", { expected: general?.revision, fields: draft }, "运行设置已保存")}>保存设置</Button>
-        </div>
+        </footer>
       </> : <section className="glass panel">
         <PanelTitle end={tabs}>运行设置</PanelTitle><Empty title={error || "正在读取运行设置"} />
         {error && <Button onClick={reload} disabled={!!busy}>读取最新设置</Button>}
       </section>}
     </div>
-    <div hidden={tab !== "appearance"}><AppearancePage appearance={appearance} onChange={setAppearance}
+    <div className="settings-appearance" hidden={tab !== "appearance"}><AppearancePage appearance={appearance} onChange={setAppearance}
       readOnly={readOnly} notify={notify} tabs={tabs} /></div>
     {confirm && <Confirm title={confirm.title} detail={confirm.detail} cancel={() => setConfirm(undefined)}
       confirm={() => { const run = confirm.run; setConfirm(undefined); run(); }} />}
@@ -238,49 +240,97 @@ function AppearancePage({ appearance, onChange, readOnly, notify, tabs }: {
   const [sample, setSample] = useState("浅色文字");
   const [segment, setSegment] = useState(0);
   const [saving, setSaving] = useState(false);
+  const smaller = stepZoom(appearance.zoomPercent, -1);
+  const larger = stepZoom(appearance.zoomPercent, 1);
+  const setTransparency = (value: number) => onChange({ ...appearance, transparency: Math.min(100, Math.max(0, value)) });
   const save = async () => {
     if (saving) return;
     setSaving(true);
     try {
       onChange(await request<Appearance>("appearance.save", {
-        transparency: appearance.transparency, reduceMotion: appearance.reduceMotion, expected: appearance.revision,
+        transparency: appearance.transparency, reduceMotion: appearance.reduceMotion,
+        zoomPercent: appearance.zoomPercent, expected: appearance.revision,
       }));
       notify("界面外观已保存");
     } catch (error) { notify(errorMessage(error), true); }
     finally { setSaving(false); }
   };
   return <section className="glass panel appearance-pane">
-    <PanelTitle icon={<Layers3 size={20} />} end={tabs}>外观</PanelTitle>
-    <p className="appearance-description muted">调整背景透光和过渡动效，在右侧预览文字与控件。</p>
+    <PanelTitle icon={<Layers3 size={20} />} end={tabs}
+      description="设置玻璃透明度、界面缩放和过渡动效，实时预览文字与控件。">外观</PanelTitle>
     <div className="settings-columns appearance-columns">
       <section className="glass panel appearance-options">
-        <h3>玻璃透明度</h3><p className="muted">调整时即时预览。</p>
-        <div className="opacity-control"><input type="range" aria-label="玻璃透明度" min={0} max={48}
-          value={appearance.transparency} onChange={event => onChange({ ...appearance, transparency: Number(event.target.value) })} />
-          <output>{appearance.transparency}%</output></div>
-        <div className="opacity-labels"><span>更清晰</span><span>更多背景</span></div>
-        <div className="form-divider" />
-        <Switch checked={appearance.reduceMotion} onChange={value => onChange({ ...appearance, reduceMotion: value })}>减少动态效果</Switch>
-        <p className="muted fine-print">关闭过渡动效，减少界面位移。</p>
-        <div className="flex appearance-actions">
-          <Button icon={<RotateCcw size={15} />} onClick={() => onChange({ ...defaultAppearance, revision: appearance.revision })}>恢复默认</Button>
-          <Button variant="primary" icon={<Check size={16} />} busy={saving} disabled={readOnly} onClick={() => void save()}>保存外观</Button>
+        <div className="appearance-options-scroll">
+          <div className="appearance-section">
+            <h3><Copy size={25} /> 玻璃透明度</h3>
+            <div className="opacity-control">
+              <div>
+                <input type="range" aria-label="玻璃透明度" min={0} max={100} disabled={saving}
+                  style={{ "--opacity-progress": `${appearance.transparency}%` } as CSSProperties}
+                  value={appearance.transparency} onChange={event => setTransparency(Number(event.target.value))} />
+                <div className="opacity-labels"><span>0%</span><span>100%</span></div>
+              </div>
+              <div className="opacity-number">
+                <input type="number" aria-label="透明度百分比" min={0} max={100} step={1} disabled={saving}
+                  value={appearance.transparency} onChange={event => setTransparency(Math.trunc(Number(event.target.value)))} />
+                <span aria-hidden="true">%</span>
+                <div className="opacity-stepper">
+                  <IconButton label="提高透明度" icon={<ChevronUp size={15} />} disabled={saving || appearance.transparency === 100}
+                    onClick={() => setTransparency(appearance.transparency + 1)} />
+                  <IconButton label="降低透明度" icon={<ChevronDown size={15} />} disabled={saving || appearance.transparency === 0}
+                    onClick={() => setTransparency(appearance.transparency - 1)} />
+                </div>
+              </div>
+            </div>
+            <p className="muted">面板与导航同步透光。</p>
+          </div>
+          <div className="appearance-section">
+            <div className="appearance-setting-row">
+              <h3><Monitor size={23} /> 界面缩放</h3>
+              <div className="zoom-stepper" role="group" aria-label="界面缩放">
+                <IconButton label="缩小界面" icon={<Minus size={17} />} disabled={saving || smaller === appearance.zoomPercent}
+                  onClick={() => onChange({ ...appearance, zoomPercent: smaller })} />
+                <output aria-label="当前界面缩放" aria-live="polite">{appearance.zoomPercent}%</output>
+                <IconButton label="放大界面" icon={<Plus size={17} />} disabled={saving || larger === appearance.zoomPercent}
+                  onClick={() => onChange({ ...appearance, zoomPercent: larger })} />
+              </div>
+            </div>
+            <p className="muted">窗口大小保持，界面内容即时缩放。</p>
+          </div>
+          <div className="appearance-section motion-option">
+            <Zap size={23} aria-hidden="true" />
+            <div>
+              <Switch checked={appearance.reduceMotion} disabled={saving}
+                onChange={value => onChange({ ...appearance, reduceMotion: value })}>减少动态效果</Switch>
+              <p className="muted">关闭过渡动效，减少界面位移。</p>
+            </div>
+          </div>
         </div>
+        <footer className="flex appearance-actions">
+          <Button icon={<RotateCcw size={15} />} disabled={saving}
+            onClick={() => onChange({ ...defaultAppearance, revision: appearance.revision })}>恢复默认</Button>
+          <Button variant="primary" icon={<Check size={16} />} busy={saving} disabled={readOnly} onClick={() => void save()}>保存外观</Button>
+        </footer>
       </section>
       <section className="glass panel appearance-preview">
         <h3><Monitor size={17} /> 界面预览</h3><p className="muted">预览卡片、下拉框和文字对比度。</p>
         <div className="appearance-sample glass">
-          <b>示例卡片 A</b>
+          <b><Layers3 size={20} /> 示例卡片 A</b>
+          <p className="muted">展示卡片容器、下拉选择与分段导航。</p>
           <div className="flex">
             <Select label="示例选择" value={sample} options={["浅色文字", "次要文字"].map(value => ({ value, label: value }))} onChange={setSample} />
-            <div className="segments">{[0, 1].map(index => <Button key={index} variant={segment === index ? "primary" : "ghost"}
-              onClick={() => setSegment(index)}>{index === 0 ? "选项一" : "选项二"}</Button>)}</div>
+            <div className="segments" aria-label="分段导航预览">{["选项一", "选项二", "选项三"].map((label, index) =>
+              <Button key={label} variant={segment === index ? "primary" : "ghost"} aria-pressed={segment === index}
+                onClick={() => setSegment(index)}>{label}</Button>)}</div>
           </div>
         </div>
         <div className="appearance-sample glass">
-          <b>示例卡片 B</b>
-          <label className="field">文本输入<input placeholder="点击查看焦点边缘" /></label>
-          <span className="muted">次要说明文字</span>
+          <b><MessageCircle size={20} /> 示例卡片 B</b>
+          <p className="muted">展示输入焦点与文本对比效果。</p>
+          <div className="appearance-text-example">
+            <input aria-label="文本输入预览" placeholder="点击查看焦点边缘" />
+            <div><strong>高对比文本</strong><p className="muted">次要说明文字</p></div>
+          </div>
         </div>
       </section>
     </div>

@@ -27,7 +27,9 @@ module.exports = async function recordPreview(page, output, ffmpeg) {
     await button("界面外观").click();
     await page.waitForTimeout(1000);
     await page.getByRole("slider", { name: "玻璃透明度" }).press("End");
-    await page.waitForTimeout(1700);
+    await page.waitForTimeout(1000);
+    await button("缩小界面").click();
+    await page.waitForTimeout(700);
     await button("恢复默认").click();
     await page.waitForTimeout(1200);
   } finally {

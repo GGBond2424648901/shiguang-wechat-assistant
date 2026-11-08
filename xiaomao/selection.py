@@ -348,7 +348,7 @@ def _reviewed_identity(cfg,draft,cancelled,vision):
         raise ValueError('微信窗口尺寸或类型已变化，请重新截图')
     lines=read_header(vision.ocr,image.crop(draft.rect('header')),draft)
     if not lines or any(line.score<.92 for line in lines):
-        raise ValueError('未读到完整会话标题，请调整“会话标题”选区')
+        raise ValueError('未读到完整会话标题。请先在微信打开目标聊天。如果已打开，调整“会话标题”选区后点“重新识别”')
     title=''.join(line.text for line in lines)
     try:contact=resolve_title_contact(rows,title,draft.window_kind) if rows is not None else None
     except ValueError as error:raise CalibrationIdentityError(str(error),title) from None

@@ -6,7 +6,7 @@ export function enterRoute(element: HTMLElement, direction: number, reduceMotion
   entering.get(element)?.cancel();
   if (reduceMotion || matchMedia("(prefers-reduced-motion: reduce)").matches) return;
   const effect = element.animate([
-    { opacity: .45, transform: `translate3d(${direction * 10}px, 0, 0)` },
+    { opacity: .45, transform: `translate3d(0, ${direction * 5}px, 0)` },
     { opacity: 1, transform: "translate3d(0, 0, 0)" },
   ], { duration: 175, easing: ease });
   entering.set(element, effect);

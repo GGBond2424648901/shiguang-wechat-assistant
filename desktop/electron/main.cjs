@@ -1,8 +1,9 @@
-const { app, BrowserWindow, dialog, ipcMain, protocol, screen } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, Menu, protocol, screen } = require("electron");
 const { createHash } = require("node:crypto");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { Broker } = require("./broker.cjs");
+const { applyRoundedWindowShape } = require("./window-shape.cjs");
 
 const packaged = app.isPackaged && !process.defaultApp;
 const project = packaged ? path.resolve(path.dirname(process.execPath), "..") : path.resolve(__dirname, "../..");
@@ -29,6 +30,7 @@ const draftPages = new Set(["persona", "companion", "sessions", "settings", "app
 let trayExitRequested = false, bridgeReady = !managed, residentStart = false;
 let calibration, calibrationTarget, calibrationSaving = false, backup;
 let reducedMotion = false;
+const windowShapes = new WeakMap();
 const allowed = new Set([
   "view.status", "view.queue", "run.start", "run.mode", "run.selected", "run.recover",
   "stickers.query", "stickers.detail", "stickers.guide", "stickers.preferences",
@@ -47,7 +49,7 @@ function secureWindow(options) {
     backgroundColor: "#202131",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"), sandbox: true, contextIsolation: true,
-      nodeIntegration: false, webSecurity: true,
+      nodeIntegration: false, webSecurity: true, zoomMode: "isolated",
     },
     ...options,
   });
@@ -57,7 +59,13 @@ function secureWindow(options) {
   window.webContents.on("will-attach-webview", (event) => event.preventDefault());
   window.webContents.session.setPermissionRequestHandler((_, __, callback) => callback(false));
   window.webContents.session.setPermissionCheckHandler(() => false);
+  if (process.platform === "win32") windowShapes.set(window, applyRoundedWindowShape(window, options.parent ? 20 : 24));
   return window;
+}
+
+async function showShaped(window) {
+  await windowShapes.get(window)?.();
+  if (!window.isDestroyed()) window.show();
 }
 
 function popupView(name) {
@@ -109,7 +117,8 @@ function openClose() {
     parent: main, modal: true, skipTaskbar: true, resizable: false, maximizable: false, minimizable: false,
     width, height, x, y, title: "关闭助手",
   });
-  prompt.once("ready-to-show", () => prompt?.show());
+  const dialogWindow = prompt;
+  dialogWindow.once("ready-to-show", () => void showShaped(dialogWindow));
   prompt.on("closed", () => {
     prompt = undefined;
     if (trayExitRequested && !quitting) void acknowledgeTrayExit(false);
@@ -137,6 +146,11 @@ async function stopResident() {
 }
 
 function registerIpc() {
+  ipcMain.handle("shiguang:zoom", (event, percent) => {
+    const from = identify(event);
+    if (!Number.isInteger(percent) || percent < 75 || percent > 200) throw new Error("界面缩放应为 75–200%");
+    from.webContents.setZoomFactor(percent / 100);
+  });
   ipcMain.handle("shiguang:draft", (event, page, dirty) => {
     identify(event);
     if (!draftPages.has(page) || typeof dirty !== "boolean") throw new Error("无效的编辑状态");
@@ -171,7 +185,8 @@ function registerIpc() {
     const reduceMotion = from === prompt
       ? Boolean((await broker.call("appearance.read").catch(() => null))?.reduceMotion) : false;
     return { readOnly, tray: Boolean(status?.tray), connected: Boolean(status?.connected),
-             hasWallpaper: Boolean(await fs.stat(wallpaper).catch(() => null)), reduceMotion, trayExit: trayExitRequested, dirty: drafts.size > 0 };
+             hasWallpaper: Boolean(await fs.stat(wallpaper).catch(() => null)), reduceMotion, trayExit: trayExitRequested,
+             dirty: drafts.size > 0, maximized: from.isMaximized() || from.isFullScreen() };
   });
   ipcMain.handle("shiguang:window", async (event, action) => {
     const from = identify(event, true);
@@ -190,7 +205,10 @@ function registerIpc() {
       return;
     }
     if (action === "minimize") main.minimize();
-    else if (action === "maximize") main.isMaximized() ? main.unmaximize() : main.maximize();
+    else if (action === "maximize") {
+      if (main.isFullScreen()) main.setFullScreen(false);
+      else main.isMaximized() ? main.unmaximize() : main.maximize();
+    }
     else if (action === "close") main.close();
     else throw new Error("不支持此窗口操作");
   });
@@ -209,7 +227,7 @@ function registerIpc() {
       width, height, x, y, minWidth: Math.min(520, width), minHeight: Math.min(475, height) });
     calibration = editor;
     calibrationTarget = target;
-    editor.once("ready-to-show", () => editor.show());
+    editor.once("ready-to-show", () => void showShaped(editor));
     const closed = new Promise(resolve => editor.once("closed", async () => {
       try { await broker.call("calibration.cancel"); }
       catch {}
@@ -261,7 +279,7 @@ function registerIpc() {
     const data = { window: child, action, session, name, busy: false, restored: false, file: undefined };
     backup = data;
     child.on("close", event => { if (data.busy && !quitting) event.preventDefault(); });
-    child.once("ready-to-show", () => child.show());
+    child.once("ready-to-show", () => void showShaped(child));
     const closed = new Promise(resolve => child.once("closed", () => {
       if (backup === data) backup = undefined;
       resolve(data.restored);
@@ -380,7 +398,7 @@ function registerMedia() {
 }
 
 function showMain() {
-  if (!main || main.isDestroyed()) return;
+  if (!main || main.isDestroyed() || !painted) return;
   if (main.isMinimized()) main.restore();
   main.show();
   main.focus();
@@ -448,6 +466,8 @@ if (!app.requestSingleInstanceLock()) {
 } else {
   app.on("second-instance", showMain);
   app.whenReady().then(() => {
+    // Keep native text-editing shortcuts. Zoom goes through the saved appearance state.
+    Menu.setApplicationMenu(Menu.buildFromTemplate([{ role: "editMenu" }]));
     connectBridge();
     registerIpc();
     registerMedia();
@@ -456,7 +476,9 @@ if (!app.requestSingleInstanceLock()) {
       title, width: Math.min(1488, area.width), height: Math.min(960, area.height),
       minWidth: Math.min(820, area.width), minHeight: Math.min(560, area.height),
     });
-    main.once("ready-to-show", () => {
+    main.once("ready-to-show", async () => {
+      await windowShapes.get(main)?.();
+      if (main.isDestroyed()) return;
       painted = true;
       if (bridgeReady) showMain();
     });
@@ -466,8 +488,14 @@ if (!app.requestSingleInstanceLock()) {
         openClose();
       }
     });
-    for (const event of ["maximize", "unmaximize", "restore"]) {
-      main.on(event, () => main.webContents.send("shiguang:window-state", { maximized: main.isMaximized() }));
+    main.webContents.on("before-input-event", (event, input) => {
+      if (input.type === "keyDown" && input.key === "F11" && !input.isAutoRepeat) {
+        event.preventDefault();
+        main.setFullScreen(!main.isFullScreen());
+      }
+    });
+    for (const event of ["maximize", "unmaximize", "restore", "enter-full-screen", "leave-full-screen"]) {
+      main.on(event, () => main.webContents.send("shiguang:window-state", { maximized: main.isMaximized() || main.isFullScreen() }));
     }
     main.loadFile(bundle).catch(() => {
       dialog.showErrorBox(title, "界面资源无法加载，请重新构建桌面应用。");

@@ -94,6 +94,56 @@ def test_restore_waits_for_the_selected_window_to_finish_its_size_transition(mon
     assert windows.activate_calibration_window(42,100)['width']==480
 
 
+@pytest.mark.parametrize('changed_title', [False, True])
+def test_desktop_calibration_requires_the_selected_window_but_not_foreground(tmp_path, monkeypatch, changed_title):
+    from xiaomao import selection
+    from xiaomao.desktop_calibration import DesktopCalibration
+
+    records = fake_windows(monkeypatch)
+    actions = []
+
+    def restore(hwnd, command):
+        actions.append(('restore', hwnd, command))
+        row = list(records[hwnd])
+        row[4] = False
+        records[hwnd] = tuple(row)
+        return True
+
+    def activate(hwnd):
+        actions.append(('foreground', hwnd))
+        return False
+
+    def render(hwnd, width, height):
+        actions.append(('capture', hwnd))
+        return Image.new('RGB', (width, height), 'white')
+
+    def unrecognized(*_):
+        raise ValueError('测试中没有可识别的会话标题')
+
+    monkeypatch.setattr(windows, 'U', SimpleNamespace(ShowWindowAsync=restore, GetForegroundWindow=lambda: 99,
+                                                     SetForegroundWindow=activate))
+    monkeypatch.setattr(windows, 'CalibrationWindowLease', lambda _: SimpleNamespace(close=lambda: None))
+    monkeypatch.setattr(windows, 'capture_window', render)
+    monkeypatch.setattr(selection, 'identify_reviewed_window', unrecognized)
+    calibration = DesktopCalibration(tmp_path, SimpleNamespace())
+    selected = next(row for row in calibration.discover()['windows'] if row['minimized'])
+
+    try:
+        if changed_title:
+            records[2] = ('另一个会话', *records[2][1:])
+            with pytest.raises(ValueError, match='窗口已改变'):
+                calibration.capture(selected['id'])
+            assert not actions
+        else:
+            preview = calibration.capture(selected['id'])
+            assert preview['image'].startswith('data:image/jpeg;base64,')
+            assert preview['identified'] is False
+            assert (preview['width'], preview['height']) == (480, 620)
+            assert actions == [('restore', 2, 9), ('foreground', 2), ('capture', 2)]
+    finally:
+        calibration.cancel()
+
+
 def test_raw_capture_only_reads_requested_window_and_rechecks_identity(monkeypatch):
     records=fake_windows(monkeypatch)
     monkeypatch.setattr(windows,'U',SimpleNamespace())
@@ -278,6 +328,8 @@ def test_open_wechat_uses_only_an_existing_verified_executable_no_login_argument
     monkeypatch.setattr(windows,'_wechat_executable_paths',lambda:[foreign,genuine],raising=False)
     monkeypatch.setattr(windows,'_signed_wechat_executable',lambda path:path==genuine,raising=False)
     calls=[]
+    monkeypatch.setattr(windows,'list_calibration_windows',lambda: [1] if calls else [])
+    monkeypatch.setattr(windows,'_wechat_is_running',lambda: False,raising=False)
     monkeypatch.setattr(subprocess,'Popen',lambda args,**kwargs:calls.append(args))
     windows.open_wechat_for_calibration()
     assert calls==[[str(genuine)]]
@@ -286,3 +338,83 @@ def test_open_wechat_uses_only_an_existing_verified_executable_no_login_argument
     with pytest.raises(windows.DesktopUnavailable,match='微信'):
         windows.open_wechat_for_calibration()
     assert calls==[]
+
+
+def test_open_wechat_restores_an_existing_minimized_window_without_relaunch(tmp_path, monkeypatch):
+    records = fake_windows(monkeypatch)
+    selected = records[2]
+    records.clear()
+    records[2] = selected
+    calls = []
+
+    def restore(hwnd, command):
+        calls.append((hwnd, command))
+        row = list(records[hwnd])
+        row[4] = False
+        records[hwnd] = tuple(row)
+        return True
+
+    path = tmp_path / 'Weixin.exe'
+    path.touch()
+    monkeypatch.setattr(windows, 'U', SimpleNamespace(ShowWindowAsync=restore, GetForegroundWindow=lambda: 99,
+                                                     SetForegroundWindow=lambda _: False))
+    monkeypatch.setattr(windows, '_wechat_executable_paths', lambda: [path])
+    monkeypatch.setattr(windows, '_signed_wechat_executable', lambda _: True)
+    monkeypatch.setattr(subprocess, 'Popen', lambda *_a, **_kw: pytest.fail('tried to launch WeChat again'))
+
+    windows.open_wechat_for_calibration()
+
+    assert calls == [(2, 9)]
+    assert not windows.list_calibration_windows()[0]['minimized']
+
+
+def test_open_wechat_does_not_relaunch_an_instance_hidden_in_the_tray(tmp_path, monkeypatch):
+    import psutil
+
+    path = tmp_path / 'Weixin.exe'
+    path.touch()
+    monkeypatch.setattr(windows, 'list_calibration_windows', lambda: [])
+    monkeypatch.setattr(psutil, 'process_iter', lambda _: [SimpleNamespace(info={'name': 'Weixin.exe', 'exe': None})])
+    monkeypatch.setattr(windows, '_wechat_executable_paths', lambda: [path])
+    monkeypatch.setattr(windows, '_signed_wechat_executable', lambda _: True)
+    monkeypatch.setattr(subprocess, 'Popen', lambda *_a, **_kw: pytest.fail('tried to launch WeChat again'))
+
+    windows.open_wechat_for_calibration()
+
+
+@pytest.mark.parametrize('ready_after', [3, None])
+def test_open_wechat_waits_for_a_new_window_with_a_deadline(tmp_path, monkeypatch, ready_after):
+    path = tmp_path / 'Weixin.exe'
+    path.touch()
+    scans = 0
+    time = 0
+    launched = []
+
+    def discover():
+        nonlocal scans
+        if not launched:
+            return []
+        scans += 1
+        assert scans <= 50, 'window discovery exceeded the deadline'
+        return [{'kind': 'main'}] if ready_after is not None and scans >= ready_after else []
+
+    def sleep(seconds):
+        nonlocal time
+        time += seconds
+
+    monkeypatch.setattr(windows, 'time', SimpleNamespace(monotonic=lambda: time, sleep=sleep))
+    monkeypatch.setattr(windows, 'list_calibration_windows', discover)
+    monkeypatch.setattr(windows, '_wechat_is_running', lambda: False, raising=False)
+    monkeypatch.setattr(windows, '_wechat_executable_paths', lambda: [path])
+    monkeypatch.setattr(windows, '_signed_wechat_executable', lambda _: True)
+    monkeypatch.setattr(subprocess, 'Popen', lambda args, **_kw: launched.append(args))
+
+    windows.open_wechat_for_calibration()
+
+    assert launched == [[str(path)]]
+    if ready_after is None:
+        assert scans > 1
+        assert 0 < time <= 10
+    else:
+        assert scans == ready_after
+        assert 0 < time <= 2

@@ -9,6 +9,7 @@ contextBridge.exposeInMainWorld("shiguang", {
     return () => ipcRenderer.removeListener("shiguang:status", handle);
   },
   windowAction: (action) => ipcRenderer.invoke("shiguang:window", action),
+  zoom: (percent) => ipcRenderer.invoke("shiguang:zoom", percent),
   windowState: (listener) => {
     const handle = (_, value) => listener(value);
     ipcRenderer.on("shiguang:window-state", handle);

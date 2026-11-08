@@ -344,7 +344,18 @@ class Resident:
                 engine.settings=cfg
                 if hasattr(engine.model,'settings'):engine.model.settings=cfg
                 if engine.companion:engine.companion.settings=cfg
-                if cfg.is_conversation_paused() and engine.mode!='paused':engine.pause('本会话已暂停')
+                paused=cfg.is_conversation_paused()
+                if engine.reason=='微信账号正在自动切换':
+                    if paused or self.requested_mode=='paused':
+                        with engine.lock:
+                            engine.reason='本会话已暂停' if paused else '已暂停'
+                    elif (self.requested_mode=='auto' and cfg.binding and cfg.binding.bottom_confirmed
+                          and cfg.model_ready and not unknown):
+                        engine.enable()
+                    else:
+                        engine.observe(preserve_companion=True)
+                    continue
+                if paused and engine.mode!='paused':engine.pause('本会话已暂停')
                 if engine.mode!='paused':
                     if not cfg.binding or not cfg.binding.bottom_confirmed:
                         if engine.mode=='auto':engine.observe()
@@ -458,13 +469,6 @@ class Resident:
                 if fresh!=previous:fresh.save(expected=previous)
                 self.reload_request=fresh
                 self._apply_window_reload()
-                if self.reload_request is None:
-                    for engine in self.engines:
-                        if engine.reason=='微信账号正在自动切换' and not engine.settings.is_conversation_paused():
-                            bound=engine.settings.binding
-                            if (self.requested_mode=='auto' and bound and bound.bottom_confirmed
-                                    and engine.settings.model_ready):engine.enable()
-                            elif self.requested_mode in ('auto','observe'):engine.observe(preserve_companion=True)
                 self.account_status=('已自动识别当前微信账号' if all(fresh.binding_for(n) for n in fresh.allowed_groups)
                     else '已自动识别账号与联系人，等待可见聊天窗口自动核验；不会抢前台')
             return self.reload_request is not None

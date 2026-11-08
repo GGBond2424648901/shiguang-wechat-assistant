@@ -4,7 +4,7 @@ import {
   Settings2, Smile, Square, UserRound, X,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
-import { defaultAppearance, errorMessage, request, runLabels, type Appearance, type Info, type PageKey, type Status, type WindowAction } from "./api";
+import { defaultAppearance, errorMessage, request, runLabels, stepZoom, type Appearance, type Info, type PageKey, type Status, type WindowAction } from "./api";
 import { Button, Empty, IconButton, StatusPill, useDraftGuard } from "./components";
 import { PersonaPage } from "./persona";
 import { SessionsPage } from "./sessions";
@@ -16,6 +16,7 @@ import { BackupWindow, CompanionPage } from "./companion";
 import { enterRoute } from "./motion";
 import logo from "../../xiaomao/ui_assets/app.png";
 import "./styles.css";
+import "./fixed-actions.css";
 
 const navigation = [
   { key: "workbench", title: "工作台", icon: Grid2X2, sub: "管理微信会话的监听、回复与发送队列，查看助手的运行状态" },
@@ -42,7 +43,7 @@ function App() {
     if (value.revision !== savedAppearance.revision) setSavedAppearance(value);
   };
   useDraftGuard("appearance", status?.readOnly === false && (appearance.transparency !== savedAppearance.transparency
-    || appearance.reduceMotion !== savedAppearance.reduceMotion));
+    || appearance.reduceMotion !== savedAppearance.reduceMotion || appearance.zoomPercent !== savedAppearance.zoomPercent));
   const [notice, setNotice] = useState<{ message: string; error: boolean }>();
   const notify: Notify = useCallback((message, error = false) => setNotice({ message, error }), []);
   const scrollHost = useRef<HTMLDivElement>(null);
@@ -76,6 +77,7 @@ function App() {
     const off = window.shiguang.watch(update);
     const windowOff = window.shiguang.windowState(data => setMaximized(data.maximized));
     window.shiguang.appInfo().then(info => {
+      setMaximized(info.maximized);
       document.documentElement.dataset.wallpaper = info.hasWallpaper ? "local" : "default";
       if (info.hasWallpaper) document.documentElement.style.setProperty("--wallpaper", 'url("sg-media://wallpaper/selected")');
     }).catch(() => {});
@@ -85,15 +87,29 @@ function App() {
   }, [notify]);
 
   useEffect(() => {
-    const transparency = appearance.transparency / 100;
-    document.documentElement.style.setProperty("--glass-alpha", String(1 - transparency));
-    document.documentElement.style.setProperty("--glass-top", String(Math.min(.99, 1.1 - transparency)));
-    document.documentElement.style.setProperty("--glass-edge", String(.15 + (1 - transparency) ** 1.3 * .15));
+    const opacity = 1 - appearance.transparency / 100;
+    document.documentElement.style.setProperty("--glass-alpha", String(opacity));
+    document.documentElement.style.setProperty("--glass-top", String(Math.min(1, opacity * 1.13)));
+    document.documentElement.style.setProperty("--glass-edge", String(.15 + opacity ** 1.3 * .15));
+    document.documentElement.style.setProperty("--wallpaper-scrim", String(.58 + opacity * .22));
     document.documentElement.dataset.reduceMotion = String(appearance.reduceMotion);
-  }, [appearance]);
+  }, [appearance.transparency, appearance.reduceMotion]);
+
+  useLayoutEffect(() => {
+    document.documentElement.style.setProperty("--ui-zoom", String(appearance.zoomPercent / 100));
+    void window.shiguang.zoom(appearance.zoomPercent).catch(error => notify(errorMessage(error), true));
+  }, [appearance.zoomPercent, notify]);
 
   useEffect(() => {
     const keydown = (event: KeyboardEvent) => {
+      if (event.ctrlKey && !event.altKey && !event.metaKey && ["-", "+", "=", "0"].includes(event.key)) {
+        event.preventDefault();
+        setAppearance(value => {
+          const zoomPercent = event.key === "0" ? defaultAppearance.zoomPercent : stepZoom(value.zoomPercent, event.key === "-" ? -1 : 1);
+          return zoomPercent === value.zoomPercent ? value : { ...value, zoomPercent };
+        });
+        return;
+      }
       const at = Number(event.key) - 1;
       if (event.altKey && at >= 0 && at < navigation.length) {
         event.preventDefault();

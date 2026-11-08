@@ -230,12 +230,15 @@ def calibration_window_info(hwnd,pid):
     return info
 
 
-def activate_calibration_window(hwnd,pid):
+def activate_calibration_window(hwnd,pid,require_foreground=True,expected_identity=None):
     """User-requested calibration only. Never synthesize keys to bypass focus policy."""
     original=calibration_window_info(hwnd,pid)
+    identity=(original['kind'],original['title'])
+    if expected_identity is not None and identity!=expected_identity:
+        raise DesktopUnavailable('所选微信窗口已改变，请重新选择')
     def recheck():
         info=calibration_window_info(hwnd,pid)
-        if (info['kind'],info['title'])!=(original['kind'],original['title']):
+        if (info['kind'],info['title'])!=identity:
             raise DesktopUnavailable('所选微信窗口已改变，请重新选择')
         return info
     if original['minimized']:
@@ -258,8 +261,10 @@ def activate_calibration_window(hwnd,pid):
         U.SetForegroundWindow(hwnd)
     for _ in range(15):
         info=recheck()
-        if not info['minimized'] and U.GetForegroundWindow()==hwnd:return info
+        if not info['minimized'] and (not require_foreground or U.GetForegroundWindow()==hwnd):return info
         time.sleep(.04)
+    if info['minimized']:
+        raise DesktopUnavailable('微信窗口仍处于最小化状态，请手动还原后重试')
     raise DesktopUnavailable('Windows 未允许微信切到前台，请手动点选该微信窗口后重试')
 
 
@@ -277,12 +282,13 @@ def capture_calibration_window(hwnd,pid):
     return image,fresh
 
 
-def _wechat_executable_paths():
+def _wechat_is_running():
     import psutil
+    return any((process.info['name'] or '').casefold()=='weixin.exe' for process in psutil.process_iter(['name']))
+
+
+def _wechat_executable_paths():
     import winreg
-    for process in psutil.process_iter(['name','exe']):
-        if (process.info['name'] or '').casefold()=='weixin.exe' and process.info['exe']:
-            yield Path(process.info['exe'])
     for hive in (winreg.HKEY_CURRENT_USER,winreg.HKEY_LOCAL_MACHINE):
         for view in (winreg.KEY_WOW64_64KEY,winreg.KEY_WOW64_32KEY):
             for key,value in ((r'Software\Tencent\Weixin','InstallPath'),
@@ -316,8 +322,14 @@ def _signed_wechat_executable(path):
 
 
 def open_wechat_for_calibration():
-    """Open the installed signed WeChat client, leaving login to the operator."""
-    if os.name!='nt':raise DesktopUnavailable('仅支持 Windows')
+    """Reuse a running WeChat or open the signed client, leaving login to the operator."""
+    available=list_calibration_windows()
+    if len(available)==1:
+        window=available[0]
+        activate_calibration_window(window['hwnd'],window['pid'],require_foreground=False,
+                                    expected_identity=(window['kind'],window['title']))
+        return
+    if available or _wechat_is_running():return
     seen=set()
     for candidate in _wechat_executable_paths():
         if not candidate.is_absolute():continue
@@ -326,8 +338,14 @@ def open_wechat_for_calibration():
         if path in seen or path.name.casefold()!='weixin.exe' or not path.is_file():continue
         seen.add(path)
         if not _signed_wechat_executable(path):continue
+        if _wechat_is_running():return  # WeChat may have opened while its signature was checked.
         try:subprocess.Popen([str(path)],cwd=str(path.parent),close_fds=True)
         except OSError:raise DesktopUnavailable('微信客户端未能启动，请从开始菜单打开微信并登录') from None
+        deadline=time.monotonic()+5
+        while not list_calibration_windows():
+            remaining=deadline-time.monotonic()
+            if remaining<=0:break
+            time.sleep(min(.25,remaining))
         return
     raise DesktopUnavailable('未找到可核实腾讯签名的微信客户端，请从开始菜单打开微信，登录后刷新')
 

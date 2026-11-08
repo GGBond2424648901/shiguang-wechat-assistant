@@ -123,6 +123,35 @@ def test_same_account_new_process_rebinds_without_copying_old_hwnd(worker):
     assert resident.engines[0].mode=='auto'
 
 
+@pytest.mark.parametrize('defer_reload', (False, True))
+def test_same_account_rebind_keeps_saved_pause_reason(worker, defer_reload):
+    resident, detector, _, screen, _ = worker
+    resident.pause_selected('群甲', 'a/shared@chatroom')
+    detector.observation = AccountObservation('a', '同账号', 99,
+        (Contact('shared@chatroom', 'a', '群甲', 'group'),), ())
+
+    if defer_reload:
+        factory = resident.desktop_factory
+
+        def temporarily_unavailable(_binding):
+            raise OSError('窗口暂不可用')
+
+        resident.desktop_factory = temporarily_unavailable
+        resident.observe_once()
+        assert resident.reload_request is not None
+        resident.desktop_factory = factory
+
+    resident.observe_once()
+
+    status = resident.status()
+    assert resident.settings.binding.hwnd == 99
+    assert status['account_status'] == '已自动识别当前微信账号'
+    assert status['groups'][0]['mode'] == 'paused'
+    assert status['groups'][0]['reason'] == '本会话已暂停'
+    assert Settings.load(resident.settings.root).is_conversation_paused('群甲')
+    assert not screen.events
+
+
 def test_configuration_conflict_recovers_next_cycle_without_restart(worker):
     resident,_,_,_,_=worker
     binder=resident.account_binder

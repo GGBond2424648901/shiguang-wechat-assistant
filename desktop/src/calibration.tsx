@@ -11,7 +11,7 @@ const labels = { header: "会话标题", messages: "消息区域", input: "输�
 type WindowList = { windows: { id: string; title: string; kind: "main" | "detached"; minimized: boolean }[];
   suggested: string; target: string };
 type Preview = { token: string; target: string; kind: string; width: number; height: number; regions: Regions;
-  image: string; observed: string; note: string };
+  image: string; observed: string; note: string; identified: boolean };
 type Result = { target: string; applied: boolean; paused?: boolean; note: string };
 const rpc = <T,>(method: string, params: Record<string, unknown> = {}) =>
   window.shiguang.calibration(method, params) as Promise<T>;
@@ -82,7 +82,7 @@ export function CalibrationWindow() {
     setConfirmed(false);
     update(await rpc<Preview>("identify", { token: picture.token, regions, chooseObserved }));
   });
-  const save = () => picture && regions && run("save", async () => {
+  const save = () => picture?.identified && regions && run("save", async () => {
     setSaved(await rpc<Result>("save", { token: picture.token, regions, confirmed }));
   });
 
@@ -119,7 +119,6 @@ export function CalibrationWindow() {
       {saved ? <div className="calibration-result">
         <Empty icon={<Check size={30} />} title={`“${saved.target}”的校准已保存`}
           detail={saved.note || (saved.paused ? "可在工作台开启这个会话的回复。" : "后台已应用此次校准。")} />
-        <Button variant="primary" onClick={close}>完成</Button>
       </div> : <>
         <p className="muted">识别所选窗口，并核对消息、输入与发送区域</p>
         {!picture ? <>
@@ -136,18 +135,18 @@ export function CalibrationWindow() {
               })}>打开微信</Button>
           </div>
           <div className="calibration-placeholder">
-            <Empty icon={<Crosshair size={28} />} title={busy ? "正在核对微信窗口" :
+            <Empty icon={<Crosshair size={28} />} title={busy === "open" ? "正在打开微信" : busy ? "正在核对微信窗口" :
               !list?.windows.length ? "等待微信窗口" : "选择目标窗口"}
-              detail={list?.windows.length ? "如需分别校准，先在微信把聊天拖成独立窗口。" : "打开已登录的微信并进入目标会话后，刷新窗口列表。"} />
+              detail={list?.windows.length ? "如需分别校准，先在微信把聊天拖成独立窗口。" :
+                "若微信在托盘中，请点托盘图标显示微信。登录并进入目标会话后，刷新窗口列表。"} />
           </div>
-          <div className="calibration-actions"><Button onClick={close}>取消</Button>
-            <Button variant="primary" icon={<Crosshair size={16} />} disabled={!windowId || !!busy}
-              busy={busy === "capture"} onClick={() => void capture()}>唤起并校准</Button></div>
         </> : regions && <>
           <div className="calibration-controls flex">
             <Button icon={<ArrowLeft size={15} />} disabled={!!busy} onClick={() => void reselect()}>重新选窗口</Button>
             <Button icon={<RefreshCcw size={15} />} busy={busy === "identify"} disabled={!!busy}
               onClick={() => void identify(false)}>重新识别</Button>
+            {!picture.identified && !picture.observed && <Button icon={<ExternalLink size={15} />} busy={busy === "open"}
+              disabled={!!busy} onClick={() => void run("open", async () => { await rpc("openWechat"); })}>打开微信</Button>}
             {picture.observed && picture.observed !== picture.target && <Button disabled={!!busy}
               onClick={() => void identify(true)}>使用窗口中的会话</Button>}
             <Button icon={<Undo2 size={15} />} disabled={!undo.length || !!busy} onClick={() => {
@@ -196,16 +195,22 @@ export function CalibrationWindow() {
           </div>
           {picture.observed && <p className="fine-print muted">窗口中识别到 {picture.observed}</p>}
           <p className="fine-print muted">{note}</p>
-          <div className="calibration-actions split">
-            <Switch checked={confirmed} onChange={setConfirmed} disabled={!!busy || !picture.target}>
-              已核对会话、聊天底部和空白输入框
-            </Switch>
-            <Button variant="primary" icon={<Save size={16} />} busy={busy === "save"}
-              disabled={!confirmed || !!busy} onClick={() => void save()}>保存校准</Button>
-          </div>
         </>}
         {problem && <p className="inline-error" role="alert">{problem}</p>}
       </>}
     </main>
+    <footer className={`calibration-actions${picture && !saved ? " split" : ""}`}>
+      {saved ? <Button variant="primary" onClick={close}>完成</Button> : !picture ? <>
+        <Button onClick={close}>取消</Button>
+        <Button variant="primary" icon={<Crosshair size={16} />} disabled={!windowId || !!busy}
+          busy={busy === "capture"} onClick={() => void capture()}>唤起并校准</Button>
+      </> : <>
+        <Switch checked={confirmed} onChange={setConfirmed} disabled={!!busy || !picture.identified}>
+          已核对会话、聊天底部和空白输入框
+        </Switch>
+        <Button variant="primary" icon={<Save size={16} />} busy={busy === "save"}
+          disabled={!picture.identified || !confirmed || !!busy} onClick={() => void save()}>保存校准</Button>
+      </>}
+    </footer>
   </div>;
 }

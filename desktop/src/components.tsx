@@ -1,5 +1,6 @@
 import { ChevronDown, Check, LoaderCircle, X } from "lucide-react";
-import { useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
+import { useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type ReactNode } from "react";
+import { createPortal } from "react-dom";
 import { runLabels, type RunMode } from "./api";
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
@@ -25,9 +26,13 @@ export function StatusPill({ mode, compact = false }: { mode: RunMode; compact?:
   </span>;
 }
 
-export function PanelTitle({ icon, children, end }: { icon?: ReactNode; children: ReactNode; end?: ReactNode }) {
+export function PanelTitle({ icon, children, end, description }: {
+  icon?: ReactNode; children: ReactNode; end?: ReactNode; description?: string;
+}) {
   return <header className="panel-title">
-    <h2>{icon}{children}</h2>{end && <div className="panel-end">{end}</div>}
+    {description ? <div className="panel-heading"><h2>{icon}{children}</h2><p className="muted">{description}</p></div>
+      : <h2>{icon}{children}</h2>}
+    {end && <div className="panel-end">{end}</div>}
   </header>;
 }
 
@@ -45,15 +50,43 @@ export function Select({ label, options, value, onChange, disabled = false }: {
   const id = useId();
   const [open, setOpen] = useState(false);
   const [index, setIndex] = useState(0);
+  const [placement, setPlacement] = useState<CSSProperties>();
   const selected = options.findIndex(item => item.value === value);
+  useLayoutEffect(() => {
+    if (!open) return;
+    const anchor = trigger.current;
+    if (!anchor) return;
+    const place = () => {
+      const { left, top, bottom, width } = anchor.getBoundingClientRect();
+      const { clientWidth, clientHeight } = document.documentElement;
+      const menuWidth = Math.min(Math.max(120, width), clientWidth - 12);
+      const below = clientHeight - bottom - 12;
+      const above = top - 12;
+      const opensAbove = below < Math.min(216, options.length * 36 + 10) && above > below;
+      setPlacement({ left: Math.max(6, Math.min(left, clientWidth - menuWidth - 6)), width: menuWidth,
+        maxHeight: Math.min(216, opensAbove ? above : below),
+        ...(opensAbove ? { bottom: clientHeight - top + 5 } : { top: bottom + 5 }) });
+    };
+    const scrolled = (event: Event) => {
+      if (event.target instanceof Node && event.target.contains(anchor)) setOpen(false);
+    };
+    place();
+    window.addEventListener("resize", place);
+    document.addEventListener("scroll", scrolled, true);
+    return () => {
+      window.removeEventListener("resize", place);
+      document.removeEventListener("scroll", scrolled, true);
+    };
+  }, [open, options.length]);
   useEffect(() => {
     if (!open) return;
     const outside = (event: PointerEvent) => {
-      if (!menu.current?.contains(event.target as Node)) setOpen(false);
+      const target = event.target as Node;
+      if (!menu.current?.contains(target) && !document.getElementById(id)?.contains(target)) setOpen(false);
     };
     document.addEventListener("pointerdown", outside);
     return () => document.removeEventListener("pointerdown", outside);
-  }, [open]);
+  }, [open, id]);
   useEffect(() => {
     if (!open) return;
     const selected = document.getElementById(`${id}-${index}`);
@@ -91,12 +124,12 @@ export function Select({ label, options, value, onChange, disabled = false }: {
       }}>
       <span>{options[selected]?.label ?? "请选择"}</span><ChevronDown size={16} />
     </button>
-    {open && <div className="select-menu" id={id} role="listbox" aria-label={label}>
+    {open && placement && createPortal(<div className="select-menu" id={id} role="listbox" aria-label={label} style={placement}>
       {options.map((option, at) => <div key={option.value} id={`${id}-${at}`} role="option"
         aria-selected={option.value === value} className={at === index ? "highlight" : ""}
         onPointerMove={() => setIndex(at)} onPointerDown={event => event.preventDefault()}
         onClick={() => choose(at)}>{option.label}{option.value === value && <Check size={15} />}</div>)}
-    </div>}
+    </div>, document.body)}
   </div>;
 }
 

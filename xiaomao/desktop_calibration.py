@@ -111,11 +111,11 @@ class DesktopCalibration:
         preview.save(result, format='JPEG', quality=88, optimize=True)
         return 'data:image/jpeg;base64,' + base64.b64encode(result.getvalue()).decode('ascii')
 
-    def _projection(self, capture, image, observed='', note=''):
+    def _projection(self, capture, image, observed='', note='', *, identified=False):
         draft = capture.draft
         return {'token': capture.id, 'target': draft.target_group, 'kind': draft.target_kind,
                 'width': draft.width, 'height': draft.height, 'regions': draft.regions,
-                'image': self._picture(image), 'observed': observed, 'note': note}
+                'image': self._picture(image), 'observed': observed, 'note': note, 'identified': identified}
 
     def capture(self, window, session=''):
         cfg = Settings.load(self.root)
@@ -137,7 +137,9 @@ class DesktopCalibration:
         try:
             with self._use(capture.id):
                 choice = candidate[0]
-                windows.activate_calibration_window(choice['hwnd'], choice['pid'])
+                # The window-only capture can proceed when Windows keeps focus elsewhere.
+                windows.activate_calibration_window(choice['hwnd'], choice['pid'], False,
+                                                    (choice['kind'], choice['title']))
                 if capture.cancelled.is_set():
                     raise ValueError('校准已取消')
                 image, capture.draft = selection.preview_window(cfg, choice, name)
@@ -148,7 +150,7 @@ class DesktopCalibration:
                 except ValueError as error:
                     return self._projection(capture, image, note=str(error))
                 capture.draft = identity.calibration
-                return self._projection(capture, verified, identity.name, '请核对区域、聊天底部和空白输入框')
+                return self._projection(capture, verified, identity.name, '请核对区域、聊天底部和空白输入框', identified=True)
         except BaseException:
             self.cancel(capture.id)
             raise
@@ -175,7 +177,7 @@ class DesktopCalibration:
             image, identity = selection.identify_reviewed_window(cfg, draft, capture.cancelled,
                                                                  choose_observed=chooseObserved)
             capture.draft = identity.calibration
-            return self._projection(capture, image, identity.name, '请核对区域、聊天底部和空白输入框')
+            return self._projection(capture, image, identity.name, '请核对区域、聊天底部和空白输入框', identified=True)
 
     def save(self, token, regions, confirmed):
         if confirmed is not True:

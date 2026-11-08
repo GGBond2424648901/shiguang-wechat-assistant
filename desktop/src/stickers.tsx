@@ -335,24 +335,26 @@ function StickerInspector({ item, active, readOnly, categories, notify, back, on
         {record && <span>{record.extension.toUpperCase()} · {record.width} × {record.height} · {record.frames} 帧</span>}
       </div>
       <div className="glass form-stack detail-editor">
-        <label className="field">分类<input aria-label="分类" list="sticker-categories" value={draft.category}
-          onChange={event => setDraft({ ...draft, category: event.target.value })} maxLength={20} disabled={readOnly} />
-          <datalist id="sticker-categories">{categories.map(value => <option key={value.value} value={value.value} />)}</datalist>
-        </label>
-        {(["meaning", "tags"] as const).map((field, index) => <label className="field" key={field}>
-          {["用途", "情绪标签"][index]}
-          <input value={draft[field]} onChange={event => setDraft({ ...draft, [field]: event.target.value })}
-            maxLength={[120, 180][index]} disabled={readOnly} />
-        </label>)}
-        <label className="field">来源<textarea value={draft.source} maxLength={1000} rows={3} disabled={readOnly}
-          onChange={event => setDraft({ ...draft, source: event.target.value })} /></label>
-        <div className="detail-actions">
+        <div className="form-stack sticker-editor-scroll">
+          <label className="field">分类<input aria-label="分类" list="sticker-categories" value={draft.category}
+            onChange={event => setDraft({ ...draft, category: event.target.value })} maxLength={20} disabled={readOnly} />
+            <datalist id="sticker-categories">{categories.map(value => <option key={value.value} value={value.value} />)}</datalist>
+          </label>
+          {(["meaning", "tags"] as const).map((field, index) => <label className="field" key={field}>
+            {["用途", "情绪标签"][index]}
+            <input value={draft[field]} onChange={event => setDraft({ ...draft, [field]: event.target.value })}
+              maxLength={[120, 180][index]} disabled={readOnly} />
+          </label>)}
+          <label className="field">来源<textarea value={draft.source} maxLength={1000} rows={3} disabled={readOnly}
+            onChange={event => setDraft({ ...draft, source: event.target.value })} /></label>
+        </div>
+        <footer className="detail-actions sticker-editor-actions">
           <Button disabled={!record || busy} onClick={() => record && setDraft({
             category: record.character, meaning: record.meaning, tags: record.tags.join("、"), source: record.source,
           })}>撤销修改</Button>
           <Button variant="primary" icon={<Save size={16} />} disabled={readOnly || !record} busy={busy}
             onClick={() => void save()}>保存修改</Button>
-        </div>
+        </footer>
       </div>
     </div>
     </section>

@@ -264,6 +264,7 @@ desktop/vite.config.ts
 desktop/electron/main.cjs
 desktop/electron/broker.cjs
 desktop/electron/preload.cjs
+desktop/electron/window-shape.cjs
 desktop/src/api.ts
 desktop/src/components.tsx
 desktop/src/main.tsx
@@ -277,8 +278,10 @@ desktop/src/calibration.tsx
 desktop/src/companion.tsx
 desktop/src/motion.ts
 desktop/src/styles.css
+desktop/src/fixed-actions.css
 desktop/src/vite-env.d.ts
 desktop/scripts/check-desktop.cjs
+desktop/scripts/check-window-shape.cjs
 desktop/scripts/check-visual.cjs
 desktop/scripts/record-preview.cjs
 docs/screenshots/desktop-appearance.png

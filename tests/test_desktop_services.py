@@ -277,14 +277,25 @@ def test_appearance_is_profile_local_revision_checked_and_keeps_chat_settings(tm
     original = config.read_bytes()
     ui = DesktopService(tmp_path)
     first = ui.call('appearance.read', {})
-    assert first['transparency'] == 21 and first['reduceMotion'] is False
-    saved = ui.call('appearance.save', {'transparency': 37, 'reduceMotion': True, 'expected': first['revision']})
+    assert first['transparency'] == 21 and first['reduceMotion'] is False and first['zoomPercent'] == 100
+    appearance_file = tmp_path / 'runtime/desktop-appearance.json'
+    appearance_file.write_text('{"transparency": 37, "reduceMotion": true}', 'utf-8')
+    first = ui.call('appearance.read', {})
+    assert first['zoomPercent'] == 100 and first['transparency'] == 37
+    saved = ui.call('appearance.save', {'transparency': 100, 'reduceMotion': True,
+                                       'zoomPercent': 80, 'expected': first['revision']})
+    assert saved['transparency'] == 100 and saved['zoomPercent'] == 80
     assert DesktopService(tmp_path).call('appearance.read', {}) == saved
     assert config.read_bytes() == original
     with pytest.raises(ValueError, match='更新'):
         ui.call('appearance.save', {'transparency': 20, 'reduceMotion': False, 'expected': first['revision']})
     with pytest.raises(ValueError, match='透明度'):
-        ui.call('appearance.save', {'transparency': 99, 'reduceMotion': False, 'expected': saved['revision']})
+        ui.call('appearance.save', {'transparency': 101, 'reduceMotion': False, 'expected': saved['revision']})
+    with pytest.raises(ValueError, match='缩放'):
+        ui.call('appearance.save', {'transparency': 0, 'reduceMotion': False,
+                                    'zoomPercent': 201, 'expected': saved['revision']})
+    legacy_save = ui.call('appearance.save', {'transparency': 0, 'reduceMotion': False, 'expected': saved['revision']})
+    assert legacy_save['zoomPercent'] == 80
 
 
 def test_modular_persona_round_trip_keeps_all_text_and_disabled_modules(tmp_path):
@@ -435,6 +446,7 @@ def test_desktop_calibration_cancels_lease_and_rejects_stale_save(tmp_path, monk
     assert 'hwnd' not in rows['windows'][0]
     capture = service.call('calibration.capture', {'window': rows['suggested'], 'session': session})
     assert capture['image'].startswith('data:image/jpeg;base64,')
+    assert capture['identified'] is True
     with pytest.raises(ValueError, match='先确认'):
         service.call('calibration.save', {'token': capture['token'], 'regions': regions, 'confirmed': False})
     replace(cfg, reply_mode='mentions').save(expected=cfg)

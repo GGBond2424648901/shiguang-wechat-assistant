@@ -148,20 +148,24 @@ export function ImportPanel({ controller: c, categories, active, readOnly, notif
       <div className="glass panel form-stack import-editor">
         <PanelTitle>素材详情</PanelTitle>
         {row && values ? <>
-          <div className="import-preview">{row.frames > 0
-            ? <img src={`sg-media://import/${row.id}${row.frames > 1 && animate ? "?variant=original" : ""}`} alt="" />
-            : <Empty title="图片预览不可用" />}
+          <div className="form-stack sticker-editor-scroll">
+            <div className="import-preview">{row.frames > 0
+              ? <img src={`sg-media://import/${row.id}${row.frames > 1 && animate ? "?variant=original" : ""}`} alt="" />
+              : <Empty title="图片预览不可用" />}
+            </div>
+            <span className="muted">{row.width} × {row.height} · {row.frames} 帧 · {Math.ceil(row.size / 1024)} KiB</span>
+            {(["category", "meaning", "tags"] as const).map((field, index) =>
+              <label key={field} className="field">{["分类", "用途", "情绪标签"][index]}
+                <input value={values[field]} onChange={event => c.edit(row.id, field, event.target.value)}
+                  disabled={readOnly || c.busy} maxLength={[20, 120, 180][index]} />
+              </label>)}
+            <label className="field">来源<textarea rows={2} value={values.source} onChange={event => c.edit(row.id, "source", event.target.value)}
+              disabled={readOnly || c.busy} maxLength={1000} /></label>
           </div>
-          <span className="muted">{row.width} × {row.height} · {row.frames} 帧 · {Math.ceil(row.size / 1024)} KiB</span>
-          {(["category", "meaning", "tags"] as const).map((field, index) =>
-            <label key={field} className="field">{["分类", "用途", "情绪标签"][index]}
-              <input value={values[field]} onChange={event => c.edit(row.id, field, event.target.value)}
-                disabled={readOnly || c.busy} maxLength={[20, 120, 180][index]} />
-            </label>)}
-          <label className="field">来源<textarea rows={2} value={values.source} onChange={event => c.edit(row.id, "source", event.target.value)}
-            disabled={readOnly || c.busy} maxLength={1000} /></label>
-          <Button className="wide" variant="primary" icon={<Save size={16} />} disabled={readOnly || c.busy || !c.selected.length}
-            onClick={() => void commit()}>确认入库</Button>
+          <footer className="sticker-editor-actions">
+            <Button className="wide" variant="primary" icon={<Save size={16} />} disabled={readOnly || c.busy || !c.selected.length}
+              onClick={() => void commit()}>确认入库</Button>
+          </footer>
         </> : <Empty title="选中一张素材查看详情" />}
       </div>
     </div>

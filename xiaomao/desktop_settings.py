@@ -10,7 +10,7 @@ from .credentials import CredentialError, CredentialStore
 from .privacy import atomic_private_write, private_dir
 from .settings_service import apply_saved_settings
 
-DEFAULT_APPEARANCE = {'transparency': 21, 'reduceMotion': False}
+DEFAULT_APPEARANCE = {'transparency': 21, 'reduceMotion': False, 'zoomPercent': 100}
 GENERAL = ('model_name', 'auto_on_launch', 'split_replies', 'idle_wake',
            'self_display_name', 'self_name_unique_confirmed')
 
@@ -28,9 +28,11 @@ class DesktopSettings:
         self.appearance_file = root / 'runtime/desktop-appearance.json'
 
     @staticmethod
-    def validate_appearance(transparency, reduce_motion):
-        if type(transparency) is not int or not 0 <= transparency <= 48 or type(reduce_motion) is not bool:
-            raise ValueError('玻璃透明度应为 0–48%，动效设置应为开或关')
+    def validate_appearance(transparency, reduce_motion, zoom_percent):
+        if type(transparency) is not int or not 0 <= transparency <= 100 or type(reduce_motion) is not bool:
+            raise ValueError('玻璃透明度应为 0–100%，动效设置应为开或关')
+        if type(zoom_percent) is not int or not 75 <= zoom_percent <= 200:
+            raise ValueError('界面缩放应为 75–200%')
 
     def appearance(self):
         if not self.appearance_file.is_file():
@@ -40,20 +42,24 @@ class DesktopSettings:
             if len(raw) > 8192:
                 raise ValueError('size')
             saved = json.loads(raw)
-            if set(saved) != {'transparency', 'reduceMotion'}:
+            if not isinstance(saved, dict) or set(saved) not in (
+                    {'transparency', 'reduceMotion'}, set(DEFAULT_APPEARANCE)):
                 raise ValueError('fields')
-            self.validate_appearance(saved['transparency'], saved['reduceMotion'])
+            saved = {**DEFAULT_APPEARANCE, **saved}
+            self.validate_appearance(saved['transparency'], saved['reduceMotion'], saved['zoomPercent'])
         except (ValueError, TypeError, KeyError) as error:
             raise ValueError('外观设置文件无法读取，请检查本机配置') from error
         return {**saved, 'revision': hashlib.sha256(raw).hexdigest()}
 
-    def save_appearance(self, transparency, reduceMotion, expected):
-        self.validate_appearance(transparency, reduceMotion)
+    def save_appearance(self, transparency, reduceMotion, expected, zoomPercent=None):
+        self.validate_appearance(transparency, reduceMotion, 100 if zoomPercent is None else zoomPercent)
         directory = private_dir(self.appearance_file.parent)
         with configuration_lock(directory):
-            if self.appearance()['revision'] != expected:
+            current = self.appearance()
+            if current['revision'] != expected:
                 raise ValueError('界面外观已更新，请重新打开设置')
-            data = {'transparency': transparency, 'reduceMotion': reduceMotion}
+            data = {'transparency': transparency, 'reduceMotion': reduceMotion,
+                    'zoomPercent': current['zoomPercent'] if zoomPercent is None else zoomPercent}
             atomic_private_write(self.appearance_file, json.dumps(data).encode())
         return self.appearance()
 

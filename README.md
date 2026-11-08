@@ -10,9 +10,11 @@
 
 **v0.3.1** 在工作台发送队列中增加了按会话翻阅已确认回执的功能。待发队列和回执历史分别翻页。
 
-[下载 Windows x64 安装包与校验值](https://github.com/GGBond2424648901/shiguang-wechat-assistant/releases/tag/v0.3.1)
+**v0.3.3** 微信校准可恢复已打开的最小化窗口，绑定完成后显示实际的会话状态。桌面窗口使用原生圆角，主要确认操作固定在各自面板底部。「运行设置 → 界面外观」可同步调节侧栏和卡片的 0–100% 透明度，也可在保持窗口尺寸的情况下缩放内容。调整后点「保存外观」，下次打开会恢复设置。
 
-![v0.3.0 Windows 工作台实机截图，使用隔离示例数据](docs/screenshots/desktop-workbench.png)
+[下载 Windows x64 安装包与校验值](https://github.com/GGBond2424648901/shiguang-wechat-assistant/releases/tag/v0.3.3)
+
+![Windows 工作台实机截图，使用隔离示例数据](docs/screenshots/desktop-workbench.png)
 
 右上角 **×** 打开独立小窗，主页面仍可见。可收起到托盘继续后台监听，也可完全退出结束进程。弹窗里的 × 和 Esc 都是取消。存在未保存的修改时，界面会提示处理草稿。
 
@@ -20,7 +22,7 @@
 
 ## 15 秒实机介绍
 
-[![点击播放 15 秒 Windows 界面演示](docs/screenshots/desktop-appearance.png)](https://github.com/GGBond2424648901/shiguang-wechat-assistant/releases/download/v0.3.0/shiguang-desktop-15s.mp4)
+[![点击播放 15 秒 Windows 界面演示](docs/screenshots/desktop-appearance.png)](https://github.com/GGBond2424648901/shiguang-wechat-assistant/releases/download/v0.3.3/shiguang-desktop-15s.mp4)
 
 视频录自新版 Windows 应用，展示切页、人格、素材库和透明度调节。录制使用隔离示例资料，画面没有鼠标指针。[播放 MP4](https://github.com/GGBond2424648901/shiguang-wechat-assistant/releases/download/v0.3.0/shiguang-desktop-15s.mp4)
 

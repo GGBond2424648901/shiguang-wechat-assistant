@@ -203,10 +203,28 @@ async function main() {
     await page.waitForFunction(() => [...document.querySelectorAll(".wechat-settings .field input")].some(input => input.value === "第二个账号"));
     await page.getByRole("button", { name: "界面外观", exact: true }).click();
     const transparency = page.getByRole("slider", { name: "玻璃透明度" });
+    await transparency.press("Home");
+    assert.equal(await transparency.inputValue(), "0");
+    assert.equal(await page.evaluate(() => document.documentElement.style.getPropertyValue("--glass-alpha")), "1");
     await transparency.press("End");
-    await transparency.press("ArrowLeft");
+    assert.equal(await transparency.inputValue(), "100");
+    assert.deepEqual(await page.evaluate(() => [".rail", ".appearance-options", ".appearance-sample"].map(selector => {
+      const stops = getComputedStyle(document.querySelector(selector)).backgroundImage.match(/rgba\([^)]+\)/g) || [];
+      return stops.length >= 2 && stops.every(stop => stop.endsWith(", 0)"));
+    })), [true, true, true], "100% must remove glass fill in the sidebar and every layer of the cards");
+    await page.getByRole("spinbutton", { name: "透明度百分比" }).fill("47");
     assert.equal(await transparency.inputValue(), "47");
     assert.ok(await page.evaluate(() => Math.abs(Number(document.documentElement.style.getPropertyValue("--glass-alpha")) - .53) < .001));
+    const zoomMetrics = () => electron.evaluate(({ BrowserWindow }) => {
+      const win = BrowserWindow.getAllWindows()[0];
+      return { bounds: win.getBounds(), factor: win.webContents.getZoomFactor() };
+    });
+    const previousZoom = await zoomMetrics();
+    await page.getByRole("button", { name: "缩小界面", exact: true }).click();
+    await page.waitForFunction(() => document.documentElement.style.getPropertyValue("--ui-zoom") === "0.9");
+    const zoomedWindow = await zoomMetrics();
+    assert.deepEqual(zoomedWindow.bounds, previousZoom.bounds, "content zoom must leave the native window geometry unchanged");
+    assert.ok(Math.abs(zoomedWindow.factor - .9) < .001, JSON.stringify(zoomedWindow));
     await page.getByRole("switch", { name: "减少动态效果" }).check();
     await page.getByRole("button", { name: "保存外观", exact: true }).click();
     await page.getByText("界面外观已保存", { exact: true }).waitFor();
@@ -215,11 +233,28 @@ async function main() {
     await page.getByRole("button", { name: "界面外观", exact: true }).click();
     assert.equal(await transparency.inputValue(), "47");
     assert.equal(await page.getByRole("switch", { name: "减少动态效果" }).isChecked(), true);
+    assert.equal(await page.getByLabel("当前界面缩放").textContent(), "90%");
+    assert.ok(Math.abs((await zoomMetrics()).factor - .9) < .001);
+    await page.keyboard.press("Control+0");
+    await page.waitForFunction(() => document.documentElement.style.getPropertyValue("--ui-zoom") === "1");
+    await page.keyboard.press("Control+-");
+    await page.waitForFunction(() => document.documentElement.style.getPropertyValue("--ui-zoom") === "0.9");
+    assert.equal(await page.getByLabel("当前界面缩放").textContent(), "90%");
+    assert.deepEqual((await zoomMetrics()).bounds, previousZoom.bounds);
+    await page.getByRole("combobox", { name: "示例选择" }).click();
+    await page.getByRole("option", { name: "次要文字", exact: true }).click();
+    assert.equal(await page.getByRole("combobox", { name: "示例选择" }).textContent(), "次要文字");
     await page.getByRole("button", { name: "恢复默认", exact: true }).click();
     await page.getByRole("button", { name: "保存外观", exact: true }).click();
     await page.getByText("界面外观已保存", { exact: true }).waitFor();
     await page.getByRole("button", { name: "关闭提示" }).click();
     await page.screenshot({ path: path.join(output, "appearance.png"), animations: "disabled" });
+    await electron.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setFullScreen(true));
+    await page.locator(".shell.maximized").waitFor();
+    await page.reload();
+    await page.locator(".shell.maximized").waitFor();
+    await page.getByRole("button", { name: "还原", exact: true }).click();
+    await page.locator(".shell.maximized").waitFor({ state: "detached" });
 
     await page.getByRole("button", { name: "会话", exact: true }).click();
     await page.getByRole("heading", { name: "晨光摄影群", exact: true }).waitFor();
@@ -349,6 +384,24 @@ async function main() {
     await page.waitForTimeout(1200);
     const memoryAfter = await appMetrics(electron);
     const zoomed = [];
+    const pinned = [];
+    const assertPinned = async (title, scale, scroller, footer, action) => {
+      const result = await page.evaluate(({ scroller, footer, action }) => {
+        const visible = selector => [...document.querySelectorAll(selector)].find(el => el.getClientRects().length);
+        const content = visible(scroller);
+        const bar = visible(footer);
+        const button = [...bar.querySelectorAll("button")].find(el => el.textContent.trim() === action);
+        const bottom = button.getBoundingClientRect().bottom;
+        const scrolled = content.scrollTop;
+        content.scrollTop = content.scrollHeight;
+        const after = button.getBoundingClientRect().bottom;
+        content.scrollTop = scrolled;
+        return { bottom, after, height: innerHeight, clip: button.getBoundingClientRect().right > innerWidth + 1 };
+      }, { scroller, footer, action });
+      assert.ok(result.bottom > 0 && result.bottom <= result.height && !result.clip && Math.abs(result.bottom - result.after) < 1,
+        `fixed action clipped or scrolled away at ${scale} ${title}: ${JSON.stringify(result)}`);
+      pinned.push({ title, scale, action, ...result });
+    };
     const cssPages = ["工作台", "会话", "人格", "记忆与陪伴", "表情包", "运行设置"];
     for (const scale of [1, 1.25, 1.5, 2]) {
       await electron.evaluate(({ BrowserWindow }, factor) => {
@@ -366,15 +419,35 @@ async function main() {
         assert.ok(bounds.scroll <= bounds.client + 3, `horizontal overflow at ${scale} ${title}: ${JSON.stringify(bounds)}`);
         assert.equal(bounds.rail, bounds.width <= 625 ? 56 : 232, "sidebar must not follow page content");
         zoomed.push({ scale, title, width: bounds.width, rail: bounds.rail });
+        if (title === "会话") await assertPinned(title, scale, ".session-detail-scroll", ".session-detail-footer", "保存当前会话");
+        if (title === "记忆与陪伴") await assertPinned(title, scale, ".companion-scroll", ".companion-footer", "刷新记忆");
+        if (title === "运行设置") {
+          await page.getByRole("button", { name: "常规", exact: true }).click();
+          await assertPinned(title, scale, ".settings-scroll", ".settings-footer", "保存设置");
+          await page.getByRole("button", { name: "界面外观", exact: true }).click();
+          await assertPinned(title, scale, ".appearance-options-scroll", ".appearance-actions", "保存外观");
+        }
       }
     }
     await electron.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(1));
+    const originalBounds = (await zoomMetrics()).bounds;
+    await electron.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(820, 560));
+    const compactBounds = (await zoomMetrics()).bounds;
+    for (const percent of [110, 125, 150, 175, 200]) {
+      await page.getByRole("button", { name: "放大界面", exact: true }).click();
+      await page.getByText(`${percent}%`, { exact: true }).last().waitFor();
+    }
+    assert.deepEqual((await zoomMetrics()).bounds, compactBounds, "zoom must preserve the compact window bounds");
+    await assertPinned("运行设置（紧凑窗口）", 2, ".appearance-options-scroll", ".appearance-actions", "保存外观");
+    await page.getByRole("button", { name: "恢复默认", exact: true }).click();
+    await electron.evaluate(({ BrowserWindow }, bounds) => BrowserWindow.getAllWindows()[0].setBounds(bounds), originalBounds);
+    await page.getByRole("button", { name: "工作台", exact: true }).click();
     assert.deepEqual(errors, []);
     const report = {
       firstReadyMs, navP95Ms: percentile(samples, .95), navMaxMs: Math.max(...samples),
       scroll, resize, memoryBeforeMiB: memoryBefore, memoryAfterMiB: memoryAfter,
       memoryIncreaseMiB: memoryAfter - memoryBefore,
-      sampleCount: samples.length, catalogueSize: 5000, rendererErrors: errors, modal, zoomed,
+      sampleCount: samples.length, catalogueSize: 5000, rendererErrors: errors, modal, zoomed, pinned,
       measurements: "Two-frame renderer interaction latency and animation-frame pacing. Real Electron production build, synthetic resident.",
     };
     await fs.writeFile(path.join(output, "results.json"), JSON.stringify(report, null, 2));

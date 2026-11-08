@@ -1,6 +1,6 @@
 import {
-  Activity, ArrowDownToLine, ArrowLeft, BookOpen, CalendarDays, Clock, Eye, FolderOpen, Heart, Info,
-  Layers2, LockKeyhole, MessageCircle, Plus, RefreshCcw, Save, Send, Trash2, Upload, X,
+  Activity, ArrowDownToLine, ArrowLeft, BookOpen, CalendarDays, Check, Clock, Eye, FolderOpen, Heart, Info,
+  Layers2, LockKeyhole, MessageCircle, Plus, RefreshCcw, Send, Trash2, Upload, X,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { errorMessage, request, type Status } from "./api";
@@ -66,6 +66,7 @@ export function CompanionPage({ active, status, notify }: { active: boolean; sta
   const [dates, setDates] = useState("");
   const [quiet, setQuiet] = useState(["", ""]);
   const [confirm, setConfirm] = useState<"once" | string>();
+  const scroll = useRef<HTMLDivElement>(null);
   const sequence = useRef(0);
   const localId = useRef(id);
   const readOnly = status?.readOnly ?? true;
@@ -171,6 +172,10 @@ export function CompanionPage({ active, status, notify }: { active: boolean; sta
     if (dirty) setConfirm(value);
     else { setSelected(value); setMemory(undefined); }
   };
+  const openTab = (value: typeof tab) => {
+    setTab(value);
+    if (scroll.current) scroll.current.scrollTop = 0;
+  };
 
   function range(kind: Kind) {
     return <div className="companion-line" key={kind}>
@@ -189,143 +194,149 @@ export function CompanionPage({ active, status, notify }: { active: boolean; sta
   if (!id || !selection) return <div className="glass phase-note"><Empty title="请先添加监听会话" /></div>;
   const nextRun = (live?.routines ?? []).filter(row => row.next_due_at > 0).sort((a, b) => a.next_due_at - b.next_due_at)[0];
   return <div className="companion-page" data-tab={tab}>
-    <div className="companion-nav">
-      <div className="flex glass companion-selector"><span>目标会话</span><Select label="陪伴会话"
-        value={id} options={status?.sessions.map(row => ({ value: row.id, label: row.name })) ?? []}
-        disabled={!!busy} onChange={choose} /></div>
-      <div role="group" aria-label="陪伴功能" className="companion-tabs">{tabs.map(([value, label]) =>
-        <Button key={value} variant={tab === value ? "primary" : "ghost"} aria-pressed={tab === value} onClick={() => setTab(value)}>{label}</Button>
-      )}</div>
+    <div className="companion-scroll" ref={scroll}>
+      <div className="companion-nav">
+        <div className="flex glass companion-selector"><span>目标会话</span><Select label="陪伴会话"
+          value={id} options={status?.sessions.map(row => ({ value: row.id, label: row.name })) ?? []}
+          disabled={!!busy} onChange={choose} /></div>
+        <div role="group" aria-label="陪伴功能" className="companion-tabs">{tabs.map(([value, label]) =>
+          <Button key={value} variant={tab === value ? "primary" : "ghost"} aria-pressed={tab === value} onClick={() => openTab(value)}>{label}</Button>
+        )}</div>
+      </div>
+      {error && <p className="inline-error" role="alert">{error}</p>}
+      {tab === "policy" && <div className="companion-columns">
+        <section className="glass panel companion-policy">
+          <PanelTitle icon={<MessageCircle size={20} />} end={<Switch checked={policy?.enabled ?? false} disabled={!mutable}
+            onChange={value => field("enabled", value)}>启用主动聊天</Switch>}>主动聊天</PanelTitle>
+          <p className="muted fine-print">按本会话的节奏和上下文安排话题</p>
+          {range("idle")}{range("followup")}
+          <div className="companion-line"><b>每日次数上限</b>
+            <label className="field"><input type="number" min={1} max={24} disabled={!mutable}
+              aria-label="每日次数上限" value={policy?.daily_max ?? ""} onChange={event => field("daily_max", Number(event.target.value))} /></label>
+          </div>
+          <div className="companion-line"><b>安静时段</b>
+            <div className="range-pair">{quiet.map((value, index) => <label key={index} className="field">
+              <input type="time" value={value} disabled={!mutable} aria-label={index ? "结束安静时段" : "开始安静时段"}
+                onChange={event => setQuiet(values => values.map((time, at) => at === index ? event.target.value : time))} />
+            </label>)}<small>北京时间</small></div>
+          </div>
+          <div className="flex companion-toggles">
+            <Switch checked={policy?.idle ?? false} disabled={!mutable} onChange={value => field("idle", value)}>空闲话题</Switch>
+            <Switch checked={policy?.followup ?? false} disabled={!mutable} onChange={value => field("followup", value)}>聊后续话</Switch>
+            <Switch checked={policy?.gentle_followups ?? false} disabled={!mutable} onChange={value => field("gentle_followups", value)}>温和追问</Switch>
+          </div>
+          <Button className="advanced-button" aria-expanded={advanced} onClick={() => setAdvanced(!advanced)}>{advanced ? "收起高级设置" : "高级陪伴设置"}</Button>
+          {advanced && <div className="form-stack companion-advanced">
+            {range("checkin")}{range("signoff")}
+            <div className="flex probability">
+              {(["idle", "followup"] as const).map(kind => <label key={kind} className="field">{rangeLabels[kind]}概率 %
+                <input type="number" min={0} max={100} step="any" disabled={!mutable}
+                  value={policy ? Number((100 * policy[`${kind}_probability`]).toFixed(4)) : ""}
+                  onChange={event => field(`${kind}_probability`, Number(event.target.value) / 100)} /></label>)}
+            </div>
+            <label className="field">陪伴语气<textarea rows={3} maxLength={2000} disabled={!mutable}
+              value={policy?.style ?? ""} onChange={event => field("style", event.target.value)} /></label>
+            <label className="field">关注的兴趣<input maxLength={500} disabled={!mutable}
+              value={policy?.interests ?? ""} onChange={event => field("interests", event.target.value)} /></label>
+            <label className="field">重要日期（每行 MM-DD 名称）<textarea rows={3} disabled={!mutable} value={dates}
+              onChange={event => setDates(event.target.value)} /></label>
+          </div>}
+        </section>
+        <div className="companion-side">
+          <section className="glass panel companion-preview">
+            <PanelTitle icon={<Send size={18} />} end={<small className="muted">{live?.nextAt
+              ? `${dateText(live.nextAt)} · ${live.nextStage}`
+              : live?.reason || (live?.connected ? "暂未安排" : "等待读取后台状态")}</small>}>下一次候选</PanelTitle>
+            <p className="preview-text">{live?.preview || "尚未生成预览"}</p>
+            {(live?.once || live?.previewState) && <small className="muted">{[live.once, live.previewState].filter(Boolean).join(" · ")}</small>}
+            <div className="flex">
+              <Button className="peach-outline" icon={<Eye size={16} />} busy={busy === "preview"} disabled={!mutable || !live?.connected}
+                onClick={() => void command("preview")}>生成预览</Button>
+              <Button variant="primary" icon={<CalendarDays size={16} />} disabled={!mutable || !live?.connected || !base?.preferences.enabled}
+                busy={busy === "once"} onClick={() => setConfirm("once")}>安排一次</Button>
+            </div>
+          </section>
+          <section className="glass panel companion-preview">
+            <PanelTitle icon={<CalendarDays size={18} />} end={<Button className="peach-outline" icon={<Plus size={15} />}
+              onClick={() => openTab("routines")}>管理任务</Button>}>定时任务</PanelTitle>
+            {policy?.routines.length ? policy.routines.map(row => <div className="companion-summary-row" key={row.id}>
+              <Clock size={15} /><b>{row.time}</b><span>{row.intent}</span></div>) : <Empty title="暂无定时关怀" detail="可按星期与时间配置问候。" />}
+          </section>
+        </div>
+      </div>}
+      {tab === "routines" && <div className="companion-columns">
+        <section className="glass panel companion-policy">
+          <PanelTitle icon={<CalendarDays size={19} />} end={<Button className="peach-outline" icon={<Plus size={15} />} disabled={!mutable || (policy?.routines.length ?? 0) >= 8}
+            busy={busy === "routine"} onClick={() => void addRoutine()}>新建</Button>}>定时关怀</PanelTitle>
+          <div className="flex companion-templates">{templates.map(([value, label]) => <Button key={value}
+            variant={template === value ? "primary" : undefined} aria-pressed={template === value} onClick={() => setTemplate(value)}>{label}</Button>)}</div>
+          {policy?.routines.map(row => <section key={row.id} className="routine-entry">
+            <div className="flex routine-heading"><Clock size={16} />
+              <label className="field"><input aria-label="任务时间" type="time" value={row.time} disabled={!mutable}
+                onChange={event => editRoutine(row, { time: event.target.value })} /></label>
+              <div className="routine-enabled">
+                <Switch checked={row.enabled} disabled={!mutable} onChange={enabled => editRoutine(row, { enabled })}>启用</Switch>
+              </div>
+              <Switch checked={row.prefer_sticker} disabled={!mutable} onChange={prefer_sticker => editRoutine(row, { prefer_sticker })}>搭配表情</Switch>
+              <IconButton label="删除任务" icon={<Trash2 size={16} />} disabled={!mutable}
+                onClick={() => field("routines", policy.routines.filter(item => item.id !== row.id))} />
+            </div>
+            <div className="routine-days flex">{weekdays.map((day, index) => <label key={day}>
+              <input type="checkbox" checked={row.weekdays.includes(index)} disabled={!mutable}
+                onChange={event => editRoutine(row, { weekdays: event.target.checked
+                  ? [...row.weekdays, index].sort((a, b) => a - b) : row.weekdays.filter(value => value !== index) })} />周{day}
+            </label>)}</div>
+            <label className="field">关怀意图<textarea rows={2} value={row.intent} maxLength={160} disabled={!mutable}
+              onChange={event => editRoutine(row, { intent: event.target.value })} /></label>
+          </section>)}
+          {!policy?.routines.length && <Empty icon={<CalendarDays size={24} />} title="还没有定时任务" detail="选择一个模板后点新建。" />}
+        </section>
+        <section className="glass panel companion-preview">
+          <PanelTitle icon={<Activity size={18} />}>执行记录</PanelTitle>
+          <p className="routine-next"><Clock size={16} />{!base?.preferences.enabled ? "主动聊天未开启" : live?.mode === "paused" ?
+            "此会话已暂停" : nextRun ? `下一次 · ${dateText(nextRun.next_due_at)}` : "暂无执行时间"}</p>
+          {(live?.history ?? []).length ? <div className="routine-history">{[...live!.history].reverse().map((row, index) => <div
+            className="companion-summary-row" key={row.routine_id + row.day + index}>
+            <time>{row.day}</time><span>{base?.preferences.routines.find(item => item.id === row.routine_id)?.intent || "历史任务"}</span>
+            <span className="tag">{statuses[row.status] || row.status}</span>
+          </div>)}</div> : <Empty title="暂无执行记录" />}
+        </section>
+      </div>}
+      {tab === "memory" && <>
+        {memoryError && <p className="inline-error" role="alert">{memoryError}</p>}
+        <div className="memory-metrics">
+          {([[BookOpen, "原文记录", memory?.messages], [Layers2, "来源记忆", memory?.facts], [CalendarDays, "本机日记", memory?.diaries]] as const).map(
+            ([Icon, label, value]) => <div key={label} className="glass memory-metric">
+              <Icon size={21} /><b>{label}</b><strong>{value ?? "—"}</strong></div>)}
+        </div>
+        <div className="companion-columns">
+          <section className="glass panel companion-preview memory-summary">
+            <PanelTitle icon={<MessageCircle size={19} />}>最近会话摘要</PanelTitle>
+            <p className="memory-entry">{memory?.summary || "暂无摘要"}</p>
+            <h3>有来源的记忆</h3>
+            {memory?.sources.length ? memory.sources.map((row, index) => <p className="memory-entry" key={index}><b>{row.author}</b>{row.quote}</p>)
+              : <Empty title="暂无来源记忆" />}
+          </section>
+          <section className="glass panel companion-preview memory-journal">
+            <PanelTitle icon={<CalendarDays size={19} />}>本机日记</PanelTitle>
+            {memory?.journal.length ? memory.journal.map(row => <p className="memory-entry" key={row.day}><b>{row.day}</b>{row.text}</p>)
+              : <Empty title="暂无日记" />}
+          </section>
+        </div>
+      </>}
     </div>
-    {error && <p className="inline-error" role="alert">{error}</p>}
-    {tab === "policy" && <div className="companion-columns">
-      <section className="glass panel companion-policy">
-        <PanelTitle icon={<MessageCircle size={20} />} end={<Switch checked={policy?.enabled ?? false} disabled={!mutable}
-          onChange={value => field("enabled", value)}>启用主动聊天</Switch>}>主动聊天</PanelTitle>
-        <p className="muted fine-print">按本会话的节奏和上下文安排话题</p>
-        {range("idle")}{range("followup")}
-        <div className="companion-line"><b>每日次数上限</b>
-          <label className="field"><input type="number" min={1} max={24} disabled={!mutable}
-            aria-label="每日次数上限" value={policy?.daily_max ?? ""} onChange={event => field("daily_max", Number(event.target.value))} /></label>
-        </div>
-        <div className="companion-line"><b>安静时段</b>
-          <div className="range-pair">{quiet.map((value, index) => <label key={index} className="field">
-            <input type="time" value={value} disabled={!mutable} aria-label={index ? "结束安静时段" : "开始安静时段"}
-              onChange={event => setQuiet(values => values.map((time, at) => at === index ? event.target.value : time))} />
-          </label>)}<small>北京时间</small></div>
-        </div>
-        <div className="flex companion-toggles">
-          <Switch checked={policy?.idle ?? false} disabled={!mutable} onChange={value => field("idle", value)}>空闲话题</Switch>
-          <Switch checked={policy?.followup ?? false} disabled={!mutable} onChange={value => field("followup", value)}>聊后续话</Switch>
-          <Switch checked={policy?.gentle_followups ?? false} disabled={!mutable} onChange={value => field("gentle_followups", value)}>温和追问</Switch>
-        </div>
-        <Button className="advanced-button" aria-expanded={advanced} onClick={() => setAdvanced(!advanced)}>{advanced ? "收起高级设置" : "高级陪伴设置"}</Button>
-        {advanced && <div className="form-stack companion-advanced">
-          {range("checkin")}{range("signoff")}
-          <div className="flex probability">
-            {(["idle", "followup"] as const).map(kind => <label key={kind} className="field">{rangeLabels[kind]}概率 %
-              <input type="number" min={0} max={100} step="any" disabled={!mutable}
-                value={policy ? Number((100 * policy[`${kind}_probability`]).toFixed(4)) : ""}
-                onChange={event => field(`${kind}_probability`, Number(event.target.value) / 100)} /></label>)}
-          </div>
-          <label className="field">陪伴语气<textarea rows={3} maxLength={2000} disabled={!mutable}
-            value={policy?.style ?? ""} onChange={event => field("style", event.target.value)} /></label>
-          <label className="field">关注的兴趣<input maxLength={500} disabled={!mutable}
-            value={policy?.interests ?? ""} onChange={event => field("interests", event.target.value)} /></label>
-          <label className="field">重要日期（每行 MM-DD 名称）<textarea rows={3} disabled={!mutable} value={dates}
-            onChange={event => setDates(event.target.value)} /></label>
-        </div>}
-      </section>
-      <div className="companion-side">
-        <section className="glass panel companion-preview">
-          <PanelTitle icon={<Send size={18} />} end={<small className="muted">{live?.nextAt
-            ? `${dateText(live.nextAt)} · ${live.nextStage}`
-            : live?.reason || (live?.connected ? "暂未安排" : "等待读取后台状态")}</small>}>下一次候选</PanelTitle>
-          <p className="preview-text">{live?.preview || "尚未生成预览"}</p>
-          {(live?.once || live?.previewState) && <small className="muted">{[live.once, live.previewState].filter(Boolean).join(" · ")}</small>}
-          <div className="flex">
-            <Button icon={<Eye size={16} />} busy={busy === "preview"} disabled={!mutable || !live?.connected} onClick={() => void command("preview")}>生成预览</Button>
-            <Button variant="primary" icon={<CalendarDays size={16} />} disabled={!mutable || !live?.connected || !base?.preferences.enabled}
-              busy={busy === "once"} onClick={() => setConfirm("once")}>安排一次</Button>
-          </div>
-        </section>
-        <section className="glass panel companion-preview">
-          <PanelTitle icon={<CalendarDays size={18} />} end={<Button icon={<Plus size={15} />} onClick={() => setTab("routines")}>管理任务</Button>}>定时任务</PanelTitle>
-          {policy?.routines.length ? policy.routines.map(row => <div className="companion-summary-row" key={row.id}>
-            <Clock size={15} /><b>{row.time}</b><span>{row.intent}</span></div>) : <Empty title="暂无定时关怀" detail="可按星期与时间配置问候。" />}
-        </section>
-      </div>
-    </div>}
-    {tab === "routines" && <div className="companion-columns">
-      <section className="glass panel companion-policy">
-        <PanelTitle icon={<CalendarDays size={19} />} end={<Button icon={<Plus size={15} />} disabled={!mutable || (policy?.routines.length ?? 0) >= 8}
-          busy={busy === "routine"} onClick={() => void addRoutine()}>新建</Button>}>定时关怀</PanelTitle>
-        <div className="flex companion-templates">{templates.map(([value, label]) => <Button key={value}
-          variant={template === value ? "primary" : "ghost"} aria-pressed={template === value} onClick={() => setTemplate(value)}>{label}</Button>)}</div>
-        {policy?.routines.map(row => <section key={row.id} className="routine-entry">
-          <div className="flex routine-heading"><Clock size={16} />
-            <label className="field"><input aria-label="任务时间" type="time" value={row.time} disabled={!mutable}
-              onChange={event => editRoutine(row, { time: event.target.value })} /></label>
-            <Switch checked={row.enabled} disabled={!mutable} onChange={enabled => editRoutine(row, { enabled })}>启用</Switch>
-            <Switch checked={row.prefer_sticker} disabled={!mutable} onChange={prefer_sticker => editRoutine(row, { prefer_sticker })}>搭配表情</Switch>
-            <IconButton label="删除任务" icon={<Trash2 size={16} />} disabled={!mutable}
-              onClick={() => field("routines", policy.routines.filter(item => item.id !== row.id))} />
-          </div>
-          <div className="routine-days flex">{weekdays.map((day, index) => <label key={day}>
-            <input type="checkbox" checked={row.weekdays.includes(index)} disabled={!mutable}
-              onChange={event => editRoutine(row, { weekdays: event.target.checked
-                ? [...row.weekdays, index].sort((a, b) => a - b) : row.weekdays.filter(value => value !== index) })} />周{day}
-          </label>)}</div>
-          <label className="field">关怀意图<textarea rows={2} value={row.intent} maxLength={160} disabled={!mutable}
-            onChange={event => editRoutine(row, { intent: event.target.value })} /></label>
-        </section>)}
-        {!policy?.routines.length && <Empty icon={<CalendarDays size={24} />} title="还没有定时任务" detail="选择一个模板后点新建。" />}
-      </section>
-      <section className="glass panel companion-preview">
-        <PanelTitle icon={<Activity size={18} />}>执行记录</PanelTitle>
-        <p className="routine-next"><Clock size={16} />{!base?.preferences.enabled ? "主动聊天未开启" : live?.mode === "paused" ?
-          "此会话已暂停" : nextRun ? `下一次 · ${dateText(nextRun.next_due_at)}` : "暂无执行时间"}</p>
-        {(live?.history ?? []).length ? <div className="routine-history">{[...live!.history].reverse().map((row, index) => <div
-          className="companion-summary-row" key={row.routine_id + row.day + index}>
-          <time>{row.day}</time><span>{base?.preferences.routines.find(item => item.id === row.routine_id)?.intent || "历史任务"}</span>
-          <span className="tag">{statuses[row.status] || row.status}</span>
-        </div>)}</div> : <Empty title="暂无执行记录" />}
-      </section>
-    </div>}
-    {tab === "memory" && <>
-      {memoryError && <p className="inline-error" role="alert">{memoryError}</p>}
-      <div className="memory-metrics">
-        {([[BookOpen, "原文记录", memory?.messages], [Layers2, "来源记忆", memory?.facts], [CalendarDays, "本机日记", memory?.diaries]] as const).map(
-          ([Icon, label, value]) => <div key={label} className="glass memory-metric">
-            <Icon size={21} /><b>{label}</b><strong>{value ?? "—"}</strong></div>)}
-      </div>
-      <div className="companion-columns">
-        <section className="glass panel companion-preview memory-summary">
-          <PanelTitle icon={<MessageCircle size={19} />}>最近会话摘要</PanelTitle>
-          <p className="memory-entry">{memory?.summary || "暂无摘要"}</p>
-          <h3>有来源的记忆</h3>
-          {memory?.sources.length ? memory.sources.map((row, index) => <p className="memory-entry" key={index}><b>{row.author}</b>{row.quote}</p>)
-            : <Empty title="暂无来源记忆" />}
-        </section>
-        <section className="glass panel companion-preview memory-journal">
-          <PanelTitle icon={<CalendarDays size={19} />}>本机日记</PanelTitle>
-          {memory?.journal.length ? memory.journal.map(row => <p className="memory-entry" key={row.day}><b>{row.day}</b>{row.text}</p>)
-            : <Empty title="暂无日记" />}
-        </section>
-      </div>
-    </>}
     <footer className="companion-footer glass">
       <span className="fine-print muted"><Info size={15} />仅作用于 {selection.name}{dirty ? " · 有未保存的修改" : ""}</span>
       <div className="flex">
         {tab !== "memory" ? <>
-          {tab === "routines" && <Button icon={<ArrowLeft size={15} />} onClick={() => setTab("policy")}>返回</Button>}
+          {tab === "routines" && <Button icon={<ArrowLeft size={15} />} onClick={() => openTab("policy")}>返回</Button>}
           {dirty && <Button disabled={!!busy} onClick={() => base && accept(base)}>撤销修改</Button>}
-          <Button variant="primary" icon={<Save size={16} />} busy={busy === "save"} disabled={!mutable || !dirty}
+          <Button variant="primary" icon={<Check size={16} />} busy={busy === "save"} disabled={!mutable || !dirty}
             onClick={() => void save()}>{tab === "routines" ? "保存定时任务" : "保存陪伴设置"}</Button>
         </> : <>
-          <Button icon={<RefreshCcw size={15} />} onClick={() => setRefresh(value => value + 1)}>刷新记忆</Button>
-          <Button icon={<Upload size={15} />} disabled={!mutable} onClick={() => void backup("export")}>导出加密备份</Button>
-          <Button icon={<ArrowDownToLine size={15} />} disabled={!mutable} onClick={() => void backup("import")}>导入备份</Button>
+          <Button className="peach-outline" icon={<RefreshCcw size={15} />} onClick={() => setRefresh(value => value + 1)}>刷新记忆</Button>
+          <Button className="peach-outline" icon={<Upload size={15} />} disabled={!mutable} onClick={() => void backup("export")}>导出加密备份</Button>
+          <Button className="peach-outline" icon={<ArrowDownToLine size={15} />} disabled={!mutable} onClick={() => void backup("import")}>导入备份</Button>
         </>}
       </div>
     </footer>
@@ -371,9 +382,8 @@ export function BackupWindow() {
       <IconButton label="关闭备份窗口" icon={<X size={15} />} onClick={close} disabled={busy} /></header>
     <div className="calibration-body backup-body">
       <p className="muted">{context?.name}</p>
-      {saved ? <><Empty title={importing ? "备份已合并" : "加密备份已导出"}
-        detail={importing ? "此会话的主动聊天已关闭。" : "请妥善保管备份口令。"} />
-        <div className="calibration-actions"><Button variant="primary" onClick={close}>完成</Button></div></> : <>
+      {saved ? <Empty title={importing ? "备份已合并" : "加密备份已导出"}
+        detail={importing ? "此会话的主动聊天已关闭。" : "请妥善保管备份口令。"} /> : <>
         {importing && <Button icon={<FolderOpen size={16} />} disabled={busy} onClick={() => void run(async () => {
           const name = await call<string | null>("pick");
           if (name) { setFile(name); setPreview(undefined); }
@@ -385,14 +395,18 @@ export function BackupWindow() {
           <span>原文 <b>{preview.messages}</b></span><span>记忆 <b>{preview.facts}</b></span><span>日记 <b>{preview.diaries}</b></span>
         </div>}
         {error && <p className="inline-error" role="alert">{error}</p>}
-        <div className="calibration-actions"><Button disabled={busy} onClick={close}>取消</Button>
-          <Button variant="primary" busy={busy} disabled={!context || password.length < 8 || (importing && !file)}
-            onClick={() => void run(async () => {
-              if (importing && !preview) { setPreview(await call("preview", { password })); return; }
-              const success = await call<boolean>(importing ? "restore" : "export", { token: preview?.token, password });
-              if (success) { setPassword(""); setSaved(true); }
-            })}>{importing ? preview ? "确认合并" : "核对备份" : "导出加密备份"}</Button></div>
       </>}
     </div>
+    <footer className="calibration-actions">
+      {saved ? <Button variant="primary" onClick={close}>完成</Button> : <>
+        <Button disabled={busy} onClick={close}>取消</Button>
+        <Button variant="primary" busy={busy} disabled={!context || password.length < 8 || (importing && !file)}
+          onClick={() => void run(async () => {
+            if (importing && !preview) { setPreview(await call("preview", { password })); return; }
+            const success = await call<boolean>(importing ? "restore" : "export", { token: preview?.token, password });
+            if (success) { setPassword(""); setSaved(true); }
+          })}>{importing ? preview ? "确认合并" : "核对备份" : "导出加密备份"}</Button>
+      </>}
+    </footer>
   </div>;
 }
