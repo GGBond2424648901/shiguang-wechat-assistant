@@ -407,8 +407,8 @@
     {
       "file": "desktop-appearance.png",
       "origin": "actual Windows application screenshot",
-      "source_sha256": "5628e809160e6d5cad933e3e6c405ae57d8c1cb8f52982e75e69211a23cff67b",
-      "output_sha256": "5628e809160e6d5cad933e3e6c405ae57d8c1cb8f52982e75e69211a23cff67b",
+      "source_sha256": "f0265d9e77d12e71a2ca8e91313ebe4ec1d88de9d719496485afe79b18675e09",
+      "output_sha256": "f0265d9e77d12e71a2ca8e91313ebe4ec1d88de9d719496485afe79b18675e09",
       "source_size": [
         1586,
         992
@@ -421,32 +421,51 @@
       ],
       "redaction_rectangles": [],
       "unchanged_outside_redactions": true,
-      "note": "v0.3.3 Electron production renderer on Windows; isolated fictional profile, no cursor or private wallpaper."
+      "note": "v0.3.3 Windows Electron renderer captured offscreen with transparent corners, isolated fictional data and no cursor or private wallpaper."
+    },
+    {
+      "file": "desktop-calibration.png",
+      "origin": "actual Windows application screenshot",
+      "source_sha256": "5aa8b39e69294b13b8555a7c192137ab11be61ebf1474f3e394515879ff857d8",
+      "output_sha256": "5aa8b39e69294b13b8555a7c192137ab11be61ebf1474f3e394515879ff857d8",
+      "source_size": [
+        783,
+        974
+      ],
+      "crop": [
+        0,
+        0,
+        783,
+        974
+      ],
+      "redaction_rectangles": [],
+      "unchanged_outside_redactions": true,
+      "note": "v0.3.3 Windows Electron renderer captured offscreen with transparent corners, isolated fictional data and no cursor or private wallpaper."
     },
     {
       "file": "desktop-close.png",
       "origin": "actual Windows application screenshot",
-      "source_sha256": "090409e3c88b624aaedf664638099013b412aa2a3174aa28deb8f2959a8e389d",
-      "output_sha256": "090409e3c88b624aaedf664638099013b412aa2a3174aa28deb8f2959a8e389d",
+      "source_sha256": "0dd445ec62f6c32e239c1107a7a351bdd3ad3a9fa72c1cf00711eaa4ce19a2c8",
+      "output_sha256": "0dd445ec62f6c32e239c1107a7a351bdd3ad3a9fa72c1cf00711eaa4ce19a2c8",
       "source_size": [
-        595,
-        395
+        593,
+        390
       ],
       "crop": [
         0,
         0,
-        595,
-        395
+        593,
+        390
       ],
       "redaction_rectangles": [],
       "unchanged_outside_redactions": true,
-      "note": "v0.3.3 Electron production renderer on Windows; isolated fictional profile, no cursor or private wallpaper."
+      "note": "v0.3.3 Windows Electron renderer captured offscreen with transparent corners, isolated fictional data and no cursor or private wallpaper."
     },
     {
       "file": "desktop-companion.png",
       "origin": "actual Windows application screenshot",
-      "source_sha256": "958bbc6c258e3c65f2d101a1f366fe5040f50fb7f7ade54ca77f0b861cbdb735",
-      "output_sha256": "958bbc6c258e3c65f2d101a1f366fe5040f50fb7f7ade54ca77f0b861cbdb735",
+      "source_sha256": "1bbc90b5e88411550503c9a36d570606136b9804dd80945239ed67323f88ef4e",
+      "output_sha256": "1bbc90b5e88411550503c9a36d570606136b9804dd80945239ed67323f88ef4e",
       "source_size": [
         1586,
         992
@@ -459,13 +478,13 @@
       ],
       "redaction_rectangles": [],
       "unchanged_outside_redactions": true,
-      "note": "v0.3.3 Electron production renderer on Windows; isolated fictional profile, no cursor or private wallpaper."
+      "note": "v0.3.3 Windows Electron renderer captured offscreen with transparent corners, isolated fictional data and no cursor or private wallpaper."
     },
     {
       "file": "desktop-import.png",
       "origin": "actual Windows application screenshot",
-      "source_sha256": "cedc566a5ed0f3cd20f6c64b89b913e0cb4f6c313b8108b75848183f94cc2dc2",
-      "output_sha256": "cedc566a5ed0f3cd20f6c64b89b913e0cb4f6c313b8108b75848183f94cc2dc2",
+      "source_sha256": "91c2c949ad47486e802a253c00046cc1d26257e13d2bb31ad90a535ebb6f5ec2",
+      "output_sha256": "91c2c949ad47486e802a253c00046cc1d26257e13d2bb31ad90a535ebb6f5ec2",
       "source_size": [
         1585,
         992
@@ -478,13 +497,13 @@
       ],
       "redaction_rectangles": [],
       "unchanged_outside_redactions": true,
-      "note": "v0.3.3 Electron production renderer on Windows; isolated fictional profile, no cursor or private wallpaper."
+      "note": "v0.3.3 Windows Electron renderer captured offscreen with transparent corners, isolated fictional data and no cursor or private wallpaper."
     },
     {
       "file": "desktop-persona.png",
       "origin": "actual Windows application screenshot",
-      "source_sha256": "65faf704f328df2957f98b0074d15583d0dcb9e7c696c2a7b256eb32d9af6ddb",
-      "output_sha256": "65faf704f328df2957f98b0074d15583d0dcb9e7c696c2a7b256eb32d9af6ddb",
+      "source_sha256": "68df83b6b0ea7ab02bc709169745521cb71013dd22db4b6e998613336450f049",
+      "output_sha256": "68df83b6b0ea7ab02bc709169745521cb71013dd22db4b6e998613336450f049",
       "source_size": [
         1586,
         992
@@ -497,13 +516,13 @@
       ],
       "redaction_rectangles": [],
       "unchanged_outside_redactions": true,
-      "note": "v0.3.3 Electron production renderer on Windows; isolated fictional profile, no cursor or private wallpaper."
+      "note": "v0.3.3 Windows Electron renderer captured offscreen with transparent corners, isolated fictional data and no cursor or private wallpaper."
     },
     {
       "file": "desktop-sessions.png",
       "origin": "actual Windows application screenshot",
-      "source_sha256": "e90cac16eafb51191a1b11abbb7054abf613c215823270b4fb29c91da91bb47b",
-      "output_sha256": "e90cac16eafb51191a1b11abbb7054abf613c215823270b4fb29c91da91bb47b",
+      "source_sha256": "aa711656ea6c1e7e79dfa0dfae3669af2cccd8455836cb107c5c43faa8b9341c",
+      "output_sha256": "aa711656ea6c1e7e79dfa0dfae3669af2cccd8455836cb107c5c43faa8b9341c",
       "source_size": [
         1487,
         1058
@@ -516,13 +535,13 @@
       ],
       "redaction_rectangles": [],
       "unchanged_outside_redactions": true,
-      "note": "v0.3.3 Electron production renderer on Windows; isolated fictional profile, no cursor or private wallpaper."
+      "note": "v0.3.3 Windows Electron renderer captured offscreen with transparent corners, isolated fictional data and no cursor or private wallpaper."
     },
     {
       "file": "desktop-settings.png",
       "origin": "actual Windows application screenshot",
-      "source_sha256": "dfef96e7393ed8f35212f10f362c79406c9c7ce3ba3375e7c5c905cc42bdd1b9",
-      "output_sha256": "dfef96e7393ed8f35212f10f362c79406c9c7ce3ba3375e7c5c905cc42bdd1b9",
+      "source_sha256": "0da87f32876066873cfcf2e1a169aa59c826c540641182ab01d39607233aac4d",
+      "output_sha256": "0da87f32876066873cfcf2e1a169aa59c826c540641182ab01d39607233aac4d",
       "source_size": [
         1586,
         992
@@ -535,13 +554,13 @@
       ],
       "redaction_rectangles": [],
       "unchanged_outside_redactions": true,
-      "note": "v0.3.3 Electron production renderer on Windows; isolated fictional profile, no cursor or private wallpaper."
+      "note": "v0.3.3 Windows Electron renderer captured offscreen with transparent corners, isolated fictional data and no cursor or private wallpaper."
     },
     {
       "file": "desktop-stickers.png",
       "origin": "actual Windows application screenshot",
-      "source_sha256": "91269d1309aa20b3b15adb9a907376de494f9114795dda30514de8e5468dc86c",
-      "output_sha256": "91269d1309aa20b3b15adb9a907376de494f9114795dda30514de8e5468dc86c",
+      "source_sha256": "84d8f6d1f75a861725efad19d03e1cbb9e0ababdf5a8470fa8afbaf694a60002",
+      "output_sha256": "84d8f6d1f75a861725efad19d03e1cbb9e0ababdf5a8470fa8afbaf694a60002",
       "source_size": [
         1586,
         992
@@ -554,13 +573,13 @@
       ],
       "redaction_rectangles": [],
       "unchanged_outside_redactions": true,
-      "note": "v0.3.3 Electron production renderer on Windows; isolated fictional profile, no cursor or private wallpaper."
+      "note": "v0.3.3 Windows Electron renderer captured offscreen with transparent corners, isolated fictional data and no cursor or private wallpaper."
     },
     {
       "file": "desktop-workbench.png",
       "origin": "actual Windows application screenshot",
-      "source_sha256": "1d57dbf17acbda66236b19f7722ae3cf1e8b9c48a98e34894a6174928ed08768",
-      "output_sha256": "1d57dbf17acbda66236b19f7722ae3cf1e8b9c48a98e34894a6174928ed08768",
+      "source_sha256": "3b084ed0c61d51be3e641e33f347801d2a922725dce123ff5da2ffbba1682111",
+      "output_sha256": "3b084ed0c61d51be3e641e33f347801d2a922725dce123ff5da2ffbba1682111",
       "source_size": [
         1487,
         1058
@@ -573,12 +592,12 @@
       ],
       "redaction_rectangles": [],
       "unchanged_outside_redactions": true,
-      "note": "v0.3.3 Electron production renderer on Windows; isolated fictional profile, no cursor or private wallpaper."
+      "note": "v0.3.3 Windows Electron renderer captured offscreen with transparent corners, isolated fictional data and no cursor or private wallpaper."
     }
   ],
   "desktop_capture": {
     "version": "0.3.3",
-    "capture": "Playwright Electron page screenshot",
+    "capture": "Playwright offscreen Electron page screenshot with alpha channel",
     "source": "production renderer",
     "data": "fictional QA profile",
     "cursor_included": false,

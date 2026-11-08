@@ -73,7 +73,7 @@ async function main() {
       await page.locator(selectors.at(-1)).last().waitFor({ state: "visible" });
       await page.waitForFunction(() => document.fonts.status === "loaded");
       await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-      const image = await page.screenshot({ path: path.join(destination, name + ".png"), scale: "css", animations: "disabled" });
+      const image = await page.screenshot({ path: path.join(destination, name + ".png"), scale: "css", animations: "disabled", omitBackground: true });
       assert.deepEqual([image.readUInt32BE(16), image.readUInt32BE(20)], [width, height]);
       report.pages[name] = await page.evaluate(items => {
         return Object.fromEntries([".shell", ".rail", ".brand", ".nav-item", ".chrome", ".routes", ...items].map(selector => {
@@ -101,7 +101,7 @@ async function main() {
         await popup.getByRole("button", { name: "唤起并校准" }).click();
         await popup.getByAltText("当前微信窗口校准截图").waitFor();
         assert.equal(await popup.locator(".region").count(), 4);
-        await popup.screenshot({ path: path.join(destination, "calibration.png"), scale: "css", animations: "disabled" });
+        await popup.screenshot({ path: path.join(destination, "calibration.png"), scale: "css", animations: "disabled", omitBackground: true });
         const region = popup.getByRole("spinbutton", { name: "左", exact: true });
         await region.fill("245");
         await popup.getByRole("button", { name: "撤销调整" }).click();
@@ -137,7 +137,7 @@ async function main() {
       await popup.getByLabel("备份口令").fill(password);
       await popup.getByRole("button", { name: "核对备份", exact: true }).click();
       await popup.getByRole("button", { name: "确认合并", exact: true }).waitFor();
-      await popup.screenshot({ path: path.join(destination, "backup.png"), scale: "css", animations: "disabled" });
+      await popup.screenshot({ path: path.join(destination, "backup.png"), scale: "css", animations: "disabled", omitBackground: true });
       await closeChild(popup, "取消");
     });
     await click("表情包");
@@ -181,7 +181,7 @@ async function main() {
     await click("工作台");
     const [popup] = await Promise.all([app.waitForEvent("window"), click("关闭助手")]);
     await popup.getByRole("button", { name: "取消关闭" }).waitFor();
-    await popup.screenshot({ path: path.join(destination, "close-dialog.png"), scale: "css", animations: "disabled" });
+    await popup.screenshot({ path: path.join(destination, "close-dialog.png"), scale: "css", animations: "disabled", omitBackground: true });
     await Promise.all([popup.waitForEvent("close"), popup.keyboard.press("Escape")]);
     if (process.env.SHIGUANG_DEMO_FFMPEG) {
       const record = require("./record-preview.cjs");

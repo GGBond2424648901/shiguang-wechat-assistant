@@ -285,6 +285,7 @@ desktop/scripts/check-window-shape.cjs
 desktop/scripts/check-visual.cjs
 desktop/scripts/record-preview.cjs
 docs/screenshots/desktop-appearance.png
+docs/screenshots/desktop-calibration.png
 docs/screenshots/desktop-close.png
 docs/screenshots/desktop-companion.png
 docs/screenshots/desktop-import.png

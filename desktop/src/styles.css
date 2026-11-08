@@ -25,7 +25,7 @@
   --shade: rgb(31 31 43 / .62);
   --radius: 21px;
   --ease: cubic-bezier(.22, .75, .25, 1);
-  background: #1b1c2b;
+  background: transparent;
   color: var(--ink);
 }
 

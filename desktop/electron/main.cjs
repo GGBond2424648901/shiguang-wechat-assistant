@@ -3,7 +3,7 @@ const { createHash } = require("node:crypto");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { Broker } = require("./broker.cjs");
-const { applyRoundedWindowShape } = require("./window-shape.cjs");
+const { applyRoundedWindowShape, isWindowFullscreen } = require("./window-shape.cjs");
 
 const packaged = app.isPackaged && !process.defaultApp;
 const project = packaged ? path.resolve(path.dirname(process.execPath), "..") : path.resolve(__dirname, "../..");
@@ -45,8 +45,9 @@ const allowed = new Set([
 
 function secureWindow(options) {
   const window = new BrowserWindow({
-    show: false, frame: false, roundedCorners: true, autoHideMenuBar: true, icon,
-    backgroundColor: "#202131",
+    // The Windows resize hit area is inside the client on frameless Electron 45 windows.
+    show: false, frame: false, thickFrame: false, transparent: true, roundedCorners: false, autoHideMenuBar: true, icon,
+    backgroundColor: "#00000000",
     webPreferences: {
       preload: path.join(__dirname, "preload.cjs"), sandbox: true, contextIsolation: true,
       nodeIntegration: false, webSecurity: true, zoomMode: "isolated",
@@ -63,8 +64,8 @@ function secureWindow(options) {
   return window;
 }
 
-async function showShaped(window) {
-  await windowShapes.get(window)?.();
+function showShaped(window) {
+  windowShapes.get(window)?.();
   if (!window.isDestroyed()) window.show();
 }
 
@@ -186,7 +187,7 @@ function registerIpc() {
       ? Boolean((await broker.call("appearance.read").catch(() => null))?.reduceMotion) : false;
     return { readOnly, tray: Boolean(status?.tray), connected: Boolean(status?.connected),
              hasWallpaper: Boolean(await fs.stat(wallpaper).catch(() => null)), reduceMotion, trayExit: trayExitRequested,
-             dirty: drafts.size > 0, maximized: from.isMaximized() || from.isFullScreen() };
+             dirty: drafts.size > 0, maximized: from.isMaximized() || isWindowFullscreen(from) };
   });
   ipcMain.handle("shiguang:window", async (event, action) => {
     const from = identify(event, true);
@@ -206,7 +207,7 @@ function registerIpc() {
     }
     if (action === "minimize") main.minimize();
     else if (action === "maximize") {
-      if (main.isFullScreen()) main.setFullScreen(false);
+      if (isWindowFullscreen(main)) main.setFullScreen(false);
       else main.isMaximized() ? main.unmaximize() : main.maximize();
     }
     else if (action === "close") main.close();
@@ -476,8 +477,8 @@ if (!app.requestSingleInstanceLock()) {
       title, width: Math.min(1488, area.width), height: Math.min(960, area.height),
       minWidth: Math.min(820, area.width), minHeight: Math.min(560, area.height),
     });
-    main.once("ready-to-show", async () => {
-      await windowShapes.get(main)?.();
+    main.once("ready-to-show", () => {
+      windowShapes.get(main)?.();
       if (main.isDestroyed()) return;
       painted = true;
       if (bridgeReady) showMain();
@@ -491,11 +492,11 @@ if (!app.requestSingleInstanceLock()) {
     main.webContents.on("before-input-event", (event, input) => {
       if (input.type === "keyDown" && input.key === "F11" && !input.isAutoRepeat) {
         event.preventDefault();
-        main.setFullScreen(!main.isFullScreen());
+        main.setFullScreen(!isWindowFullscreen(main));
       }
     });
     for (const event of ["maximize", "unmaximize", "restore", "enter-full-screen", "leave-full-screen"]) {
-      main.on(event, () => main.webContents.send("shiguang:window-state", { maximized: main.isMaximized() || main.isFullScreen() }));
+      main.on(event, () => main.webContents.send("shiguang:window-state", { maximized: main.isMaximized() || isWindowFullscreen(main) }));
     }
     main.loadFile(bundle).catch(() => {
       dialog.showErrorBox(title, "界面资源无法加载，请重新构建桌面应用。");

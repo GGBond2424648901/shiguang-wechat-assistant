@@ -7,21 +7,19 @@ function covers(rects, x, y) {
   return rects.some(rect => x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height);
 }
 
-test("window region preserves the resize bands around a rounded client area", () => {
-  const shape = roundedWindowShape(530, 344, 24, 7);
+test("window region covers the client and leaves the corners outside", () => {
+  const shape = roundedWindowShape(530, 344, 24);
 
-  for (const [x, y] of [[7, 0], [536, 0], [7, 343], [536, 343], [0, 0], [543, 350]]) {
+  for (const [x, y] of [[0, 0], [529, 0], [0, 343], [529, 343], [-1, 172], [530, 172], [265, 344]]) {
     assert.equal(covers(shape, x, y), false, `corner at ${x}, ${y}`);
   }
-  for (const [x, y] of [[272, 0], [272, 350], [0, 172], [543, 172], [7, 172], [536, 172], [17, 5]]) {
-    assert.equal(covers(shape, x, y), true, `client or resize edge at ${x}, ${y}`);
+  for (const [x, y] of [[265, 0], [265, 343], [0, 172], [529, 172], [13, 3], [516, 340]]) {
+    assert.equal(covers(shape, x, y), true, `client resize edge at ${x}, ${y}`);
   }
-  assert.ok(covers(shape, 14, 349), "bottom-left resize target");
-  assert.ok(covers(shape, 529, 349), "bottom-right resize target");
   for (const rect of shape) {
     assert.ok(Object.values(rect).every(Number.isInteger));
     assert.ok(rect.x >= 0 && rect.y >= 0 && rect.width > 0 && rect.height > 0);
-    assert.ok(rect.x + rect.width <= 544 && rect.y + rect.height <= 351);
+    assert.ok(rect.x + rect.width <= 530 && rect.y + rect.height <= 344);
   }
 });
 
@@ -34,13 +32,14 @@ class TestWindow extends EventEmitter {
   minimized = false;
   destroyed = false;
   shape = null;
+  shapeCalls = 0;
 
   getBounds() { return { x: 759, y: 380, width: this.width, height: this.height }; }
   isMaximized() { return this.maximized; }
   isFullScreen() { return this.fullScreen; }
   isMinimized() { return this.minimized; }
   isDestroyed() { return this.destroyed; }
-  setShape(shape) { this.shape = shape; }
+  setShape(shape) { this.shape = shape; this.shapeCalls++; }
   hookWindowMessage(message, callback) { this.dpiChange = message === 0x02E0 ? callback : undefined; }
 
   webContents = {
@@ -53,48 +52,50 @@ test("normal, resized, restored, and full-screen windows use the appropriate reg
   const prepare = applyRoundedWindowShape(window, 24);
 
   await prepare();
-  assert.ok(covers(window.shape, 543, 172));
-  assert.ok(!covers(window.shape, 544, 172));
+  assert.ok(covers(window.shape, 529, 172));
+  assert.ok(!covers(window.shape, 530, 172));
+  assert.ok(!covers(window.shape, 265, 344));
 
   window.width = 650;
   window.height = 440;
   window.emit("resize");
-  assert.ok(covers(window.shape, 663, 220));
-  assert.ok(covers(window.shape, 332, 446));
-  assert.ok(!covers(window.shape, 663, 446));
+  assert.ok(covers(window.shape, 649, 220));
+  assert.ok(covers(window.shape, 325, 439));
+  assert.ok(!covers(window.shape, 650, 220));
+  assert.ok(!covers(window.shape, 325, 440));
 
   window.maximized = true;
   window.emit("maximize");
   assert.deepEqual(window.shape, []);
   window.maximized = false;
   window.emit("unmaximize");
-  assert.ok(covers(window.shape, 663, 220));
+  assert.ok(covers(window.shape, 649, 220));
 
-  window.fullScreen = true;
+  // Electron's frameless fullscreen emits events without changing the widget flag.
+  assert.equal(window.isFullScreen(), false);
   window.emit("enter-full-screen");
   assert.deepEqual(window.shape, []);
-  window.fullScreen = false;
   window.emit("leave-full-screen");
-  assert.ok(covers(window.shape, 663, 220));
+  assert.ok(covers(window.shape, 649, 220));
 
   window.minimized = true;
   window.width = 600;
   window.emit("resize");
-  assert.ok(covers(window.shape, 663, 220));
+  assert.ok(covers(window.shape, 649, 220));
   window.minimized = false;
   window.emit("restore");
-  assert.ok(covers(window.shape, 613, 220));
-  assert.ok(!covers(window.shape, 614, 220));
+  assert.ok(covers(window.shape, 599, 220));
+  assert.ok(!covers(window.shape, 600, 220));
 });
 
-test("a DPI change refreshes frame insets even when logical dimensions stay the same", async () => {
+test("a DPI change reapplies the region even when logical dimensions stay the same", async () => {
   const window = new TestWindow();
   const prepare = applyRoundedWindowShape(window, 24);
   await prepare();
-  assert.ok(!covers(window.shape, 545, 172));
-
+  const count = window.shapeCalls;
   window.inset = 8;
   window.dpiChange();
   await new Promise(setImmediate);
-  assert.ok(covers(window.shape, 545, 172));
+  assert.equal(window.shapeCalls, count + 1);
+  assert.ok(!covers(window.shape, 530, 172));
 });
