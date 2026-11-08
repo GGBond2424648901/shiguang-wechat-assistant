@@ -347,13 +347,13 @@ async function main() {
     await Promise.all([owned.waitForEvent("close"), owned.keyboard.press("Escape")]);
     assert.equal(electron.windows().length, 1);
 
-    const memoryBefore = await appMetrics(electron);
-    const samples = await page.evaluate(async () => {
+    const switchPages = (count) => page.evaluate(async (count) => {
       const tabs = [...document.querySelectorAll(".nav-item")];
+      const initial = tabs.findIndex(button => button.getAttribute("aria-current") === "page");
       const results = [];
       const frame = () => new Promise(resolve => requestAnimationFrame(resolve));
-      for (let i = 0; i < 100; i += 1) {
-        const button = tabs[i % 2 ? 4 : 0];
+      for (let index = 1; index <= count; index += 1) {
+        const button = tabs[index === count ? initial : (initial + index) % tabs.length];
         const start = performance.now();
         button.click();
         await frame();
@@ -362,7 +362,16 @@ async function main() {
         if (button.getAttribute("aria-current") !== "page") throw new Error("切页没有更新选中状态");
       }
       return results;
-    });
+    }, count);
+    await page.getByRole("button", { name: "工作台", exact: true }).click();
+    await switchPages(12);
+    await page.waitForTimeout(1200);
+    const memoryBefore = await appMetrics(electron);
+    const samples = await switchPages(100);
+    await page.waitForTimeout(1200);
+    const memoryAfter = await appMetrics(electron);
+
+    await page.getByRole("button", { name: "表情包", exact: true }).click();
     const scroll = await readFrames(page, () => gallery.evaluate(async element => {
       const until = performance.now() + 2500;
       do {
@@ -381,8 +390,6 @@ async function main() {
     }));
     await gallery.evaluate(element => { element.scrollTop = 0; });
     await page.getByRole("button", { name: "工作台", exact: true }).click();
-    await page.waitForTimeout(1200);
-    const memoryAfter = await appMetrics(electron);
     const zoomed = [];
     const pinned = [];
     const assertPinned = async (title, scale, scroller, footer, action) => {
@@ -448,7 +455,7 @@ async function main() {
       scroll, resize, memoryBeforeMiB: memoryBefore, memoryAfterMiB: memoryAfter,
       memoryIncreaseMiB: memoryAfter - memoryBefore,
       sampleCount: samples.length, catalogueSize: 5000, rendererErrors: errors, modal, zoomed, pinned,
-      measurements: "Two-frame renderer interaction latency and animation-frame pacing. Real Electron production build, synthetic resident.",
+      measurements: "Two-frame interaction latency and animation-frame pacing. Working set sampled on the workbench before and after 100 switches, separately from scroll and resize. Real Electron production build, synthetic resident.",
     };
     await fs.writeFile(path.join(output, "results.json"), JSON.stringify(report, null, 2));
     console.log(JSON.stringify(report));
