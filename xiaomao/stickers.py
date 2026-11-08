@@ -461,7 +461,22 @@ def matches_draft(image,prepared,scale=1.0,*,include_interior=True,exclusive=Fal
                                 count,_,stats,_=cv2.connectedComponentsWithStats(mask)
                                 if count>2:continue
                                 if count==2:
-                                    _,_,w,h,area=stats[1]
-                                    if not (w<=max(2,round(2*scale)) and h<=round(28*scale) and h>=4*w):continue
+                                    cx,cy,w,h,area=stats[1]
+                                    if not (w<=max(2,round(2*scale)) and h>=4*w):continue
+                                    if h>round(28*scale):
+                                        # Qt's caret follows the IMAGE line height,
+                                        # not the text font. Accept only the thin
+                                        # green caret immediately beside this full
+                                        # thumbnail; a scrollbar/far mark is not it.
+                                        adjacent=(abs(cx+w-x)<=round(4*scale) or abs(cx-(x+width))<=round(4*scale))
+                                        aligned=abs(cy-y)<=round(3*scale) and abs(h-height)<=round(3*scale)
+                                        pixels=screen_signed[cy:cy+h,cx:cx+w]
+                                        green=(pixels[:,:,1]>pixels[:,:,0]+40)&(pixels[:,:,1]>pixels[:,:,2]+25)
+                                        if not (adjacent and aligned and green.mean()>.9):continue
+                                        all_green=((screen_signed[:,:,1]>screen_signed[:,:,0]+40)&
+                                                   (screen_signed[:,:,1]>screen_signed[:,:,2]+25)).astype('uint8')
+                                        _,labels,green_stats,_=cv2.connectedComponentsWithStats(all_green)
+                                        component=labels[cy+h//2,cx+w//2]
+                                        if not component or green_stats[component,2]>max(2,round(2*scale)):continue
                             return True
     return False

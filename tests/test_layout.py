@@ -76,3 +76,22 @@ def test_detached_header_separator_survives_bubbles_touching_its_lower_edge():
     # An incomplete separator must still fail closed.
     draw.line((300,100,450,100),fill=(237,237,237))
     assert adapt_calibration(image,b) is b
+
+
+def test_wide_clipped_bubble_below_header_does_not_freeze_editor_geometry():
+    from xiaomao.layout import adapt_calibration
+    image=layout_image(toolbar=780)
+    draw=ImageDraw.Draw(image)
+    # A long clipped message touches most of the header's LOWER edge. The
+    # complete 1px separator and its upper edge remain visible and unique.
+    draw.rectangle((360,110,1300,118),fill=(101,101,101))
+    draw.rectangle((350,800,380,825),fill=(30,30,30))  # actual toolbar icon
+    binding=old_binding()
+    result=adapt_calibration(image,binding)
+    assert result is not binding
+    assert result.rect('messages')[3]==777
+    assert result.rect('input')[1]==830
+    assert image.crop(result.rect('input')).getextrema()==((237,237),)*3
+    # Even with the upper contrast, an incomplete separator cannot be used.
+    draw.line((700,109,800,109),fill=(237,237,237))
+    assert adapt_calibration(image,binding) is binding

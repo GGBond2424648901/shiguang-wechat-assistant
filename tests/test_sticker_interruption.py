@@ -129,3 +129,16 @@ def test_recovery_checks_editor_footer_and_right_edge_not_just_text_crop(tmp_pat
     elif extra=='scrollbar':draw.rectangle((784,500,788,600),fill=(100,100,100))
     desktop.capture=lambda:image
     assert desktop.verify_owned_sticker_input(sticker)==(extra=='none')
+
+
+@pytest.mark.parametrize('caret',['adjacent','far','scrollbar','wide'])
+def test_full_height_image_caret_is_not_mistaken_for_extra_draft(tmp_path,caret):
+    from PIL import Image,ImageDraw
+    library(tmp_path);lib=StickerLibrary(tmp_path);prepared=lib.prepare(lib.items[0])
+    with Image.open(prepared.path) as source:
+        thumb=source.convert('RGB');thumb.thumbnail((120,120))
+    draft=Image.new('RGB',(520,180),(237,237,237));draft.paste(thumb,(10,8))
+    x=7 if caret!='far' else 300
+    color=(160,160,160) if caret=='scrollbar' else (7,193,96)
+    ImageDraw.Draw(draft).rectangle((x,8,x+(8 if caret=='wide' else 1),8+thumb.height-1),fill=color)
+    assert matches_draft(draft,prepared,exclusive=True)==(caret=='adjacent')

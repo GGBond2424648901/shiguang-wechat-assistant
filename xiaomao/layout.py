@@ -59,14 +59,16 @@ def adapt_calibration(image, binding, scale=1.0):
     coverage=horizontal[:,line_start:round(width*.94)].mean(1)
     # A clipped chat bubble can touch the row immediately BELOW the header.
     # The separator itself must remain complete, uniform and neutral; its
-    # upper boundary still needs full contrast. Do not relax toolbar checks.
+    # upper boundary still needs full contrast. A wide clipped bubble can
+    # hide nearly the ENTIRE lower edge: it is not a second separator test.
+    # Do not relax toolbar checks or allow gaps in the header line itself.
     band=pixels[:,line_start:round(width*.94)]
     uniform=np.ptp(band,axis=(1,2))<3
     shade=band.mean(axis=(1,2))
     above=((gray[1:-1]<gray[:-2]-2)&neutral[1:-1])[:,line_start:round(width*.94)].mean(1)
     headers=[y for y in range(round(40*scale),round(height*.25))
              if coverage[y-1]>.98 or (uniform[y] and 190<=shade[y]<=225
-                                      and above[y-1]>.98 and coverage[y-1]>.5)]
+                                      and above[y-1]>.98)]
     toolbars=[y for y in range(round(height*.55),round(height*.94)) if coverage[y-1]>.98]
     if len(headers)!=1 or len(toolbars)!=1:return binding
     header,toolbar=headers[0],toolbars[0]

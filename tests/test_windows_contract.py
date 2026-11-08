@@ -1,14 +1,14 @@
 import pytest
 
 
-@pytest.mark.parametrize('height,fits',[(45,False),(90,True),(200,True)])
+@pytest.mark.parametrize('height,fits',[(45,False),(90,False),(132,True),(200,True)])
 def test_sticker_editor_capacity_checked_before_pasting(monkeypatch,height,fits):
     import io
     from PIL import Image
     from types import SimpleNamespace
     from xiaomao.windows import WindowsDesktop
     buffer=io.BytesIO();Image.new('RGB',(120,120),'blue').save(buffer,format='GIF')
-    # Keep the entire editor at the requested height, including its footer.
+    # Only the editor viewport counts, not blank space beside Send.
     d=WindowsDesktop(SimpleNamespace(height=height+8,
         rect=lambda name:(0,0,400,height) if name=='input' else (420,height-30,480,height)))
     monkeypatch.setattr(d,'_dpi_scale',lambda:1)

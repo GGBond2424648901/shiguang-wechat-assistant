@@ -51,6 +51,7 @@ _SEND_WAITS = {
     'window_turn':'等待共用微信窗口完成上一会话的发送',
     'clipboard':'等待剪贴板可用，尚未输入',
     'sticker_draft':'表情草稿保留中，等待空闲后核对；继续接收新消息',
+    'sticker_space':'等待表情编辑区完整展开，尚未粘贴；继续接收新消息',
 }
 
 
@@ -991,6 +992,15 @@ class Engine:
             self._retire(task,'skipped','draft_removed');return
         if self.desktop.input_generation()!=generation:
             self._defer_sticker_draft(task);return
+        ensure=getattr(self.desktop,'ensure_sticker_preview_space',None)
+        if ensure:
+            generation=ensure(task.sticker,self.settings.idle_seconds)
+            if generation is None:
+                self._defer_sticker_draft(task);return
+            before=self._frame()
+            if before.draft_empty:
+                self._retire(task,'skipped','draft_removed');return
+            if not self._active(task):return
         self.desktop.click_input(generation)
         if not self.desktop.verify_owned_sticker_input(task.sticker):
             self._defer_sticker_draft(task)
@@ -1246,6 +1256,15 @@ class Engine:
             self.pause("输入框已有草稿，未执行输入")
             return
         if task.sticker:
+            ensure=getattr(self.desktop,'ensure_sticker_preview_space',None)
+            if ensure:
+                prepared_generation=ensure(task.sticker,self.settings.idle_seconds)
+                if prepared_generation is None:
+                    self._waiting(task,'sticker_space');task.retry_at=self.clock()+5
+                    return
+                before=self._frame(observation=bool(self.message_source))
+                if not before.draft_empty:
+                    self._waiting(task,'draft');return
             fits=getattr(self.desktop,'sticker_preview_fits',None)
             if fits and not fits(task.sticker):
                 self._sticker_unavailable(task,'输入区太窄，无法核对表情预览，本轮改用文字')

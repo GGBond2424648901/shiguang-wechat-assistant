@@ -379,6 +379,7 @@ class WindowsDesktop:
         self.typed_without_clipboard = False
         self.last_editor_proof = ''
         self._sticker_snapshot_blocked = False
+        self._sticker_resize_retry_at = 0
         self._sidebar_ocr=None
         self._last_wake=-float('inf')
         self._return_window=None
@@ -1198,14 +1199,96 @@ class WindowsDesktop:
         return x1,y1,right,bottom
 
     def sticker_preview_fits(self,prepared):
-        """Refuse an uncheckable attachment before changing the editor."""
+        """The actual editor must fit the whole preview, excluding Send/footer."""
+        width,height=self._sticker_preview_size(prepared)
+        x1,y1,x2,y2=self.calibration.rect('input')
+        padding=round(12*self._dpi_scale())
+        return x2-x1>=width+padding and y2-y1>=height+padding
+
+    def _sticker_preview_size(self,prepared):
         import io
         from PIL import Image
-        x1,y1,x2,y2=self._sticker_preview_rect()
         scale=self._dpi_scale()
         with Image.open(io.BytesIO(prepared.verified_bytes())) as source:
             thumb=source.copy();thumb.thumbnail((round(120*scale)+1,round(120*scale)+1))
-        return x2-x1>=max(40,thumb.width) and y2-y1>=max(40,round(thumb.height*.7))
+        return thumb.size
+
+    def ensure_sticker_preview_space(self,prepared,idle_seconds=10):
+        """Expand the real editor, never the crop. Return the guarded input generation.
+
+        Qt can scroll an inline attachment to a 30px fragment despite blank space
+        beside Send. Ctrl+Home cannot fix a viewport shorter than the image.
+        Detect the complete splitter, grow it once, then recheck layout and identity.
+        This changes no draft bytes and also works for an interrupted owned draft.
+        """
+        from dataclasses import replace
+        from .layout import adapt_calibration
+        from .vision import LocalOCR,calibration_send_matches
+        if self.idle_for()<idle_seconds:return None
+        generation=self.input_generation()
+        image=self.capture();scale=self._dpi_scale()
+        original=self.calibration
+        candidate=replace(original,manual_regions=False)
+        detected=adapt_calibration(image,candidate,scale)
+        if detected is candidate:return None
+        self.calibration=detected
+        self.validate_target(image)
+        if self.input_generation()!=generation:return None
+        if self.sticker_preview_fits(prepared):return generation
+        if time.monotonic()<self._sticker_resize_retry_at:return None
+        width,height=self._sticker_preview_size(prepared)
+        x1,y1,x2,y2=detected.rect('input');padding=round(12*scale)
+        if x2-x1<width+padding:return None
+        toolbar=round(y1-50*scale)
+        target=toolbar-(height+padding-(y2-y1))-round(8*scale)
+        # Keep enough message pane for independent title/bottom checks and do
+        # not drag across unknown UI. adapt_calibration scans this same band.
+        if target<round(detected.height*.55)+2 or target>=toolbar:return None
+        if self._sidebar_ocr is None:self._sidebar_ocr=LocalOCR()
+        if not calibration_send_matches(self._sidebar_ocr,image,detected):return None
+        self._sticker_resize_retry_at=time.monotonic()+5
+        idle_credit=self.idle_for()
+        generation=self._drag_editor_separator(((x1+x2)//2,toolbar),((x1+x2)//2,target),generation)
+        self._input_cookie=None
+        self.navigation.note(generation,idle_credit)
+        previous=None
+        for _ in range(2):
+            if self.cancelled.wait(.12):return None
+            self.check()
+            if self.input_generation()!=generation:return None
+            image=self.capture()
+            current=adapt_calibration(image,candidate,scale)
+            if current is candidate:return None
+            if previous and current.regions!=previous.regions:return None
+            self.calibration=current;self.validate_target(image)
+            if not calibration_send_matches(self._sidebar_ocr,image,current):return None
+            previous=current
+        if self.input_generation()!=generation:return None
+        return generation if self.sticker_preview_fits(prepared) else None
+
+    def _drag_editor_separator(self,start,end,generation):
+        info=self.check()
+        if self.input_generation()!=generation:raise DesktopTemporarilyHidden('人工操作中，稍后展开表情输入区')
+        points=[W.POINT(info['rect'][0]+x,info['rect'][1]+y) for x,y in (start,end)]
+        if any(U.GetAncestor(U.WindowFromPoint(p),2)!=self.calibration.hwnd for p in points):
+            raise DesktopTemporarilyHidden('输入区分隔线被遮挡，等待空闲后展开')
+        if not U.SetCursorPos(points[0].x,points[0].y):raise DesktopTemporarilyHidden('无法定位输入区分隔线')
+        if self.check()['rect']!=info['rect'] or self.input_generation()!=generation:
+            raise DesktopTemporarilyHidden('微信位置或人工输入变化，未调整输入区')
+        events=(INPUT*2)();events[0].value.mouse.flags=0x2;events[1].value.mouse.flags=0x4
+        if U.SendInput(1,events,ctypes.sizeof(INPUT))!=1:raise DesktopUnavailable('输入区分隔线未能按下')
+        try:
+            own=self.input_generation()
+            if self.cancelled.wait(.06):raise DesktopTemporarilyHidden('已取消输入区调整')
+            if self.input_generation()!=own or self.check()['rect']!=info['rect']:
+                raise DesktopTemporarilyHidden('调整输入区时检测到人工操作')
+            if not U.SetCursorPos(points[1].x,points[1].y):raise DesktopUnavailable('无法展开图片输入区')
+            if self.cancelled.wait(.06):raise DesktopTemporarilyHidden('已取消输入区调整')
+            if self.input_generation()!=own:raise DesktopTemporarilyHidden('调整输入区时检测到人工操作')
+        finally:
+            if U.SendInput(1,(INPUT*1)(events[1]),ctypes.sizeof(INPUT))!=1:
+                raise DesktopUnavailable('输入区分隔线释放未确认')
+        return self.input_generation()
 
     def click_send(self) -> None:
         self.assert_input_focus()

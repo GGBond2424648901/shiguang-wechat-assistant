@@ -224,7 +224,9 @@ def test_manual_text_crop_does_not_hide_sticker_below_send_footer(tmp_path):
     frame=Image.open(prepared.path).convert('RGB').resize((150,150),Image.Resampling.LANCZOS)
     visible=Image.new('RGB',(766,809),(237,237,237));visible.paste(frame,(20,649))
     desktop.capture=lambda:visible
-    assert desktop.sticker_preview_fits(prepared)
+    # Readback can see a low preview, but the actual short editor must be
+    # expanded before a new paste; footer pixels are not usable editor height.
+    assert not desktop.sticker_preview_fits(prepared)
     assert desktop.verify_sticker_input(prepared)
     assert prepared.path.read_bytes()==original  # No flattened/downscaled transport.
     wrong=Image.new('RGB',(766,809),(237,237,237));wrong.paste(frame,(20,460))

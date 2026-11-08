@@ -201,7 +201,6 @@ tests/test_sticker_frequency.py
 tests/test_reply_rules_ui.py
 tests/test_settings_conflicts.py
 docs/screenshots/provenance.json
-docs/media/shiguang-real-use-15s.gif
 停止拾光微信聊天助手.cmd
 启动拾光微信聊天助手.cmd
 启动拾光微信聊天助手.vbs
@@ -270,16 +269,7 @@ desktop/scripts/check-window-shape.cjs
 desktop/scripts/check-visual.cjs
 desktop/scripts/record-preview.cjs
 docs/screenshots/desktop-appearance.png
-docs/screenshots/desktop-calibration.png
-docs/screenshots/desktop-close.png
-docs/screenshots/desktop-companion.png
-docs/screenshots/desktop-schedules.png
-docs/screenshots/desktop-import.png
-docs/screenshots/desktop-persona.png
-docs/screenshots/desktop-sessions.png
-docs/screenshots/desktop-settings.png
 docs/screenshots/desktop-stickers.png
-docs/screenshots/desktop-workbench.png
 scripts/qa_desktop_adapter.py
 scripts/qa_ui_baseline.py
 tests/test_desktop_services.py
@@ -305,3 +295,4 @@ desktop/scripts/session-draft.test.cjs
 desktop/scripts/check-session-sync.cjs
 tests/test_calibration_preview.py
 tests/test_owner_persona_context.py
+tests/test_sticker_editor_space.py

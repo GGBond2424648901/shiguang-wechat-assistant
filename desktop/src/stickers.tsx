@@ -1,25 +1,58 @@
 import { ArrowLeft, BookOpen, CircleHelp, FolderOpen, Images, Plus, RefreshCw, Save, Search, Send, Smile, Tags, X } from "lucide-react";
 import { useDraftGuard } from "./components";
-import { memo, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { errorMessage, frequencies, mediaUrl, priorities, request, tagsFromText, type Catalog, type Sticker, type StickerDetail } from "./api";
 import { Button, Confirm, Empty, IconButton, PanelTitle, Select, Switch } from "./components";
 import { ImportPanel, useImports } from "./sticker-import";
 
 const BLOCK = 72;
 const INITIAL = { width: 640, height: 440, row: 172 };
+// A full viewport can load immediately while the bridge retains capacity for catalogue queries.
+const GALLERY_IMAGE_SLOTS = 20;
+const queuedImages = new Map<HTMLImageElement, string>();
+const loadingImages = new Set<HTMLImageElement>();
 type Notify = (message: string, error?: boolean) => void;
 type Gallery = { key: string; meta: Catalog; blocks: Map<number, Sticker[]> };
 type Subpage = "library" | "import" | "detail" | "guide";
 
+function loadQueuedImages() {
+  for (const [image, source] of queuedImages) {
+    if (loadingImages.size >= GALLERY_IMAGE_SLOTS) break;
+    if (loadingImages.has(image)) continue;
+    queuedImages.delete(image);
+    loadingImages.add(image);
+    // Electron keeps serving already started requests even after their tiles unmount.
+    const finish = () => {
+      image.removeEventListener("load", finish);
+      image.removeEventListener("error", finish);
+      loadingImages.delete(image);
+      loadQueuedImages();
+    };
+    image.addEventListener("load", finish);
+    image.addEventListener("error", finish);
+    image.src = source;
+  }
+}
+
 const Tile = memo(function Tile({ item, active, open }: { item: Sticker; active: boolean; open: (item: Sticker) => void }) {
   const [hover, setHover] = useState(false);
   const [broken, setBroken] = useState(false);
+  const image = useRef<HTMLImageElement>(null);
   const animate = active && hover && item.animated && document.documentElement.dataset.reduceMotion !== "true"
     && !matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const source = mediaUrl(item, animate);
+  useLayoutEffect(() => {
+    const node = image.current;
+    if (!active || broken || !node || node.getAttribute("src") === source) return;
+    queuedImages.set(node, source);
+    loadQueuedImages();
+    return () => { queuedImages.delete(node); };
+  }, [active, broken, source]);
+
   return <button type="button" className="sticker-tile" onClick={() => open(item)}
     onPointerEnter={() => setHover(true)} onPointerLeave={() => setHover(false)}>
     <span className="tile-art">
-      {broken ? <Images size={22} /> : <img alt="" draggable={false} decoding="async" src={mediaUrl(item, animate)}
+      {broken ? <Images size={22} /> : <img ref={image} alt="" draggable={false} decoding="async"
         onError={() => setBroken(true)} />}
       {item.animated && <span className="gif-label">GIF</span>}
     </span>
