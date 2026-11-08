@@ -5,16 +5,36 @@ from pathlib import Path
 import subprocess
 import sys
 
-from .panel_entry import signal_panel
+from .panel_entry import signal_panel, _panel_present, _identity
 from .config import configuration_lock
 from .privacy import atomic_private_write, private_dir
+
+
+def current_panel_running(root, executable, target):
+    """Only reuse the intended build, never a tray panel left by an old build."""
+    import psutil
+    def path_key(value):
+        return str(Path(value).resolve()).casefold()
+    expected_root, expected_executable = path_key(root), path_key(executable)
+    for process in psutil.process_iter(['exe', 'cmdline']):
+        try:
+            info = process.info
+            if not info.get('exe') or path_key(info['exe']) != expected_executable:
+                continue
+            args = info.get('cmdline') or []
+            if not any(arg.startswith('--profile=') and path_key(arg[10:]) == expected_root for arg in args):
+                continue
+            if target and not any(path_key(arg) == path_key(target[0]) for arg in args[1:] if not arg.startswith('-')):
+                continue
+            return True
+        except (psutil.NoSuchProcess, psutil.AccessDenied, OSError, ValueError):
+            continue
+    return False
 
 
 def launch_desktop(root, *, force_legacy=False):
     if force_legacy or os.name != 'nt':
         return False
-    if signal_panel(root):
-        return True
     frozen = getattr(sys, 'frozen', False)
     if frozen:
         project = Path(sys.executable).parent
@@ -30,7 +50,12 @@ def launch_desktop(root, *, force_legacy=False):
         entry = desktop / 'dist/index.html'
         target = [str(desktop)]
     if not executable.is_file() or not entry.is_file():
-        return False
+        raise ValueError('新版界面文件不完整，请重新安装或构建 desktop；只有显式选择旧版入口才会打开旧界面')
+    if _panel_present('Local\\Shiguang.Panel.' + _identity(root)):
+        if not current_panel_running(root, executable, target):
+            raise ValueError('另一位置或旧版的助手界面仍在运行，请在该界面选择“完全退出”后再打开新版；已保存的设置不会改变')
+        if signal_panel(root):
+            return True
     arguments = [str(executable.resolve()), *target, '--profile=' + str(Path(root).resolve()), '--writable', '--managed']
     from .launch import in_job, _launch_wmi
     if in_job():

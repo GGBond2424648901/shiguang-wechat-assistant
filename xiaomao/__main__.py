@@ -7,6 +7,14 @@ import sys
 from .paths import default_root
 
 
+def report_error(command, message):
+    if command == 'gui' and sys.stderr is None and os.name == 'nt':
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(None, message, '拾光微信聊天助手 · 启动未完成', 0x10)
+    else:
+        print(json.dumps({'error': message}, ensure_ascii=False), file=sys.stderr)
+
+
 def apply_initial_mode(engine,store,initial_mode):
     """Apply before the worker thread and control endpoint become observable."""
     if initial_mode in ('paused','observe'):
@@ -72,7 +80,7 @@ def main():
         sys.stderr.reconfigure(encoding="utf-8")
     from .brand import APP_NAME
     parser = argparse.ArgumentParser(description=APP_NAME+'，启动遵循本机运行偏好')
-    parser.add_argument("--root", type=Path, default=default_root())
+    parser.add_argument("--root", type=Path)
     parser.add_argument("command", nargs="?", default="gui", choices=["gui","daemon","mcp","start","observe","enable","status","pause","stop","doctor","key","test-model","desktop-bridge"])
     parser.add_argument("--stdin", action="store_true", help="key 命令从标准输入读取；一行更新主密钥，多行依次替换主密钥及备用密钥")
     parser.add_argument("--ocr", action="store_true", help="doctor 使用内置测试文字核对 OCR，可离线运行")
@@ -80,22 +88,28 @@ def main():
     parser.add_argument('--legacy-ui', action='store_true', help='使用旧版桌面面板')
     parser.add_argument('--managed', action='store_true', help=argparse.SUPPRESS)
     parser.add_argument('--read-only', action='store_true', help=argparse.SUPPRESS)
+    parser.add_argument('--remember-profile', action='store_true', help='让安装版入口沿用指定的现有数据目录')
     args = parser.parse_args()
-    if args.command == 'desktop-bridge':
-        from .desktop_bridge import run_bridge
-        run_bridge(args.root, read_only=args.read_only, managed=args.managed)
-        return
     from .client import ControlClient, ControlUnavailable
     from .config import Settings
     from .credentials import CredentialStore, CredentialError
     from .model import ModelError
     try:
-        root = args.root.resolve()
+        root = (args.root or default_root()).resolve()
+        if args.command == 'desktop-bridge':
+            from .desktop_bridge import run_bridge
+            run_bridge(root, read_only=args.read_only, managed=args.managed)
+            return
         client = ControlClient(root)
         if args.command == "daemon":
             daemon(root,args.initial_mode)
             return
         if args.command == "gui":
+            if args.remember_profile:
+                if args.root is None:
+                    raise ValueError('请明确指定要沿用的数据目录')
+                from .paths import remember_profile
+                remember_profile(root)
             from .desktop_launch import launch_desktop
             if not launch_desktop(root, force_legacy=args.legacy_ui):
                 from .gui import launch
@@ -143,11 +157,11 @@ def main():
                 client.wait_stopped()
         print(json.dumps(result, ensure_ascii=False))
     except (ControlUnavailable, CredentialError, ModelError, ValueError) as error:
-        print(json.dumps({"error": str(error)}, ensure_ascii=False), file=sys.stderr)
+        report_error(args.command, str(error))
         raise SystemExit(1)
     except Exception:
         # 不把可能携带请求信息的外部异常写入日志。
-        print(json.dumps({"error": "操作未能完成，请检查本机设置和运行环境"}, ensure_ascii=False), file=sys.stderr)
+        report_error(args.command, '操作未能完成，请检查本机设置和运行环境')
         raise SystemExit(1)
 
 

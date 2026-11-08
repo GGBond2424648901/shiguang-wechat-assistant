@@ -310,3 +310,6 @@ xiaomao/desktop_settings.py
 xiaomao/receipts.py
 xiaomao/settings_service.py
 packaging/build_desktop.ps1
+
+tests/test_profile_entry.py
+desktop/scripts/check-corner-pixels.cjs

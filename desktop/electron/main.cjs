@@ -3,7 +3,7 @@ const { createHash } = require("node:crypto");
 const fs = require("node:fs/promises");
 const path = require("node:path");
 const { Broker } = require("./broker.cjs");
-const { applyRoundedWindowShape, isWindowFullscreen } = require("./window-shape.cjs");
+const { prepareTransparentWindow, isWindowFullscreen } = require("./window-shape.cjs");
 
 const packaged = app.isPackaged && !process.defaultApp;
 const project = packaged ? path.resolve(path.dirname(process.execPath), "..") : path.resolve(__dirname, "../..");
@@ -60,7 +60,7 @@ function secureWindow(options) {
   window.webContents.on("will-attach-webview", (event) => event.preventDefault());
   window.webContents.session.setPermissionRequestHandler((_, __, callback) => callback(false));
   window.webContents.session.setPermissionCheckHandler(() => false);
-  if (process.platform === "win32") windowShapes.set(window, applyRoundedWindowShape(window, options.parent ? 20 : 24));
+  if (process.platform === "win32") windowShapes.set(window, prepareTransparentWindow(window));
   return window;
 }
 

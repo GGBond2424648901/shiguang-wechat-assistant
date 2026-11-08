@@ -22,4 +22,8 @@ uv pip install --python .venv/Scripts/python.exe --require-hashes --only-binary 
 .\.venv\Scripts\python.exe -X utf8 packaging/smoke_installed.py "$env:LOCALAPPDATA\Programs\XiaomaoAssistant"
 ```
 
-检查会对合成图片运行离线 OCR，并用临时配置和模拟只读控制端点打开、关闭实际的安装版面板。每个 Windows 桌面会话仅允许一个真实后台助手。源码版与安装版可分别保存设置，但使用真实微信时应只启动一份后台程序。
+检查会对合成图片运行离线 OCR，并用临时配置和模拟只读控制端点打开、关闭实际的安装版面板。可用 `--entry vbs` 和 `--entry shortcut` 分别验证启动入口。测试配置与真实微信隔离。
+
+v0.3.4 起，已有项目的 VBS 会登记原数据目录，安装快捷方式随后沿用它；登记文件只包含目录路径。VBS 同时校验程序及 renderer 构建版本，不满足时说明原因，不再自动打开旧界面。明确使用 `--root` 可以指定另一处数据。每个 Windows 桌面会话仅运行一份真实后台助手。
+
+四角回归可运行 `node desktop/scripts/check-corner-pixels.cjs`，检查 100%、125%、150%、200% 下主窗、失焦、小弹窗、校准窗口和调整尺寸后的四角透明过渡，以及四边金边完整性。边界由 Chromium 合成，不使用整数矩形拼接的 Windows 裁切区域。

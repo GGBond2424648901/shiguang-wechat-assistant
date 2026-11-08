@@ -16,6 +16,7 @@
   --faint: #aaa3be;
   --peach: #ffc59f;
   --peach-deep: #f2a977;
+  --window-gold: #d9b888;
   --mint: #a7eca7;
   --lavender: #dbcbec;
   --line: rgb(241 210 225 / .48);
@@ -56,11 +57,24 @@ h1, h2, h3, p { margin: 0; }
   width: 100%;
   height: 100%;
   overflow: hidden;
-  border: 1px solid rgb(255 199 153 / .83);
+  border: 0;
+  padding: 1px;
   border-radius: calc(24px / var(--ui-zoom, 1));
   background: radial-gradient(ellipse at 76% 18%, #34324c 0%, #1b2236 46%, #141825 100%);
 }
-.shell.maximized { border: 0; border-radius: 0; }
+.shell.maximized { border-radius: 0; }
+.shell::after, .calibration-shell::after, .close-window::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  z-index: 1000;
+  /* Inset paint keeps fractional-DPI borders inside the compositor surface.
+     CSS border rounding can otherwise drop the right/bottom device-pixel line. */
+  border: 0;
+  box-shadow: inset 0 0 0 1.5px var(--window-gold);
+  border-radius: inherit;
+  pointer-events: none;
+}
 .shell::before {
   content: "";
   position: absolute;
@@ -364,8 +378,9 @@ h1, h2, h3, p { margin: 0; }
 .toast-error { border-color: rgb(255 142 167 / .64); }
 .toast .button { border: 0; background: transparent; }
 .close-window {
+  position: relative; isolation: isolate;
   height: 100%; width: 100%; display: flex; flex-direction: column; border-radius: 20px; overflow: hidden;
-  border: 1px solid rgb(255 197 153 / .64); background: linear-gradient(155deg, #292739, #1d1d2c);
+  border: 0; padding: 1px; background: linear-gradient(155deg, #292739, #1d1d2c);
   animation: enter .16s var(--ease) both;
 }
 .close-window.leaving { animation: leave .10s ease-in both; }
@@ -634,7 +649,7 @@ h1, h2, h3, p { margin: 0; }
 
 
 .calibration-shell { display: flex; flex-direction: column; width: 100%; height: 100%; overflow: hidden;
-  background: #222435; border: 1px solid rgb(255 199 153 / .55); border-radius: 20px; animation: enter .16s var(--ease) both; }
+  position: relative; isolation: isolate; background: #222435; border: 0; padding: 1px; border-radius: 20px; animation: enter .16s var(--ease) both; }
 .calibration-target { margin-left: auto; min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; color: var(--subtle); font-size: 12px; }
 .calibration-body { min-height: 0; flex: 1; overflow: auto; padding: 13px 16px; display: flex; flex-direction: column; gap: 9px; }
 .calibration-controls { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }

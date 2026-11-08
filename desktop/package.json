@@ -1,6 +1,6 @@
 {
   "name": "shiguang-assistant-desktop",
-  "version": "0.3.3",
+  "version": "0.3.4",
   "private": true,
   "description": "拾光微信聊天助手桌面界面",
   "main": "electron/main.cjs",

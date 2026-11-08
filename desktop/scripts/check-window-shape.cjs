@@ -1,101 +1,28 @@
-const assert = require("node:assert/strict");
-const { EventEmitter } = require("node:events");
-const { test } = require("node:test");
-const { applyRoundedWindowShape, roundedWindowShape } = require("../electron/window-shape.cjs");
-
-function covers(rects, x, y) {
-  return rects.some(rect => x >= rect.x && x < rect.x + rect.width && y >= rect.y && y < rect.y + rect.height);
+const assert = require('node:assert/strict');
+const { EventEmitter } = require('node:events');
+const { test } = require('node:test');
+const { prepareTransparentWindow, isWindowFullscreen } = require('../electron/window-shape.cjs');
+class Window extends EventEmitter {
+  destroyed=false; fullScreen=false; paints=[];
+  isDestroyed(){return this.destroyed;}
+  isFullScreen(){return this.fullScreen;}
+  setShape(){throw new Error('A binary region removes the antialiased edge');}
+  setBackgroundColor(color){this.paints.push(['window',color]);}
+  contentView={setBackgroundColor:color=>this.paints.push(['root',color]),children:[{setBackgroundColor:color=>this.paints.push(['content',color])}]};
+  hookWindowMessage(message,callback){this.dpi=callback;}
 }
-
-test("window region covers the client and leaves the corners outside", () => {
-  const shape = roundedWindowShape(530, 344, 24);
-
-  for (const [x, y] of [[0, 0], [529, 0], [0, 343], [529, 343], [-1, 172], [530, 172], [265, 344]]) {
-    assert.equal(covers(shape, x, y), false, `corner at ${x}, ${y}`);
-  }
-  for (const [x, y] of [[265, 0], [265, 343], [0, 172], [529, 172], [13, 3], [516, 340]]) {
-    assert.equal(covers(shape, x, y), true, `client resize edge at ${x}, ${y}`);
-  }
-  for (const rect of shape) {
-    assert.ok(Object.values(rect).every(Number.isInteger));
-    assert.ok(rect.x >= 0 && rect.y >= 0 && rect.width > 0 && rect.height > 0);
-    assert.ok(rect.x + rect.width <= 530 && rect.y + rect.height <= 344);
-  }
+test('all native backing layers stay transparent without a binary window region',()=>{
+ const w=new Window();const ready=prepareTransparentWindow(w);ready();
+ assert.deepEqual(w.paints,[['window','#00000000'],['root','#00000000'],['content','#00000000']]);
+ w.emit('blur');w.emit('focus');w.emit('resize');
+ assert.equal(w.paints.length,3,'ordinary input should not rebuild the compositor');
 });
-
-class TestWindow extends EventEmitter {
-  width = 530;
-  height = 344;
-  inset = 7;
-  maximized = false;
-  fullScreen = false;
-  minimized = false;
-  destroyed = false;
-  shape = null;
-  shapeCalls = 0;
-
-  getBounds() { return { x: 759, y: 380, width: this.width, height: this.height }; }
-  isMaximized() { return this.maximized; }
-  isFullScreen() { return this.fullScreen; }
-  isMinimized() { return this.minimized; }
-  isDestroyed() { return this.destroyed; }
-  setShape(shape) { this.shape = shape; this.shapeCalls++; }
-  hookWindowMessage(message, callback) { this.dpiChange = message === 0x02E0 ? callback : undefined; }
-
-  webContents = {
-    executeJavaScript: async () => ({ width: this.width + this.inset * 2, height: this.height + this.inset }),
-  };
-}
-
-test("normal, resized, restored, and full-screen windows use the appropriate region", async () => {
-  const window = new TestWindow();
-  const prepare = applyRoundedWindowShape(window, 24);
-
-  await prepare();
-  assert.ok(covers(window.shape, 529, 172));
-  assert.ok(!covers(window.shape, 530, 172));
-  assert.ok(!covers(window.shape, 265, 344));
-
-  window.width = 650;
-  window.height = 440;
-  window.emit("resize");
-  assert.ok(covers(window.shape, 649, 220));
-  assert.ok(covers(window.shape, 325, 439));
-  assert.ok(!covers(window.shape, 650, 220));
-  assert.ok(!covers(window.shape, 325, 440));
-
-  window.maximized = true;
-  window.emit("maximize");
-  assert.deepEqual(window.shape, []);
-  window.maximized = false;
-  window.emit("unmaximize");
-  assert.ok(covers(window.shape, 649, 220));
-
-  // Electron's frameless fullscreen emits events without changing the widget flag.
-  assert.equal(window.isFullScreen(), false);
-  window.emit("enter-full-screen");
-  assert.deepEqual(window.shape, []);
-  window.emit("leave-full-screen");
-  assert.ok(covers(window.shape, 649, 220));
-
-  window.minimized = true;
-  window.width = 600;
-  window.emit("resize");
-  assert.ok(covers(window.shape, 649, 220));
-  window.minimized = false;
-  window.emit("restore");
-  assert.ok(covers(window.shape, 599, 220));
-  assert.ok(!covers(window.shape, 600, 220));
+test('full screen tracking survives bounds-based Windows full screen',()=>{
+ const w=new Window();prepareTransparentWindow(w);
+ w.emit('enter-full-screen');assert.equal(isWindowFullscreen(w),true);
+ w.emit('leave-full-screen');assert.equal(isWindowFullscreen(w),false);
 });
-
-test("a DPI change reapplies the region even when logical dimensions stay the same", async () => {
-  const window = new TestWindow();
-  const prepare = applyRoundedWindowShape(window, 24);
-  await prepare();
-  const count = window.shapeCalls;
-  window.inset = 8;
-  window.dpiChange();
-  await new Promise(setImmediate);
-  assert.equal(window.shapeCalls, count + 1);
-  assert.ok(!covers(window.shape, 530, 172));
+test('DPI reset refreshes transparency and a closed window is never touched',async()=>{
+ const w=new Window();const ready=prepareTransparentWindow(w);ready();w.dpi();await new Promise(setImmediate);
+ assert.equal(w.paints.length,6);w.destroyed=true;ready();assert.equal(w.paints.length,6);
 });
