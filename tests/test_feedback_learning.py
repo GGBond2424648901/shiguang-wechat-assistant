@@ -83,7 +83,7 @@ def test_feedback_extraction_keeps_sources_and_asks_for_behavioral_adaptation(tm
     assert '表达反馈' in captured[0] and '模型参数' in captured[0]
 
 
-def test_v4_execution_reminder_is_close_to_current_turn_not_only_in_long_persona(tmp_path,monkeypatch):
+def test_legacy_module_title_keeps_authored_text_without_injecting_fixed_v4_style(tmp_path,monkeypatch):
     from xiaomao.model import ChatModel
     from xiaomao.config import Settings
     from xiaomao.persona import save_persona
@@ -95,6 +95,7 @@ def test_v4_execution_reminder_is_close_to_current_turn_not_only_in_long_persona
     model.reply([Message('项目终于跑通了！')])
     messages=captured[0]['messages']
     assert '完整原稿' in messages[0]['content']
-    assert 'V4.0 当轮表达' in messages[-2]['content']
-    assert '花费时长' in messages[-2]['content']
-    assert '不是把每句改成问句' in messages[-2]['content']
+    dynamic = '\n'.join(m['content'] for m in messages[1:] if m['role']=='system')
+    assert 'V4.0 当轮表达' not in dynamic
+    assert '花费时长' not in dynamic
+    assert '不是把每句改成问句' not in dynamic

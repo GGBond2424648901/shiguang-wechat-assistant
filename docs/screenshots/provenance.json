@@ -1,414 +1,12 @@
 {
-  "captured_date": "2026-11-06",
-  "editing": "Opaque privacy masks and documented crop only; no UI or dialogue reconstruction",
+  "captured_date": "2026-11-08",
+  "editing": "Unedited actual application captures using isolated demonstration data",
   "screenshots": [
-    {
-      "file": "workspace.png",
-      "origin": "actual Windows application screenshot",
-      "source_sha256": "c26b01bc005b2f56f6dd3293a84002054ed6da554b7ba874b9cf9ee2573d1ac1",
-      "output_sha256": "78b97bbf2919d5f3b4d4bb62c9a34990f9d7b572247ca8a6421bcaad572005d9",
-      "source_size": [
-        960,
-        640
-      ],
-      "crop": [
-        0,
-        0,
-        960,
-        640
-      ],
-      "redaction_rectangles": [
-        [
-          228,
-          96,
-          403,
-          119
-        ],
-        [
-          675,
-          299,
-          790,
-          320
-        ],
-        [
-          675,
-          330,
-          800,
-          350
-        ],
-        [
-          675,
-          360,
-          804,
-          380
-        ],
-        [
-          675,
-          389,
-          785,
-          411
-        ],
-        [
-          252,
-          427,
-          485,
-          445
-        ],
-        [
-          252,
-          477,
-          485,
-          497
-        ],
-        [
-          252,
-          512,
-          485,
-          531
-        ],
-        [
-          252,
-          535,
-          485,
-          552
-        ]
-      ],
-      "unchanged_outside_redactions": true,
-      "note": "Current v0.2.13 application, existing account and settings; replies remain paused"
-    },
-    {
-      "file": "sessions.png",
-      "origin": "actual Windows application screenshot",
-      "source_sha256": "24456f93ea11989bd4c9ef59e38ca814f914751bf9e9c6ea62616a969ff347a6",
-      "output_sha256": "f7a319eeb5d4952f4b25a689283b3a378ad1a98dd51b55c2ac4d8e8b394a9d8f",
-      "source_size": [
-        960,
-        640
-      ],
-      "crop": [
-        0,
-        0,
-        960,
-        640
-      ],
-      "redaction_rectangles": [
-        [
-          236,
-          112,
-          412,
-          134
-        ],
-        [
-          236,
-          199,
-          456,
-          221
-        ],
-        [
-          236,
-          286,
-          496,
-          308
-        ],
-        [
-          596,
-          98,
-          809,
-          119
-        ]
-      ],
-      "unchanged_outside_redactions": true,
-      "note": "Current v0.2.13 application, existing account and settings; replies remain paused"
-    },
-    {
-      "file": "stickers.png",
-      "origin": "actual Windows application screenshot",
-      "source_sha256": "debfe1fbf137098555f5191442778b8d81238e253ff69ae72ef34470626768a2",
-      "output_sha256": "49f61fc4d6956b7f246ae59db571a9f987cc5c83d52b2bd0ffc21efb83aa7acd",
-      "source_size": [
-        960,
-        640
-      ],
-      "crop": [
-        0,
-        0,
-        960,
-        640
-      ],
-      "redaction_rectangles": [],
-      "unchanged_outside_redactions": true,
-      "note": "Current v0.2.13 application, existing account and settings; replies remain paused"
-    },
-    {
-      "file": "sticker-detail.png",
-      "origin": "actual Windows application screenshot",
-      "source_sha256": "2472ad0fb7fc1b3c0ce24d3af086e3d4311310419ec25584f2c91ecafa66f303",
-      "output_sha256": "7f06bf816708a72e048945ca29a40f9208a180fd3942a67284d106e0be47f44d",
-      "source_size": [
-        960,
-        640
-      ],
-      "crop": [
-        0,
-        0,
-        960,
-        640
-      ],
-      "redaction_rectangles": [],
-      "unchanged_outside_redactions": true,
-      "note": "Current v0.2.13 application, existing account and settings; replies remain paused"
-    },
-    {
-      "file": "companion.png",
-      "origin": "actual Windows application screenshot",
-      "source_sha256": "469d5673cbb84f398be90f994d543608ba73523bc58d3ccbeb4310759935df6f",
-      "output_sha256": "2fe3825b260aad0dfe24c535930b4167997ae2fd9e9b6f1c4a5095093b5a98ea",
-      "source_size": [
-        960,
-        640
-      ],
-      "crop": [
-        0,
-        0,
-        960,
-        640
-      ],
-      "redaction_rectangles": [
-        [
-          246,
-          67,
-          404,
-          89
-        ],
-        [
-          800,
-          67,
-          924,
-          89
-        ]
-      ],
-      "unchanged_outside_redactions": true,
-      "note": "Current v0.2.13 application, existing account and settings; replies remain paused"
-    },
-    {
-      "file": "settings-pacing.png",
-      "origin": "actual Windows application screenshot",
-      "source_sha256": "553d90d5deb15e52d30b275ba79161057efc56f5532d0c8f1c3c71247a811d61",
-      "output_sha256": "72252b444af4f7e4de67a9dac97e90d9371c5ece1a025357e6dcab111c91f99f",
-      "source_size": [
-        960,
-        640
-      ],
-      "crop": [
-        0,
-        0,
-        960,
-        640
-      ],
-      "redaction_rectangles": [
-        [
-          232,
-          205,
-          296,
-          225
-        ],
-        [
-          638,
-          154,
-          855,
-          173
-        ],
-        [
-          638,
-          314,
-          815,
-          335
-        ]
-      ],
-      "unchanged_outside_redactions": true,
-      "note": "Current v0.2.13 application, existing account and settings; replies remain paused"
-    },
-    {
-      "file": "pacing.png",
-      "origin": "actual Windows application screenshot",
-      "source_sha256": "23236a31200e5d865581e6ef2fc1b485f79ac56912e71907330e1d90f5059b3b",
-      "output_sha256": "382ef930d27d7a87dde34d227fa2ddcb2b14042cb3fcf8c04b3b704952ebc08e",
-      "source_size": [
-        960,
-        640
-      ],
-      "crop": [
-        0,
-        0,
-        960,
-        640
-      ],
-      "redaction_rectangles": [
-        [
-          638,
-          63,
-          816,
-          83
-        ]
-      ],
-      "unchanged_outside_redactions": true,
-      "note": "Current v0.2.13 application, existing account and settings; replies remain paused"
-    },
-    {
-      "file": "feedback.png",
-      "origin": "actual Windows application screenshot",
-      "source_sha256": "6da4abf7fc52b55a06e82b8c026f9afd06198bd392353b348f1eea474eaf2bd2",
-      "output_sha256": "6c7db59a9fc9ebbce043cdfaf0e0691efbf78f93df2f30466d4f98e12b3139ad",
-      "source_size": [
-        960,
-        640
-      ],
-      "crop": [
-        0,
-        0,
-        960,
-        640
-      ],
-      "redaction_rectangles": [
-        [
-          228,
-          96,
-          403,
-          119
-        ],
-        [
-          675,
-          299,
-          790,
-          320
-        ],
-        [
-          675,
-          330,
-          800,
-          350
-        ],
-        [
-          675,
-          360,
-          804,
-          380
-        ],
-        [
-          675,
-          389,
-          785,
-          411
-        ],
-        [
-          252,
-          427,
-          485,
-          445
-        ],
-        [
-          252,
-          477,
-          485,
-          497
-        ],
-        [
-          252,
-          512,
-          485,
-          531
-        ],
-        [
-          252,
-          535,
-          485,
-          552
-        ]
-      ],
-      "unchanged_outside_redactions": true,
-      "note": "Current v0.2.13 application, existing account and settings; replies remain paused"
-    },
-    {
-      "file": "wechat-group-a-live.png",
-      "origin": "actual Windows application screenshot",
-      "source_sha256": "2c948e32249ee97539baa237bc676dbfd47be1ebebebd0c5b1896db309360ab7",
-      "output_sha256": "b187e9627359d39c8fd488670e844d42b93eecbb2797865d8a440807311706ff",
-      "source_size": [
-        602,
-        642
-      ],
-      "crop": [
-        0,
-        303,
-        601,
-        489
-      ],
-      "redaction_rectangles": [
-        [
-          12,
-          329,
-          59,
-          377
-        ],
-        [
-          66,
-          333,
-          181,
-          355
-        ],
-        [
-          538,
-          406,
-          585,
-          453
-        ]
-      ],
-      "unchanged_outside_redactions": true,
-      "note": "2026-11-06 historical verified WeChat exchange"
-    },
-    {
-      "file": "wechat-group-b-live.png",
-      "origin": "actual Windows application screenshot",
-      "source_sha256": "5ec2f49e0f6f8f1d17c34dac0a69a544dfd242f73d716a40b83bc40fb27097f5",
-      "output_sha256": "09b218ed0fa916ad7ad3b9f092de2c7e0722efb1716e16931c0981718d323797",
-      "source_size": [
-        601,
-        722
-      ],
-      "crop": [
-        0,
-        192,
-        601,
-        346
-      ],
-      "redaction_rectangles": [
-        [
-          13,
-          220,
-          62,
-          272
-        ],
-        [
-          66,
-          225,
-          288,
-          248
-        ],
-        [
-          538,
-          295,
-          584,
-          341
-        ]
-      ],
-      "unchanged_outside_redactions": true,
-      "note": "2026-11-06 historical verified WeChat exchange"
-    },
     {
       "file": "desktop-appearance.png",
       "origin": "actual Windows application screenshot",
-      "source_sha256": "be39a428e3b6d2477bf8156cde75ec4661e9744c746cef95afd8fe19264dca00",
-      "output_sha256": "be39a428e3b6d2477bf8156cde75ec4661e9744c746cef95afd8fe19264dca00",
+      "source_sha256": "6b14be9f12bb0e8f5cc71750acc5a86bfed9c19af143f9a9d3c0d06513e50ed4",
+      "output_sha256": "6b14be9f12bb0e8f5cc71750acc5a86bfed9c19af143f9a9d3c0d06513e50ed4",
       "source_size": [
         1586,
         992
@@ -421,7 +19,7 @@
       ],
       "redaction_rectangles": [],
       "unchanged_outside_redactions": true,
-      "note": "v0.3.4 Electron production renderer, fictional test conversations, user-authorized local wallpaper, cursor excluded; calibration preview is a synthetic test fixture"
+      "note": "v0.3.5 Electron application, isolated synthetic fixtures and generic default persona; no personal profile or wallpaper"
     },
     {
       "file": "desktop-calibration.png",
@@ -440,13 +38,13 @@
       ],
       "redaction_rectangles": [],
       "unchanged_outside_redactions": true,
-      "note": "v0.3.4 Electron production renderer, fictional test conversations, user-authorized local wallpaper, cursor excluded; calibration preview is a synthetic test fixture"
+      "note": "v0.3.5 Electron application, isolated synthetic fixtures and generic default persona; no personal profile or wallpaper"
     },
     {
       "file": "desktop-close.png",
       "origin": "actual Windows application screenshot",
-      "source_sha256": "fa3d683a5410503489998152652745e2c1dc0c2ee78b0997195575752be78cbc",
-      "output_sha256": "fa3d683a5410503489998152652745e2c1dc0c2ee78b0997195575752be78cbc",
+      "source_sha256": "4e115f2d412acbf99636375a7346fd087f726ecfdfa9a4ebdbcca547460b2d17",
+      "output_sha256": "4e115f2d412acbf99636375a7346fd087f726ecfdfa9a4ebdbcca547460b2d17",
       "source_size": [
         593,
         390
@@ -459,13 +57,13 @@
       ],
       "redaction_rectangles": [],
       "unchanged_outside_redactions": true,
-      "note": "v0.3.4 Electron production renderer, fictional test conversations, user-authorized local wallpaper, cursor excluded; calibration preview is a synthetic test fixture"
+      "note": "v0.3.5 Electron application, isolated synthetic fixtures and generic default persona; no personal profile or wallpaper"
     },
     {
       "file": "desktop-companion.png",
       "origin": "actual Windows application screenshot",
-      "source_sha256": "58e91a211e7350187b1c0a13a51a344a1027fe070cda01c406b09fccbaaf298d",
-      "output_sha256": "58e91a211e7350187b1c0a13a51a344a1027fe070cda01c406b09fccbaaf298d",
+      "source_sha256": "5d296a7f133e4c45ed1529a278cd7016dd6fd094c6b7f6070c6447e6b935728e",
+      "output_sha256": "5d296a7f133e4c45ed1529a278cd7016dd6fd094c6b7f6070c6447e6b935728e",
       "source_size": [
         1586,
         992
@@ -478,13 +76,13 @@
       ],
       "redaction_rectangles": [],
       "unchanged_outside_redactions": true,
-      "note": "v0.3.4 Electron production renderer, fictional test conversations, user-authorized local wallpaper, cursor excluded; calibration preview is a synthetic test fixture"
+      "note": "v0.3.5 Electron application, isolated synthetic fixtures and generic default persona; no personal profile or wallpaper"
     },
     {
       "file": "desktop-import.png",
       "origin": "actual Windows application screenshot",
-      "source_sha256": "aa6d0a3b8141fae49d7a1b2b25e20c2b3f786d0d4b44d5c6a7e56d5b4328ffb2",
-      "output_sha256": "aa6d0a3b8141fae49d7a1b2b25e20c2b3f786d0d4b44d5c6a7e56d5b4328ffb2",
+      "source_sha256": "307b9f63b03237f94e5d6967eddbea63e88f8d5ad203b25aed270fa938a8d616",
+      "output_sha256": "307b9f63b03237f94e5d6967eddbea63e88f8d5ad203b25aed270fa938a8d616",
       "source_size": [
         1585,
         992
@@ -497,13 +95,13 @@
       ],
       "redaction_rectangles": [],
       "unchanged_outside_redactions": true,
-      "note": "v0.3.4 Electron production renderer, fictional test conversations, user-authorized local wallpaper, cursor excluded; calibration preview is a synthetic test fixture"
+      "note": "v0.3.5 Electron application, isolated synthetic fixtures and generic default persona; no personal profile or wallpaper"
     },
     {
       "file": "desktop-persona.png",
       "origin": "actual Windows application screenshot",
-      "source_sha256": "f11267689344e5cf92ec563039703ad2ccf709a20ce118086101151b8d877aa3",
-      "output_sha256": "f11267689344e5cf92ec563039703ad2ccf709a20ce118086101151b8d877aa3",
+      "source_sha256": "bb7979d75d1ca25a21fff7a498dd2e1b7afcbc162f049293787a70579b25b2e4",
+      "output_sha256": "bb7979d75d1ca25a21fff7a498dd2e1b7afcbc162f049293787a70579b25b2e4",
       "source_size": [
         1586,
         992
@@ -516,13 +114,13 @@
       ],
       "redaction_rectangles": [],
       "unchanged_outside_redactions": true,
-      "note": "v0.3.4 Electron production renderer, fictional test conversations, user-authorized local wallpaper, cursor excluded; calibration preview is a synthetic test fixture"
+      "note": "v0.3.5 Electron application, isolated synthetic fixtures and generic default persona; no personal profile or wallpaper"
     },
     {
       "file": "desktop-sessions.png",
       "origin": "actual Windows application screenshot",
-      "source_sha256": "2d457c26cf0d7f56fbbaf135b8e7bdf7f10392453e616d8376a7971a91993b4c",
-      "output_sha256": "2d457c26cf0d7f56fbbaf135b8e7bdf7f10392453e616d8376a7971a91993b4c",
+      "source_sha256": "46a1d8095063ef47e5a574246c2fb1703c95f87e80f71a639f166797f81d93b4",
+      "output_sha256": "46a1d8095063ef47e5a574246c2fb1703c95f87e80f71a639f166797f81d93b4",
       "source_size": [
         1487,
         1058
@@ -535,13 +133,13 @@
       ],
       "redaction_rectangles": [],
       "unchanged_outside_redactions": true,
-      "note": "v0.3.4 Electron production renderer, fictional test conversations, user-authorized local wallpaper, cursor excluded; calibration preview is a synthetic test fixture"
+      "note": "v0.3.5 Electron application, isolated synthetic fixtures and generic default persona; no personal profile or wallpaper"
     },
     {
       "file": "desktop-settings.png",
       "origin": "actual Windows application screenshot",
-      "source_sha256": "b787a3fca04abaa2103245065f4f9b36f1247b5b563948a073a662036cc812e1",
-      "output_sha256": "b787a3fca04abaa2103245065f4f9b36f1247b5b563948a073a662036cc812e1",
+      "source_sha256": "72ac77176da3d171acb3528669a5fbf05dea31b72cca33691e9c6723616520c1",
+      "output_sha256": "72ac77176da3d171acb3528669a5fbf05dea31b72cca33691e9c6723616520c1",
       "source_size": [
         1586,
         992
@@ -554,13 +152,13 @@
       ],
       "redaction_rectangles": [],
       "unchanged_outside_redactions": true,
-      "note": "v0.3.4 Electron production renderer, fictional test conversations, user-authorized local wallpaper, cursor excluded; calibration preview is a synthetic test fixture"
+      "note": "v0.3.5 Electron application, isolated synthetic fixtures and generic default persona; no personal profile or wallpaper"
     },
     {
       "file": "desktop-stickers.png",
       "origin": "actual Windows application screenshot",
-      "source_sha256": "48431fded536dce2894abac5b6ca2dad8c0fea04a665617dabb7790733d44ccf",
-      "output_sha256": "48431fded536dce2894abac5b6ca2dad8c0fea04a665617dabb7790733d44ccf",
+      "source_sha256": "8df58332a6a77613bf2414848fc4982fab8f3762f74a067917d7d914dc7795a1",
+      "output_sha256": "8df58332a6a77613bf2414848fc4982fab8f3762f74a067917d7d914dc7795a1",
       "source_size": [
         1586,
         992
@@ -573,35 +171,26 @@
       ],
       "redaction_rectangles": [],
       "unchanged_outside_redactions": true,
-      "note": "v0.3.4 Electron production renderer, fictional test conversations, user-authorized local wallpaper, cursor excluded; calibration preview is a synthetic test fixture"
+      "note": "v0.3.5 Electron application, isolated synthetic fixtures and generic default persona; no personal profile or wallpaper"
     },
     {
       "file": "desktop-workbench.png",
       "origin": "actual Windows application screenshot",
-      "source_sha256": "5bb62a21c353560a24bbaae4e1e160bd77fc9d4826b15b4ec6c5fe9f715dbfe1",
-      "output_sha256": "5bb62a21c353560a24bbaae4e1e160bd77fc9d4826b15b4ec6c5fe9f715dbfe1",
+      "source_sha256": "4be96a6beb2453020e4cc15d0cb5fdf08871117dc90168f735bf5a8325d20dc0",
+      "output_sha256": "4be96a6beb2453020e4cc15d0cb5fdf08871117dc90168f735bf5a8325d20dc0",
       "source_size": [
-        1487,
-        1058
+        1562,
+        1007
       ],
       "crop": [
         0,
         0,
-        1487,
-        1058
+        1562,
+        1007
       ],
       "redaction_rectangles": [],
       "unchanged_outside_redactions": true,
-      "note": "v0.3.4 Electron production renderer, fictional test conversations, user-authorized local wallpaper, cursor excluded; calibration preview is a synthetic test fixture"
+      "note": "v0.3.5 Electron application, isolated synthetic fixtures and generic default persona; no personal profile or wallpaper"
     }
-  ],
-  "desktop_capture": {
-    "date": "2026-11-08",
-    "version": "0.3.4",
-    "renderer": "Electron production build",
-    "profile": "isolated synthetic demonstration",
-    "wallpaper": "user-authorized local background shown in actual application; original excluded from public source and installer",
-    "cursor": "excluded by renderer capture",
-    "editing": "none"
-  }
+  ]
 }

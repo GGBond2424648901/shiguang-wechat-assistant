@@ -7,7 +7,7 @@ import re
 from .privacy import atomic_private_write
 
 
-DEFAULT = (Path(__file__).parent / "_vendor/dafeiyu/persona-wechat.md").read_bytes().decode("utf-8")
+DEFAULT = (Path(__file__).parent / "default_persona.md").read_bytes().decode("utf-8")
 
 PERSONA_CATEGORIES = {
     'identity':'角色身份', 'style':'表达风格', 'relationship':'关系与分寸',

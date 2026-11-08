@@ -54,6 +54,12 @@ def test_model_history_uses_real_user_assistant_roles_and_targets_latest_input(t
     from xiaomao.model import ChatModel
     from xiaomao.config import Settings
     from xiaomao.domain import Message
+    folder=tmp_path/'config/presets';folder.mkdir(parents=True)
+    (folder/'xiaoling.yml').write_text(json.dumps({'prompts':[
+        {'role':'system','content':'{persona}'},
+        {'role':'user','content':'周末去拍照吗？'},
+        {'role':'assistant','content':'可以去公园试试。'},
+    ]},ensure_ascii=False),encoding='utf-8')
     captured=[]
     def endpoint(request):
         captured.append(json.loads(request.content))

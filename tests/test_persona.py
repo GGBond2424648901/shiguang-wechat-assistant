@@ -3,7 +3,7 @@ import pytest
 
 def test_persona_can_be_changed_without_editing_code(tmp_path):
     from xiaomao.persona import load_persona,save_persona
-    assert '小玲' in load_persona(tmp_path)
+    assert '拾光' in load_persona(tmp_path)
     save_persona(tmp_path,'# 小玲\n温柔、清晰，技术问题先解释原因。')
     assert load_persona(tmp_path)=='# 小玲\n温柔、清晰，技术问题先解释原因。'
 
@@ -29,23 +29,15 @@ def test_sections_round_trip_original_and_edit_one_duplicate_heading(tmp_path):
     assert (tmp_path/'config/persona.md').read_bytes() == raw.replace('话题结束就收住','在句尾保留句号').encode()
 
 
-def test_editing_default_voice_stops_the_default_postprocessor(tmp_path):
-    from dataclasses import replace
+def test_factory_persona_does_not_enable_character_specific_postprocessing(tmp_path):
     from xiaomao.config import Settings
     from xiaomao.model import ChatModel
-    from xiaomao.persona import DEFAULT, join_persona, save_persona, split_persona
-    from xiaomao.wechat_voice import SECTION
-    model = ChatModel(Settings(tmp_path))
-    assert model.finalize_wechat_bubble('浪来了。', [], []) == '浪来了'
-    updated = [replace(s, body='表达按常用书面语，保留句号。\n') if s.heading == SECTION else s
-               for s in split_persona(DEFAULT)]
-    save_persona(tmp_path, join_persona(updated))
-    assert model.finalize_wechat_bubble('浪来了。', [], []) == '浪来了。'
-    save_persona(tmp_path, DEFAULT+'\n【表达风格】\n我写的每句话都要以句号结束。\n')
-    assert model.finalize_wechat_bubble('浪来了。', [], []) == '浪来了。'
-
-
-def test_persona_title_identifies_the_character_even_when_it_mentions_voice():
-    from xiaomao.persona import DEFAULT, split_persona
-    title=split_persona(DEFAULT)[0]
-    assert title.category=='identity' and '你是小玲' in title.body
+    from xiaomao.persona import DEFAULT, save_persona
+    model=ChatModel(Settings(tmp_path))
+    assert model.finalize_wechat_bubble('收到。',[],[])=='收到。'
+    assert len(DEFAULT.strip().splitlines())==2
+    assert all(word not in model._persona_instructions([]) for word in ('蓝色鲸鱼娘','V3.0','V4/V5','大肥鱼'))
+    save_persona(tmp_path,'# 本地作者\n按自己的风格表达。\n【微信语言执行约定·V3.0】\n')
+    assert model.finalize_wechat_bubble('收到。',[],[])=='收到'
+    save_persona(tmp_path,'# 作家\n保留句号。')
+    assert model.finalize_wechat_bubble('收到。',[],[])=='收到。'

@@ -14,32 +14,37 @@ def modules(tmp_path):
     ], title='大肥鱼', expected_revision=None)
 
 
-def test_positive_voice_focus_uses_enabled_original_sections_without_changing_them(tmp_path):
+def test_voice_reminder_keeps_all_personality_available_without_copying_excerpts(tmp_path):
     from xiaomao.persona_voice import voice_focus
-    original = modules(tmp_path)
+    from xiaomao.config import Settings
+    from xiaomao.model import ChatModel
+    state = modules(tmp_path)
     data = (tmp_path / 'config/persona_modules.json').read_bytes()
     text = voice_focus(tmp_path, [Message('项目终于搞定了，一起开心嘛')])
-    assert '分享喜悦时允许明显活泼' in text
-    assert '自然不等于平淡' in text
-    assert '被停用的例句' not in text and '路径必须保持原样' not in text
-    assert '不是本会话经历' in text
+    assert '完整启用原稿已经加载' in text and '不是本会话经历' in text
+    assert all(m.text in ChatModel(Settings(tmp_path))._persona_instructions([])
+               for m in state.modules if m.enabled)
+    assert not any(m.text in text for m in state.modules)
     assert (tmp_path / 'config/persona_modules.json').read_bytes() == data
 
 
-def test_focus_changes_with_current_turn_and_respects_serious_context(tmp_path):
+def test_negated_quoted_and_ambiguous_keywords_cannot_select_a_different_voice(tmp_path):
     from xiaomao.persona_voice import voice_focus
     modules(tmp_path)
-    assert '自己拿出一个有趣想法' in voice_focus(tmp_path, [Message('你来起个话题吧，不要一直问我')])
-    assert '温柔陪在这里' in voice_focus(tmp_path, [Message('不想说原因，今天有点低落')])
-    text = voice_focus(tmp_path, [Message('验证码能不能发给陌生人')])
-    assert '准确' in text and '尾巴要翘' not in text
+    phrases = ['你来起个话题吧', '还没到说晚安的时候，继续聊',
+               '我终于不用再输验证码啦', '“晚安”这两个字怎么翻译',
+               '验证码能不能发给陌生人', '不想说原因，今天有点低落']
+    reminders = [voice_focus(tmp_path, [Message(text)]) for text in phrases]
+    assert len(set(reminders)) == 1
+    assert '具体任务讲准讲全' in reminders[0]
+    assert '完整语义、否定、引用' in reminders[0]
 
 
 def test_unrelated_persona_has_no_whale_voice_injected(tmp_path):
     from xiaomao.persona_voice import voice_focus
     from xiaomao.persona_modules import PersonaModule, save_modules
     save_modules(tmp_path, [PersonaModule('custom', '写作', '用简洁严谨的技术语言')], title='技术审阅', expected_revision=None)
-    assert voice_focus(tmp_path, [Message('今天开心')]) == ''
+    assert '大肥鱼' not in voice_focus(tmp_path, [Message('今天开心')])
 
 
 def test_not_doing_full_acceptance_is_not_a_celebration(tmp_path):
@@ -62,8 +67,9 @@ def test_full_persona_and_near_turn_voice_both_reach_model(tmp_path):
     model.reply([Message('今天的项目终于成功啦')])
     sent = calls[0]['messages']
     assert all(m.text in sent[0]['content'] for m in state.modules if m.enabled)
-    assert '本轮声线聚焦' in sent[-2]['content']
-    assert '分享喜悦时允许明显活泼' in sent[-2]['content']
+    assert '本轮人格执行' in sent[-2]['content']
+    assert '分享喜悦时允许明显活泼' not in sent[-2]['content']
+    assert sum(m['content'].count('固定运行边界：') for m in sent) == 1
     assert len(calls) == 1
 
 
@@ -152,8 +158,8 @@ def test_modular_prompt_uses_contextual_expressiveness_instead_of_global_restric
     text=model._compiled_persona().text
     assert '尽量80字内' not in text and '不每轮追问' not in text
     focus=voice_focus(tmp_path,[Message('今天开心想聊好多，你也活泼一点')])
-    assert '表达强度随场景变化' in focus
-    assert '追问可以有，也可以连续' in focus
+    assert '表达强度按原稿及当前语境决定' in focus
+    assert '不额外添加原稿未要求的词语、动作、颜文字或问句配额' in focus
 
 
 def test_proactive_uses_same_contextual_whale_voice(tmp_path,monkeypatch):
@@ -168,7 +174,7 @@ def test_proactive_uses_same_contextual_whale_voice(tmp_path,monkeypatch):
         return {'send':True,'text':'我想到个小主意'}
     monkeypatch.setattr(model,'_companion_json',generate)
     model.proactive([],Candidate('one','idle',1,2,0,'2026-11-07'))
-    assert '表达强度随场景变化' in captured[0]
+    assert '表达强度按原稿及当前语境决定' in captured[0]
     assert '1至2句、80字内' not in captured[0]
 
 

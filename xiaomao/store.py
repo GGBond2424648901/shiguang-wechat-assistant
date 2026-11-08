@@ -38,7 +38,7 @@ class StateStore:
               day TEXT NOT NULL, at REAL NOT NULL, state TEXT NOT NULL);
         """)
         columns={r[1] for r in self.db.execute('PRAGMA table_info(send_receipts)')}
-        for name in ('sticker_md5','sticker_id'):
+        for name in ('sticker_md5','sticker_id','confirmed_digest'):
             if name not in columns:self.db.execute(f"ALTER TABLE send_receipts ADD COLUMN {name} TEXT NOT NULL DEFAULT ''")
         # Keep only identity pairs after detailed receipts expire. Include uncertain
         # sends conservatively so an explicit novelty request cannot resend them.
@@ -185,7 +185,10 @@ class StateStore:
             if self.fingerprint(message.message_id) in json.loads(row['baseline']):return False
             if not -5<=message.created_at-row['at']<=120:return False
             cursor=self.db.execute("UPDATE tasks SET state='verified',reason='database_receipt' WHERE id=? AND state IN ('sending','unknown')",(task_id,))
-            return cursor.rowcount==1
+            if cursor.rowcount != 1:return False
+            self.db.execute("UPDATE send_receipts SET confirmed_digest=? WHERE task_id=?",
+                            (self.fingerprint(message.message_id),task_id))
+            return True
 
     def recent_stickers(self,group,now,*,all_history=False):
         with self.lock:

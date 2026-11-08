@@ -8,7 +8,7 @@ uv pip install --python .venv/Scripts/python.exe --require-hashes --only-binary 
 .\packaging\build.ps1 -Iscc 'C:\Program Files (x86)\Inno Setup 6\ISCC.exe' -ResourceEditor 'C:\Tools\rcedit-x64.exe'
 ```
 
-构建脚本先按 `public-files.txt` 导出新的源码树，再在内部构建。公开源码包括审核过的模块、素材和自包含测试；本机截图、历史记录、私有配置、供应商参考仓库及未授权表情图片从不进入清单。出厂人格由随包的上游适配模板生成。每次导出都必须指定一个不存在的新目录。
+构建脚本先按 `public-files.txt` 导出新的源码树，再在内部构建。公开源码包括审核过的模块、素材和自包含测试；本机截图、历史记录、私有配置、供应商参考仓库及未授权表情图片从不进入清单。出厂人格仅含两句通用提示，编辑入口与缺失配置时的默认值来自同一文件。完整人格、历史模板与本地修订不随包分发。每次导出都必须指定一个不存在的新目录。
 
 ```powershell
 .\.venv\Scripts\python.exe packaging/export_public.py build/public-review

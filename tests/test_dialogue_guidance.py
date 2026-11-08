@@ -29,11 +29,29 @@ def test_unknown_members_are_not_joined_and_evidence_stays_bounded():
     assert all(len(row['text'])<=320 for row in value['recent_member_turns'])
 
 
-def test_explicit_no_questions_focuses_on_contribution_and_carries_to_same_member_followup():
-    start=Message('不想做选择题，你来起个小话题',speaker_id=A)
-    assert '本轮动作：分享' in coordination_instruction([start])
-    assert '本轮动作：分享' in coordination_instruction([start,Message('继续呀',speaker_id=A)])
-    assert '本轮动作：分享' not in coordination_instruction([start,Message('继续呀',speaker_id=B)])
+def test_preferences_stay_in_member_evidence_without_regex_issued_speech_commands():
+    start = Message('不想做选择题，你来起个小话题',speaker_id=A)
+    text = coordination_instruction([start, Message('继续呀',speaker_id=A)])
+    assert start.text in text and '本轮动作：分享' not in text
+    assert start.text not in coordination_instruction([start, Message('继续呀',speaker_id=B)])
+    quoted = coordination_instruction([Message('“不要问我”这句话如何翻译？',speaker_id=A)])
+    assert '本轮动作：分享' not in quoted
+
+
+def test_expression_evidence_is_bounded_observation_of_confirmed_self_output():
+    from xiaomao.dialogue_guidance import expression_evidence
+    from dataclasses import replace
+    valid = Message('嘿嘿，真的开心', direction='out', speaker_id='self', delivery_status='verified', message_id='x')
+    invalid = [replace(valid,delivery_status=state) for state in ('', 'pending', 'not_sent', 'unknown')]
+    invalid += [replace(valid, speaker_id=A), replace(valid,quoted=True), replace(valid,quality=.2),
+                replace(valid,kind='emoji'), replace(valid,direction='in')]
+    evidence = expression_evidence([*invalid, valid, valid])
+    assert evidence == {'sample_size':1, 'openings':['嘿嘿，真的开心']}
+    long_history = [replace(valid,text='很长的回复'*100,message_id=str(i)) for i in range(30)]
+    evidence = expression_evidence(long_history)
+    assert evidence['sample_size'] == 12
+    assert all(len(text) == 24 for text in evidence['openings'])
+    assert '不是禁词表、配额或情绪标签' in coordination_instruction([valid])
 
 
 def test_lifelike_contribution_does_not_treat_old_assistant_claims_as_activity_evidence():

@@ -157,8 +157,10 @@ class DesktopService:
         return {'state': row['state'], 'summary': clean_text(row.get('summary')),
                 'reason': clean_text(row.get('reason')), 'at': row.get('at')}
 
-    def queue(self, session='', offset=0, limit=40, receipt_offset=0):
+    def queue(self, session='', offset=0, limit=40, receipt_offset=0, revision=''):
         cfg = Settings.load(self.root)
+        if revision and revision != config_revision(cfg):
+            raise ValueError('微信账号或监听范围已变化，请刷新队列')
         names = (self._session(cfg, session),) if session else cfg.allowed_groups
         if (type(offset) is not int or not 0 <= offset <= 160 or type(limit) is not int or not 1 <= limit <= 80
                 or type(receipt_offset) is not int or not 0 <= receipt_offset <= len(names) * ConversationMemory.MAX_MESSAGES):
@@ -192,11 +194,15 @@ class DesktopService:
                 or fresh.conversation_targets != cfg.conversation_targets
                 or configured_account(fresh) != configured_account(cfg)):
             raise ValueError('微信账号或监听范围已变化，请刷新队列')
+        self._connected_status(fresh)
         return {
             'tasks': rows[offset:offset + limit], 'total': len(rows), 'note': note,
             'receiptTotal': receipt_total,
-            'receipts': [{'at': when, 'group': group, 'text': clean_text(body)}
-                         for when, group, body in recent],
+            'receipts': [{
+                'id': row.id, 'at': row.at, 'group': row.group, 'kind': row.kind,
+                'text': clean_text(row.text, 1800), 'trigger': clean_text(row.trigger, 1800),
+                'linked': row.linked,
+            } for row in recent],
         }
 
     def start(self):

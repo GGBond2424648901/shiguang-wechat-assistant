@@ -79,7 +79,9 @@ def test_discussing_a_stock_order_is_not_a_request(text):
 
 
 def test_wechat_delivery_uses_last_verified_opening_and_keeps_receipts_in_sync(delivery):
+    from xiaomao.persona import save_persona
     engine,feed,_,clock,store=delivery
+    save_persona(engine.settings.root, '# 测试人格\n【微信语言执行约定·V3.0】\n闲聊不带句号，同一轮避免重复开场。')
     engine.desktop.type_sticker=feed.stage_sticker
     engine.desktop.verify_sticker_input=lambda item:True
     engine.model,requests=completion(engine.settings.root,json.dumps({'send':True,'text':'行吧，螺丝松了。行吧，再提一下。','sticker':''}))
@@ -112,7 +114,9 @@ def test_unsettled_frame_after_focus_is_reread_without_clicking_twice(delivery):
 
 
 def test_suppressed_face_does_not_drop_the_rest_of_an_addressed_reply(delivery):
+    from xiaomao.persona import save_persona
     engine,feed,_,clock,store=delivery
+    save_persona(engine.settings.root, '# 测试人格\n【微信语言执行约定·V3.0】\n闲聊不带句号，避免连续重复颜文字。')
     engine.desktop.type_sticker=feed.stage_sticker
     engine.desktop.verify_sticker_input=lambda item:True
     engine._remember(Message('上次笑了 (｡･ω･｡)',direction='out',speaker_id='self',message_id='earlier'))
@@ -543,8 +547,12 @@ def test_ordinary_current_turn_does_not_revive_historical_media_request(delivery
 
 
 @pytest.mark.parametrize('plain_fallback',[False,True])
-def test_model_to_verified_bubbles_preserves_line_breaks_and_spacing(delivery,plain_fallback):
+@pytest.mark.parametrize('legacy_voice',[False,True])
+def test_model_to_verified_bubbles_preserves_line_breaks_and_spacing(delivery,plain_fallback,legacy_voice):
+    from xiaomao.persona import save_persona
     engine,feed,_,clock,store = delivery
+    if legacy_voice:
+        save_persona(engine.settings.root, '# 测试人格\n【微信语言执行约定·V3.0】\n闲聊不带句号。')
     engine.desktop.type_sticker = feed.stage_sticker
     engine.desktop.verify_sticker_input = lambda sticker: True
     body = '  第一行  \r\n第二行  好呀！  最后一句。  '
@@ -553,9 +561,9 @@ def test_model_to_verified_bubbles_preserves_line_breaks_and_spacing(delivery,pl
     question(engine)
     for _ in range(3):
         engine.observe_once();clock.advance(4)
-    # A paragraph separator between two WeChat bubbles is not message content.
-    # Significant spaces *within* ordinary text still survive the round trip.
-    expected = ['第一行','第二行  好呀！','最后一句']
+    # The opt-in style trims bubble boundaries. The generic default preserves text.
+    expected = (['第一行','第二行  好呀！','最后一句'] if legacy_voice
+                else ['  第一行  \n','第二行  好呀！  ','最后一句。  '])
     assert feed.sent == expected and len(requests)==1
     assert [m.text for m in engine.memory.messages if m.reply_to_id=='q1']==expected
 

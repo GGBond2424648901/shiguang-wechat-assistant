@@ -2,6 +2,11 @@
 runtime/
 config/persona_sources/
 config/persona_documents.json
+config/*
+!config/persona.md
+!config/presets/
+config/presets/*
+!config/presets/xiaoling.yml
 *.dpapi
 *.sqlite*
 *.log

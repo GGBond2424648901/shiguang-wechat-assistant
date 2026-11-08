@@ -8,25 +8,41 @@ from itertools import islice
 import json
 import re
 import sqlite3
+from typing import NamedTuple
 
 from .domain import normalized
 from .memory import ConversationMemory
 
 
+class Receipt(NamedTuple):
+    at: float
+    group: str
+    text: str
+    id: str
+    kind: str
+    trigger: str
+    linked: bool
+
+
 def _verified_receipts(directory,scope,salt):
     """Read existing confirmation evidence without opening a writable store."""
     path=directory/'state.sqlite3'
-    if not path.is_file():return {}
+    if not path.is_file():return set(),{}
     scoped=hmac.new(salt,scope.encode(),hashlib.sha256).hexdigest()
+    exact=set()
     by_text=defaultdict(list)
     with closing(sqlite3.connect(path.as_uri()+'?mode=ro',uri=True,timeout=.5)) as db:
-        found=db.execute('''SELECT r.reply_digest,r.baseline,r.at FROM send_receipts r
-            JOIN tasks t ON t.id=r.task_id
+        columns={row[1] for row in db.execute('PRAGMA table_info(send_receipts)')}
+        confirmed='r.confirmed_digest' if 'confirmed_digest' in columns else "''"
+        sticker='r.sticker_md5' if 'sticker_md5' in columns else "''"
+        found=db.execute(f'''SELECT r.reply_digest,r.baseline,r.at,{confirmed},{sticker}
+            FROM send_receipts r JOIN tasks t ON t.id=r.task_id
             WHERE r.group_digest=? AND t.state='verified' ORDER BY r.at DESC LIMIT ?''',
             (scoped,ConversationMemory.MAX_MESSAGES))
-        for text,baseline,at in found:
-            by_text[text].append((baseline,at))
-    return by_text
+        for text,baseline,at,identity,media in found:
+            if identity:exact.add(identity)
+            elif not media:by_text[text].append((set(json.loads(baseline)),at))
+    return exact,by_text
 
 
 def _receipt_rows(path, digest, scope, peer, name, *, confirmations,salt):
@@ -42,8 +58,13 @@ def _receipt_rows(path, digest, scope, peer, name, *, confirmations,salt):
     # Only _match_receipt enriches outgoing messages with the source link,
     # after confirm_receipt has accepted the actual WeChat outbound row.
     stable=re.compile(re.escape(peer)+r'/(?:s/[1-9]\d*|message_\d+\.db/[1-9]\d*)')
+    messages=data['messages'][-ConversationMemory.MAX_MESSAGES:]
+    sources={(row.get('message_id'),row.get('speaker_id')):row.get('text','')
+             for row in messages if row.get('direction')=='in'}
+    exact,legacy=confirmations
     rows={}
-    for record in data['messages'][-ConversationMemory.MAX_MESSAGES:]:
+    unlinked=defaultdict(list)
+    for record in messages:
         identity=record.get('message_id','')
         if (record.get('direction')!='out' or record.get('speaker_id')!='self'
                 or record.get('kind') not in ('text','emoji','image')
@@ -51,19 +72,33 @@ def _receipt_rows(path, digest, scope, peer, name, *, confirmations,salt):
             continue
         at=record.get('created_at')
         if not isinstance(at,(float,int)) or not 0<at<4102444800:continue
-        text=' '.join(record.get('text','').split())
-        linked=(stable.fullmatch(record.get('reply_to_id',''))
-                and re.fullmatch(r'p_[a-f0-9]{16}',record.get('reply_to_speaker','')))
-        if not linked:
-            # Proactive/local sends have no inbound source link. Admit them
-            # only with the same scoped, timed, non-baseline proof accepted by
-            # the real sender. A manual self-message alone is never evidence.
-            if not confirmations:continue
-            hashed=hmac.new(salt,normalized(record.get('text','')).encode(),hashlib.sha256).hexdigest()
-            hashed_id=hmac.new(salt,identity.encode(),hashlib.sha256).hexdigest()
-            if not any(-5<=at-sent<=120 and hashed_id not in json.loads(baseline)
-                       for baseline,sent in confirmations.get(hashed,())):continue
-        if text:rows[identity]=(at,name,text[:55]+('…' if len(text)>55 else ''))
+        text=record.get('text','').strip()
+        source_id=record.get('reply_to_id','')
+        source_speaker=record.get('reply_to_speaker','')
+        linked=bool(stable.fullmatch(source_id) and re.fullmatch(r'p_[a-f0-9]{16}',source_speaker))
+        if not text:continue
+        key=hmac.new(salt,(scope+'/'+identity).encode(),hashlib.sha256).hexdigest()
+        trigger=sources.get((source_id,source_speaker),'') if linked else ''
+        receipt=Receipt(at,name,text,key,record['kind'],trigger,linked)
+        if linked:
+            rows[identity]=receipt
+            continue
+        hashed_id=hmac.new(salt,identity.encode(),hashlib.sha256).hexdigest()
+        if hashed_id in exact:
+            rows[identity]=receipt
+        elif record['kind']=='text' and legacy:
+            hashed_text=hmac.new(salt,normalized(text).encode(),hashlib.sha256).hexdigest()
+            if hashed_text in legacy:unlinked[hashed_text].append((identity,hashed_id,receipt))
+
+    # Old stores have no digest for the confirmed bubble. Use a legacy text
+    # match only when the confirmation identifies a unique archived message.
+    for hashed_text,candidates in unlinked.items():
+        for baseline,sent in legacy[hashed_text]:
+            matches=[(identity,row) for identity,hashed_id,row in candidates
+                     if -5<=row.at-sent<=120 and hashed_id not in baseline]
+            if len(matches)==1:
+                identity,row=matches[0]
+                rows[identity]=row
     return sorted(rows.values(),reverse=True)
 
 
@@ -111,4 +146,8 @@ def receipt_page(cfg,watched,previous,*,offset=0,limit=4,cancelled=lambda:False)
 def receipt_previews(cfg,watched,previous,cancelled=lambda:False):
     """Keep the legacy panel's latest-four display and call contract."""
     rows,_,note,cache=receipt_page(cfg,watched,previous,cancelled=cancelled)
-    return rows,note,cache
+    previews=[]
+    for row in rows:
+        text=' '.join(row.text.split())
+        previews.append((row.at,row.group,text[:55]+('…' if len(text)>55 else '')))
+    return previews,note,cache

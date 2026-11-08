@@ -52,12 +52,19 @@ def test_continuity_survives_encrypted_restart_and_reaches_prompt_as_data(tmp_pa
 
 def test_style_examples_never_appear_as_real_conversation_history(tmp_path):
     from test_participation_model import model_reply
+    folder=tmp_path/'config/presets';folder.mkdir(parents=True)
+    (folder/'xiaoling.yml').write_text(json.dumps({'prompts':[
+        {'role':'system','content':'{persona}'},
+        {'role':'user','content':'周末去拍照吗？'},
+        {'role':'assistant','content':'可以去公园试试。'},
+    ]},ensure_ascii=False),encoding='utf-8')
     model,payloads=model_reply(tmp_path,'我刚才没接准，你指哪一点？')
     model.reply([Message('你又没听懂我说的',speaker_id=A)])
     sent=payloads[0]['messages']
     assert len([m for m in sent if m['role']!='system'])==1
     assert not any(m['role']=='assistant' for m in sent)
     assert any('虚构示例' in m['content'] for m in sent if m['role']=='system')
+    assert '可以去公园试试。' in sent[0]['content']
 
 
 def test_pending_topic_can_close_only_from_same_members_new_evidence():

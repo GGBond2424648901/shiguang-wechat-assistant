@@ -113,6 +113,11 @@ async function main() {
     await page.screenshot({ path: path.join(output, "workbench.png"), animations: "disabled" });
 
     const scope = page.getByRole("combobox", { name: "发送队列会话" });
+    const queue = page.locator(".queue-list");
+    const detail = page.locator(".reply-panel");
+    const pendingTab = page.getByRole("button", { name: "待发送 1", exact: true });
+    assert.equal(await pendingTab.getAttribute("aria-pressed"), "true");
+    await pendingTab.click();
     await scope.click();
     await scope.press("End");
     await scope.press("Enter");
@@ -123,15 +128,21 @@ async function main() {
     await scope.press("Enter");
     await page.getByText("这周有约拍吗？", { exact: true }).waitFor();
 
+    const confirmedTab = page.getByRole("button", { name: "已确认 6", exact: true });
+    await confirmedTab.click();
+    assert.equal(await confirmedTab.getAttribute("aria-pressed"), "true");
+    await detail.getByText("历史回执 6", { exact: true }).waitFor();
+    await queue.getByRole("button", { name: /历史回执 5/ }).click();
+    await detail.getByText("历史回执 5", { exact: true }).waitFor();
     const history = page.getByRole("navigation", { name: "已确认回执分页" });
     await history.waitFor({ timeout: 7000 });
-    await page.getByText("历史回执 6", { exact: true }).waitFor();
+    await queue.getByText("历史回执 6", { exact: true }).waitFor();
     await history.getByRole("button", { name: "更早", exact: true }).click();
-    await page.getByText("历史回执 1", { exact: true }).waitFor();
-    assert.equal(await page.getByText("历史回执 6", { exact: true }).count(), 0);
+    await queue.getByText("历史回执 1", { exact: true }).waitFor();
+    assert.equal(await queue.getByText("历史回执 6", { exact: true }).count(), 0);
     await history.getByRole("button", { name: "较新", exact: true }).click();
-    await page.getByText("历史回执 6", { exact: true }).waitFor();
-    assert.equal(await page.getByText("历史回执 1", { exact: true }).count(), 0);
+    await queue.getByText("历史回执 6", { exact: true }).waitFor();
+    assert.equal(await queue.getByText("历史回执 1", { exact: true }).count(), 0);
 
     await page.getByRole("button", { name: "表情包", exact: true }).click();
     await page.getByText("共 5,000 项", { exact: true }).waitFor();

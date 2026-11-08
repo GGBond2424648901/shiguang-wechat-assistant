@@ -41,12 +41,12 @@ def export(destination: Path, archive: Path | None = None):
     shutil.copyfile(destination / "packaging/public.gitignore", destination / ".gitignore")
     # Preserve the anime icon/avatar explicitly approved for this product.
     create_assets(destination/'xiaomao/ui_assets')
-    # Supply an upstream-derived factory persona, never a user's edited persona.
+    # One minimal factory persona serves both the editor and missing-profile fallback.
     config = destination / "config"
     (config / "presets").mkdir(parents=True, exist_ok=True)
-    shutil.copyfile(destination / "xiaomao/_vendor/dafeiyu/persona-wechat.md", config / "persona.md")
+    shutil.copyfile(destination / "xiaomao/default_persona.md", config / "persona.md")
     (config / "presets/xiaoling.yml").write_text(
-        'keywords: [小玲, 小猫, 大肥鱼]\nprompts:\n  - role: system\n    content: "{persona}"\nformat_user_prompt: "{prompt}"\n',
+        'keywords: [拾光]\nprompts:\n  - role: system\n    content: "{persona}"\nformat_user_prompt: "{prompt}"\n',
         encoding="utf-8",
     )
     if archive:

@@ -37,7 +37,7 @@ def prepare_profile(root, count=5000):
     )
     cfg.save()
     if not (root / 'config/persona_modules.json').exists():
-        source = Path(__file__).resolve().parents[1] / 'xiaomao/_vendor/dafeiyu/persona-wechat.md'
+        source = Path(__file__).resolve().parents[1] / 'xiaomao/default_persona.md'
         save_modules(root, (
             PersonaModule('custom_intro', '身份与语气', source.read_text(encoding='utf-8')),
             PersonaModule('custom_examples', '聊天示例', '说话自然，结合上下文接话。\n' * 1000),
@@ -86,7 +86,12 @@ def prepare_visual_profile(root):
     from xiaomao.routines import routine_preset
 
     cfg = Settings.load(root)
-    cfg = replace(cfg, reply_mode='natural', paused_conversations=(), account_display_name='示例微信',
+    extra = ('周末约拍群', '文件传输助手')
+    targets = {**cfg.conversation_targets,
+               extra[0]: {'id': 'example_3@chatroom', 'account': 'ui-qa', 'kind': 'group'},
+               extra[1]: {'id': 'example_4', 'account': 'ui-qa', 'kind': 'private'}}
+    cfg = replace(cfg, group_names=(*GROUPS, *extra), conversation_targets=targets,
+                  reply_mode='natural', paused_conversations=(), account_display_name='示例微信',
                   min_interval=4, hourly_limit=180, minute_limit=10, pacing_jitter=4,
                   self_display_name='小玲', receive_mode='database')
     regions = {'header': [.26, .05, .96, .11], 'messages': [.26, .13, .96, .74],
@@ -114,6 +119,16 @@ def prepare_visual_profile(root):
     first = cfg.for_group(GROUPS[0])
     memory = ConversationMemory(cfg.runtime, first.memory_scope)
     speaker = 'p_2a3b4c5d6e7f8888'
+    peer = cfg.conversation_targets[first.group]['id']
+    memory.remember(Message('@拾光 发个摸鱼表情包吧', direction='in', speaker_id=speaker,
+                            message_id=peer+'/s/21', created_at=1794124600))
+    memory.remember(Message('鲸鱼娘 · 蓝色大肥鱼躺在米饭锅里', direction='out', kind='emoji', speaker_id='self',
+                            message_id=peer+'/s/22', reply_to_id=peer+'/s/21',
+                            reply_to_speaker=speaker, created_at=1794124680))
+    friend = ConversationMemory(cfg.runtime, cfg.for_group(extra[1]).memory_scope)
+    friend.remember(Message('测试消息已发送。', direction='out', speaker_id='self',
+                            message_id='example_4/s/3', reply_to_id='example_4/s/2',
+                            reply_to_speaker=speaker, created_at=1794120900))
     phrases = ('周末想去拍日落，看看云会不会散', '如果晴天，想试试从桥下拍过去', '下次给大家看照片')
     for index, phrase in enumerate(phrases):
         memory.remember(Message(phrase, '小岚', speaker_id=speaker, message_id=f'demo_in_{index}',
@@ -149,6 +164,7 @@ def prepare_receipt_pages(root):
 def start_fixture(root, *, visual=False):
     token = secrets.token_hex(32)
     runtime = root / 'runtime'
+    groups = Settings.load(root).allowed_groups
     runtime.mkdir(exist_ok=True)
 
     class Handler(BaseHTTPRequestHandler):
@@ -168,12 +184,13 @@ def start_fixture(root, *, visual=False):
                 }
                 data = {
                     'running': True, 'mode': 'auto' if visual else 'observe', 'reason': '离线界面验收',
-                    'group': GROUPS[0], 'group_names': list(GROUPS),
+                    'group': GROUPS[0], 'group_names': list(groups),
                     'counts': {'verified': 24 if visual else 2}, 'pending_count': 1,
-                    'groups': [{'name': name, 'mode': 'auto' if visual else 'observe', 'reply_mode': 'natural',
+                    'groups': [{'name': name, 'mode': ('auto' if i in (0, 2) else 'paused') if visual else 'observe',
+                                'reply_mode': 'mentions' if visual and i == 0 else 'natural',
                                 'pending_count': int(i == 0), 'reason': '离线验收', 'calibrated': visual and i == 0,
                                 'companion': companion if visual and i == 0 else {}}
-                               for i, name in enumerate(GROUPS)],
+                               for i, name in enumerate(groups)],
                     'tray': {'running': True},
                 }
             elif self.path == '/pending':

@@ -10,7 +10,7 @@ const desktop = path.resolve(__dirname, "..");
 const project = path.dirname(desktop);
 const python = process.env.SHIGUANG_PYTHON || path.join(project, ".venv/Scripts/python.exe");
 const destination = path.resolve(process.argv[2] || path.join(project, "build/ui-audit/reproduction/current"));
-const sizes = { wide: [1586, 992], tall: [1487, 1058], detail: [1585, 992], guide: [1561, 1008] };
+const sizes = { workbench: [1562, 1007], compact: [1120, 760], wide: [1586, 992], tall: [1487, 1058], detail: [1585, 992], guide: [1561, 1008] };
 
 async function main() {
   await fs.mkdir(destination, { recursive: true });
@@ -76,7 +76,7 @@ async function main() {
       const image = await page.screenshot({ path: path.join(destination, name + ".png"), scale: "css", animations: "disabled", omitBackground: true });
       assert.deepEqual([image.readUInt32BE(16), image.readUInt32BE(20)], [width, height]);
       report.pages[name] = await page.evaluate(items => {
-        return Object.fromEntries([".shell", ".rail", ".brand", ".nav-item", ".chrome", ".routes", ...items].map(selector => {
+        return Object.fromEntries([".shell", ".rail", ".brand", ".nav-item", ".chrome", ".heading h1", ".routes", ".route:not([hidden])", ...items].map(selector => {
           const el = [...document.querySelectorAll(selector)].find(node => node.getClientRects().length);
           if (!el) return [selector, null];
           const {x, y, width, height} = el.getBoundingClientRect();
@@ -86,7 +86,10 @@ async function main() {
       assert.equal(report.pages[name][".rail"][2], 232, name + " changed the desktop rail width");
     };
     await page.getByText("这周有约拍吗？", { exact: true }).waitFor();
-    await capture("workbench", "tall", [".active-session", ".metrics", ".queue-panel", ".watch-panel", ".footer"]);
+    await click("已确认 4");
+    await page.locator(".reply-panel").getByText("@拾光 发个摸鱼表情包吧", { exact: true }).waitFor();
+    assert.equal(await page.locator(".watch-row").count(), 5);
+    await capture("workbench", "workbench", [".reply-panel", ".queue-panel", ".watch-panel", ".footer"]);
     await click("会话");
     await capture("sessions", "tall", [".session-list", ".session-detail"]);
     if (!installed) {
@@ -179,6 +182,13 @@ async function main() {
     await click("界面外观");
     await capture("appearance", "wide", [".appearance-pane", ".appearance-options", ".appearance-preview"]);
     await click("工作台");
+    await capture("workbench-compact", "compact", [".reply-panel", ".queue-panel", ".watch-panel"]);
+    assert.ok(await page.locator(".watch-target b").first().evaluate(name => name.clientWidth >= 90),
+      "compact two-column layout clipped the conversation name");
+    await page.setViewportSize({ width: 520, height: 475 });
+    assert.ok(await page.locator(".routes").evaluate(route => route.scrollWidth <= route.clientWidth),
+      "minimum-width layout scrolled horizontally");
+    await page.setViewportSize({ width: 1562, height: 1007 });
     const [popup] = await Promise.all([app.waitForEvent("window"), click("关闭助手")]);
     await popup.getByRole("button", { name: "取消关闭" }).waitFor();
     await popup.screenshot({ path: path.join(destination, "close-dialog.png"), scale: "css", animations: "disabled", omitBackground: true });
@@ -187,6 +197,21 @@ async function main() {
       const record = require("./record-preview.cjs");
       console.log(await record(page, destination, process.env.SHIGUANG_DEMO_FFMPEG));
     }
+    const shellSignature = name => {
+      const geometry = report.pages[name];
+      const [routeX, routeY, routeWidth] = geometry[".route:not([hidden])"];
+      const [railX, , railWidth] = geometry[".rail"];
+      const [headingX, headingY] = geometry[".heading h1"];
+      return [routeX - railX - railWidth, geometry[".shell"][2] - 1 - routeX - routeWidth,
+        routeY, headingX, headingY];
+    };
+    // Packaged runs deliberately omit the development-only contacts adapter.
+    for (const name of ["sessions", ...(!installed ? ["directory"] : []), "persona", "companion", "stickers", "settings"]) {
+      const baseline = shellSignature("workbench");
+      assert.ok(shellSignature(name).every((value, index) => Math.abs(value - baseline[index]) <= 1),
+        name + " shared shell drifted " + JSON.stringify(shellSignature(name)));
+    }
+    assert.equal(await page.locator(".heading p").count(), 0);
     assert.deepEqual(errors, []);
     await fs.writeFile(path.join(destination, "geometry.json"), JSON.stringify(report, null, 2));
     console.log(JSON.stringify({ captures: (await fs.readdir(destination)).filter(file => file.endsWith(".png")).length,

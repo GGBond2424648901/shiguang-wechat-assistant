@@ -1,4 +1,4 @@
-keywords: [小玲, 小猫, 大肥鱼]
+keywords: [拾光]
 prompts:
   - role: system
     content: "{persona}"

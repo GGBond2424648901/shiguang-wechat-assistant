@@ -34,7 +34,7 @@ export interface Queue {
   receiptTotal: number;
   note: string;
   tasks: { id: string; group: string; sender: string; text: string; reply: string; state: string; progress: string }[];
-  receipts: { at: number; group: string; text: string }[];
+  receipts: { id: string; at: number; group: string; text: string; kind: "text" | "emoji" | "image"; trigger: string; linked: boolean }[];
 }
 
 export interface Sticker {

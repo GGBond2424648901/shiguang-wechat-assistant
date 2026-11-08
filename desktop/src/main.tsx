@@ -19,12 +19,12 @@ import "./styles.css";
 import "./fixed-actions.css";
 
 const navigation = [
-  { key: "workbench", title: "工作台", icon: Grid2X2, sub: "管理微信会话的监听、回复与发送队列，查看助手的运行状态" },
-  { key: "sessions", title: "会话", icon: MessageCircle, sub: "配置监听对象、回复规则与窗口绑定" },
-  { key: "persona", title: "人格", icon: UserRound, sub: "编辑助手的完整人格模块与语言风格" },
-  { key: "companion", title: "记忆与陪伴", icon: Heart, sub: "管理会话记忆、主动聊天与定时任务" },
-  { key: "stickers", title: "表情包", icon: Smile, sub: "浏览本地素材、导入图片与 GIF，调整发送偏好" },
-  { key: "settings", title: "运行设置", icon: Settings2, sub: "管理微信连接、模型、发送节奏和界面外观" },
+  { key: "workbench", title: "工作台", icon: Grid2X2 },
+  { key: "sessions", title: "会话", icon: MessageCircle },
+  { key: "persona", title: "人格", icon: UserRound },
+  { key: "companion", title: "记忆与陪伴", icon: Heart },
+  { key: "stickers", title: "表情包", icon: Smile },
+  { key: "settings", title: "运行设置", icon: Settings2 },
 ] as const;
 
 type Notify = (message: string, error?: boolean) => void;
@@ -157,9 +157,7 @@ function App() {
     </aside>
     <main className="main-pane" data-page={page} data-subpage={page === "sessions" && directory ? "directory" : undefined}>
       <header className="chrome drag-region">
-        <div className="heading">{page === "sessions" && directory
-          ? <><h1>选择会话</h1><p>添加联系人或群聊到监听范围，保存后应用</p></>
-          : <><h1>{current.title}</h1><p>{current.sub}</p></>}</div>
+        <div className="heading"><h1>{page === "sessions" && directory ? "选择会话" : current.title}</h1></div>
         <div className="chrome-actions no-drag">
           <StatusPill mode={status?.mode ?? "starting"} />
           <div className="window-buttons">
@@ -175,8 +173,7 @@ function App() {
         </section>)}</div>
       <footer className="footer"><span><i className={status?.connected ? "live" : ""} />
         {status?.mode === "auto" ? "助手运行中" : status ? runLabels[status.mode] : "连接中"}
-        <span aria-hidden="true">·</span>监听 {status?.sessions.length ?? 0} 个会话
-        <span aria-hidden="true">·</span>发送队列 {status?.stats.pending ?? 0} 条
+        <span aria-hidden="true">·</span>监听 {status?.sessions.filter(session => session.mode === "auto").length ?? 0} / {status?.sessions.length ?? 0}
         {status?.readOnly && " · 只读预览"}</span><span className="footer-refresh">
         {updated && `最后刷新  ${updated}`}{page === "workbench" && <IconButton label="刷新运行状态" icon={<RefreshCw size={20} />}
           onClick={() => void refresh()} />}</span></footer>

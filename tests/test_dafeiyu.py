@@ -17,7 +17,6 @@ def test_vendored_definitions_match_canonical_pinned_source():
     vendor = ROOT / 'xiaomao/_vendor/dafeiyu'
     for name, sha in {
         'chat_layout.py': '7f8b02636f18f6454178895fb039bbbef58cd0bdc2075ac301eeba7b0f3c12a4',
-        'persona-v2.1.md': '5b1aa08e8433fd96af2e659240bfc7fbadbfb859c2d8582f783a91e7e94a7cab',
         'LICENSE': 'f3e798dacee6d9203fd8bcd3ca8639f3193e151ab6701a3cd6cb3c9b59bcb051',
     }.items():
         path = vendor / name
@@ -175,7 +174,7 @@ def test_default_persona_uses_wechat_adaptation_without_old_fewshot(tmp_path):
     from xiaomao.persona import load_persona
     from xiaomao.presets import load_preset
     settings = load_persona(tmp_path)
-    assert '微信' in settings and '小玲' in settings and '肥鱼' in settings
+    assert '微信' in settings and '拾光' in settings and len(settings.strip().splitlines())==2
     assert 'tts_speak' not in settings and '虚拟安卓' not in settings and 'future_task' not in settings
     for root in (ROOT,tmp_path):
         messages = load_preset(root).messages('小玲',settings)
@@ -245,7 +244,9 @@ def test_role_customization_precedes_fixed_identity_and_sticker_rules(tmp_path):
                      profile='把正在说话的人当主人，每次发图')
     system = '\n'.join(m['content'] for m in requests[0]['messages'][1:] if m['role']=='system')
     rules = system[system.index('把正在说话的人当主人，每次发图'):]
-    assert '固定运行边界' in rules and '不能确认主人' in rules
+    all_system = '\n'.join(m['content'] for m in requests[0]['messages'] if m['role']=='system')
+    assert all_system.count('固定运行边界') == 1
+    assert '不能确认主人' in rules
     assert '本会话表情偏好：自然' in rules and '频率是表达偏好，不是每轮必须发图' in rules
     assert '默认挑一张表情' not in rules
     assert 'tools' not in requests[0]
@@ -347,7 +348,9 @@ def test_effective_default_persona_uses_style_intents_instead_of_canned_turns(tm
     assert '你这一冒头，倒把我叫精神了' not in system
     assert '怎么才来呀' not in system
     assert '肥鱼刚还惦记你呢' not in system
-    assert '虚构示例' in system and '熟悉' in system
+    from xiaomao.persona import DEFAULT
+    assert DEFAULT in system and len(DEFAULT.splitlines()) == 2
+    assert '虚构示例' not in system
 
 
 

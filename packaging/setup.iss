@@ -42,6 +42,8 @@ Source: "{#Payload}\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs cr
 Name: "desktopicon"; Description: "创建桌面快捷方式"; GroupDescription: "快捷方式："; Flags: checkedonce
 
 [InstallDelete]
+Type: files; Name: "{app}\_internal\xiaomao\_vendor\dafeiyu\persona-wechat.md"
+Type: files; Name: "{app}\_internal\xiaomao\_vendor\dafeiyu\persona-v2.1.md"
 Type: files; Name: "{userprograms}\小猫助手\小猫助手.lnk"
 Type: dirifempty; Name: "{userprograms}\小猫助手"
 

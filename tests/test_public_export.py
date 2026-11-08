@@ -25,7 +25,17 @@ def test_export_preserves_approved_brand_and_is_rebuildable(tmp_path,monkeypatch
     for name in ('app.png','app.ico','persona-avatar.png'):
         assert (target/'xiaomao/ui_assets'/name).read_bytes()==(module.ROOT/'xiaomao/ui_assets'/name).read_bytes()
     assert not (target/'config/settings.json').exists()
-    assert (target/'config/persona.md').read_bytes()==(target/'xiaomao/_vendor/dafeiyu/persona-wechat.md').read_bytes()
+    factory=(target/'xiaomao/default_persona.md').read_bytes()
+    assert (target/'config/persona.md').read_bytes()==factory
+    assert len(factory.decode('utf-8').strip().splitlines())==2
+    assert not list((target/'xiaomao/_vendor/dafeiyu').glob('persona*.md'))
+    assert not (target/'config/persona_modules.json').exists()
+    assert not (target/'config/persona_module_versions').exists()
+    import subprocess
+    subprocess.run(['git','init','--quiet',str(target)],check=True)
+    for name in ('config/persona_modules.json','config/persona_module_versions/old.json',
+                 'config/persona_optimized_readable.md','config/settings.json','config/presets/private.yml'):
+        assert subprocess.run(['git','-C',str(target),'check-ignore','--quiet',name]).returncode==0,name
     assert (target/'xiaomao/ui_assets/表情包收集说明.txt').is_file()
     # Public regression tests must carry their local fixture/helper imports.
     import ast

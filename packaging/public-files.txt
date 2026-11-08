@@ -2,12 +2,6 @@ LICENSE
 NOTICE.md
 README.md
 scripts/qa_model.py
-docs/qa/2026-11-07-sticker-recovery-and-expression.md
-docs/screenshots/feedback.png
-docs/screenshots/settings-pacing.png
-docs/screenshots/companion.png
-docs/screenshots/stickers.png
-docs/screenshots/workspace.png
 docs/third-party/whale-persona-MIT.txt
 licenses/flatbuffers-Apache-2.0.txt
 licenses/inno-chinese-MIT.txt
@@ -95,8 +89,6 @@ xiaomao/_vendor/dafeiyu/PROVENANCE.md
 xiaomao/_vendor/dafeiyu/__init__.py
 xiaomao/_vendor/dafeiyu/chat_layout.py
 xiaomao/_vendor/dafeiyu/emotion.py
-xiaomao/_vendor/dafeiyu/persona-v2.1.md
-xiaomao/_vendor/dafeiyu/persona-wechat.md
 xiaomao/calibration_ui.py
 xiaomao/capture.py
 xiaomao/client.py
@@ -203,16 +195,11 @@ tests/test_contact_calibration_identity.py
 tests/test_conversation_pause.py
 tests/test_conversation_controls_ui.py
 tests/test_action_completion_state.py
-docs/screenshots/sessions.png
 tests/test_reply_preferences.py
 tests/test_conversation_rules.py
 tests/test_sticker_frequency.py
 tests/test_reply_rules_ui.py
 tests/test_settings_conflicts.py
-docs/screenshots/sticker-detail.png
-docs/screenshots/pacing.png
-docs/screenshots/wechat-group-a-live.png
-docs/screenshots/wechat-group-b-live.png
 docs/screenshots/provenance.json
 docs/media/shiguang-real-use-15s.gif
 停止拾光微信聊天助手.cmd
@@ -254,8 +241,6 @@ tests/test_waiting_reply.py
 tests/test_wechat_voice.py
 tests/test_windows_contract.py
 scripts/verify_sticker_selfchat.py
-docs/qa/2026-11-07-care-persona-consistency.md
-docs/screenshots/close-options.jpg
 desktop/package.json
 desktop/package-lock.json
 desktop/index.html
@@ -313,3 +298,4 @@ packaging/build_desktop.ps1
 
 tests/test_profile_entry.py
 desktop/scripts/check-corner-pixels.cjs
+xiaomao/default_persona.md

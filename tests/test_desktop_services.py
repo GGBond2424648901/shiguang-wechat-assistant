@@ -63,6 +63,8 @@ def test_dashboard_filters_by_verified_identity_and_rejects_old_account(tmp_path
 
     targets = {name: {**row, 'account': 'account-b'} for name, row in cfg.conversation_targets.items()}
     replace(cfg, conversation_targets=targets).save()
+    with pytest.raises(ValueError, match='监听范围'):
+        ui.call('view.queue', {'revision': state['revision']})
     with pytest.raises(ValueError, match='会话'):
         ui.call('run.selected', {'session': friend, 'action': 'pause'})
     assert len(worker.calls) == 1
@@ -80,8 +82,14 @@ def test_queue_pages_scoped_receipts_without_rereading_the_archive(tmp_path, mon
     for scope, peer, count in ((group.memory_scope, 'example@chatroom', 6),
                                (friend.memory_scope, 'example_friend', 1)):
         memory = ConversationMemory(cfg.runtime, scope)
+        if peer == 'example@chatroom':
+            memory.remember(Message('群里的原始问题 sk-local-example', direction='in',
+                message_id=f'{peer}/s/200', speaker_id='p_' + 'a' * 16, created_at=999))
         for number in range(1, count + 1):
-            memory.remember(Message(f'已确认 {number}', direction='out', speaker_id='self',
+            body = f'已确认 {number}'
+            if number == 6:
+                body += '。' + '补充内容' * 30
+            memory.remember(Message(body, direction='out', speaker_id='self',
                 message_id=f'{peer}/s/{number}', reply_to_id=f'{peer}/s/200',
                 reply_to_speaker='p_' + 'a' * 16, created_at=1000 + number))
         memory.remember(Message('手动发送', direction='out', speaker_id='self',
@@ -99,7 +107,13 @@ def test_queue_pages_scoped_receipts_without_rereading_the_archive(tmp_path, mon
     selected = {'session': cfg.conversation_pause_key('晨光群')}
     latest = panel.call('view.queue', selected)
     assert latest['receiptTotal'] == 6
-    assert [row['text'] for row in latest['receipts']] == ['已确认 6', '已确认 5', '已确认 4', '已确认 3']
+    assert [row['text'].split('。', 1)[0] for row in latest['receipts']] == ['已确认 6', '已确认 5', '已确认 4', '已确认 3']
+    first = latest['receipts'][0]
+    assert first['text'].endswith('补充内容' * 30)
+    assert first['trigger'] == '群里的原始问题 [密钥已隐藏]'
+    assert first['kind'] == 'text' and first['linked'] is True
+    assert len({row['id'] for row in latest['receipts']}) == 4
+    assert 'example@chatroom' not in json.dumps(latest)
     earlier = panel.call('view.queue', {**selected, 'receipt_offset': 4})
     assert [row['text'] for row in earlier['receipts']] == ['已确认 2', '已确认 1']
     assert earlier['tasks'] == latest['tasks']
@@ -107,6 +121,8 @@ def test_queue_pages_scoped_receipts_without_rereading_the_archive(tmp_path, mon
     other = panel.call('view.queue', {'session': cfg.conversation_pause_key('小禾')})
     assert other['receiptTotal'] == 1
     assert [row['group'] for row in other['receipts']] == ['小禾']
+    assert other['receipts'][0]['trigger'] == ''
+    assert other['receipts'][0]['linked'] is True
     assert panel.call('view.queue', selected) == latest
     assert reads == [group.memory_scope, friend.memory_scope]
     with pytest.raises(ValueError, match='分页'):
@@ -131,6 +147,11 @@ def test_receipt_history_includes_an_older_confirmed_proactive_message(tmp_path)
             assert store.confirm_receipt(task, cfg.memory_scope, message)
             if number <= 6:
                 memory.remember(message)
+        # Old databases did not retain the confirmed message digest.
+        with store.db:
+            store.db.execute("UPDATE send_receipts SET confirmed_digest='' WHERE at=1000")
+        memory.remember(Message('已发 2', direction='out', speaker_id='self',
+            message_id='example@chatroom/s/101', created_at=1030))
     finally:
         store.close()
 
@@ -138,6 +159,7 @@ def test_receipt_history_includes_an_older_confirmed_proactive_message(tmp_path)
     queue = panel.call('view.queue', {'receipt_offset': 4})
     assert queue['receiptTotal'] == 6
     assert [row['text'] for row in queue['receipts']] == ['已发 2', '已发 1']
+    assert all(row['trigger'] == '' and not row['linked'] for row in queue['receipts'])
 
 
 def test_receipt_page_rejects_a_scope_change_during_archive_read(tmp_path, monkeypatch):

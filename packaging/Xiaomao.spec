@@ -21,8 +21,9 @@ version_info = VSVersionInfo(FixedFileInfo(filevers=version_tuple, prodvers=vers
 ])
 data = collect_data_files("rapidocr", includes=["config.yaml", "default_models.yaml", "models/*.onnx"])
 data += [(str(root / "xiaomao/ui_assets/表情包收集说明.txt"), "xiaomao/ui_assets")]
+data += [(str(root / "xiaomao/default_persona.md"), "xiaomao")]
 data += [(str(root / "xiaomao/_vendor/dafeiyu" / name), "xiaomao/_vendor/dafeiyu")
-         for name in ("persona-wechat.md", "persona-v2.1.md", "LICENSE", "PROVENANCE.md")]
+         for name in ("LICENSE", "PROVENANCE.md")]
 data += [(str(p), "xiaomao/_vendor/deepseek_harness")
          for p in (root / "xiaomao/_vendor/deepseek_harness").iterdir() if p.is_file()]
 data += [(str(p), "xiaomao/ui_assets") for p in (root / "xiaomao/ui_assets").glob("*") if p.suffix in (".ico", ".png", ".jpg", ".webp")]

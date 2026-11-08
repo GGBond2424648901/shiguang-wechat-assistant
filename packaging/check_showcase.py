@@ -29,7 +29,7 @@ def check(root: Path):
         assert (root/path).is_file(), target
         if path.parent.as_posix()=='docs/screenshots':screenshots.add(path.name)
     assert screenshots.issubset({row['file'] for row in rows})
-    assert '实机截图' in text and 'shiguang-desktop-15s.mp4' in text
+    assert '实机截图' in text
     return dict(screenshots_verified=len(rows),readme_screenshots=len(screenshots),media_links_valid=True)
 
 

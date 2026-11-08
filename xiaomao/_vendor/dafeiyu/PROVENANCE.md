@@ -5,16 +5,13 @@
 | 随包文件 | 上游来源及处理 | SHA-256 |
 | --- | --- | --- |
 | chat_layout.py | deploy/patches/chat_layout.py，完整原文件 | 7f8b02636f18f6454178895fb039bbbef58cd0bdc2075ac301eeba7b0f3c12a4 |
-| persona-v2.1.md | persona/大肥鱼-人格.md，完整原文件 | 5b1aa08e8433fd96af2e659240bfc7fbadbfb859c2d8582f783a91e7e94a7cab |
 | LICENSE | LICENSE，完整原文件 | f3e798dacee6d9203fd8bcd3ca8639f3193e151ab6701a3cd6cb3c9b59bcb051 |
 | emotion.py 中的 EmotionalState | deploy/patches/emotionai_v3.4_separate_analysis/main.py 第 27–62 行，包括装饰器，原样抽取 | 0e0b4de7df94b081383633569321312ce3548b843ddd3685327f5c19b7ecf64e |
 | emotion.py 中的 EmotionAnalyzer | 同一文件第 297–364 行，原样抽取 | ce54e9d847f5d6448806830879c17a39aedab0ab78cafd1f441b43142595d8be |
 
 情绪插件 main.py 完整原文件 SHA-256 为 aa1aa12c9c44a6112c87d80cd5cfd863c15636c5a44edc82f24611f2961f3322。抽取文件另加标准库导入与来源提示。运行时使用上游数据类、十二个维度和主/次情绪画像，文字气泡使用原 group_bubbles。AstrBot 插件顶层、QQ 语音与权限命令均未导入。
 
-persona-wechat.md 是随包的微信适配默认值，config/persona.md 是可编辑副本。主体源自原版 v2.1，按当前宿主可选本地表情/GIF、静态图片、成员身份、陪伴调度和证据记忆重写相应条款。默认 YAML 仅引用人格一次。此前两份人格配置保存在 design/migration/dafeiyu-v2。
-
-微信默认版将口吻示例改成针对不同情境的表达意图，减少逐字照搬。上游原文完整保存在 persona-v2.1.md。自定义人格及自定义 YAML 仍由原加载器读取。
+公开发行版仅复用气泡布局和角色情绪的数据结构，不分发上游或个人的完整人格文本。默认提示为项目自带的两句话，见 `xiaomao/default_persona.md`；用户自己的配置由原加载器读取。
 
 稳定成员、稳定消息 ID 且启用上下文时，直接文字回复使用 provider JSON 模式。助手的历史发言按同一结构传入，当前回复仅允许 text 及可选 emotion_delta。无可追踪身份或关闭上下文的直接文字接口保留普通正文模式。自然参与和媒体选择沿用各自的 send/text/sticker 协议。代码、表格和业务 JSON 可作为 text 的内容；不完整的直接回复控制包会触发可重试的生成错误，不会作为正文投递。
 
