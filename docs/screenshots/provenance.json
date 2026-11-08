@@ -1,25 +1,25 @@
 {
   "captured_date": "2026-11-08",
-  "editing": "Unedited actual application captures using isolated demonstration data",
+  "editing": "Mixed sources: user-supplied screenshots copied as provided (some already masked); remaining screenshots use isolated demonstration data.",
   "screenshots": [
     {
       "file": "desktop-appearance.png",
       "origin": "actual Windows application screenshot",
-      "source_sha256": "6b14be9f12bb0e8f5cc71750acc5a86bfed9c19af143f9a9d3c0d06513e50ed4",
-      "output_sha256": "6b14be9f12bb0e8f5cc71750acc5a86bfed9c19af143f9a9d3c0d06513e50ed4",
+      "source_sha256": "3c9f5322e013a8e6697a968c8027b3d3bd05ced1b1641946ccc81740672823df",
+      "output_sha256": "3c9f5322e013a8e6697a968c8027b3d3bd05ced1b1641946ccc81740672823df",
       "source_size": [
-        1586,
-        992
+        1859,
+        1200
       ],
       "crop": [
         0,
         0,
-        1586,
-        992
+        1859,
+        1200
       ],
       "redaction_rectangles": [],
       "unchanged_outside_redactions": true,
-      "note": "v0.3.5 Electron application, isolated synthetic fixtures and generic default persona; no personal profile or wallpaper"
+      "note": "Screenshot provided by user, copied byte-for-byte; any masking was already present in the supplied file."
     },
     {
       "file": "desktop-calibration.png",
@@ -62,21 +62,21 @@
     {
       "file": "desktop-companion.png",
       "origin": "actual Windows application screenshot",
-      "source_sha256": "5d296a7f133e4c45ed1529a278cd7016dd6fd094c6b7f6070c6447e6b935728e",
-      "output_sha256": "5d296a7f133e4c45ed1529a278cd7016dd6fd094c6b7f6070c6447e6b935728e",
+      "source_sha256": "7f9986e468555a2cbd5aefc8ffe08189c4d62cb93563810a5a08d6e9c526d425",
+      "output_sha256": "7f9986e468555a2cbd5aefc8ffe08189c4d62cb93563810a5a08d6e9c526d425",
       "source_size": [
-        1586,
-        992
+        1860,
+        1200
       ],
       "crop": [
         0,
         0,
-        1586,
-        992
+        1860,
+        1200
       ],
       "redaction_rectangles": [],
       "unchanged_outside_redactions": true,
-      "note": "v0.3.5 Electron application, isolated synthetic fixtures and generic default persona; no personal profile or wallpaper"
+      "note": "Screenshot provided by user, copied byte-for-byte; any masking was already present in the supplied file."
     },
     {
       "file": "desktop-import.png",
@@ -100,97 +100,116 @@
     {
       "file": "desktop-persona.png",
       "origin": "actual Windows application screenshot",
-      "source_sha256": "bb7979d75d1ca25a21fff7a498dd2e1b7afcbc162f049293787a70579b25b2e4",
-      "output_sha256": "bb7979d75d1ca25a21fff7a498dd2e1b7afcbc162f049293787a70579b25b2e4",
+      "source_sha256": "9f97420e1ad2195f847c7ce6de5ff153acccf7496ee2c608d673b026b463f812",
+      "output_sha256": "9f97420e1ad2195f847c7ce6de5ff153acccf7496ee2c608d673b026b463f812",
       "source_size": [
-        1586,
-        992
+        1860,
+        1200
       ],
       "crop": [
         0,
         0,
-        1586,
-        992
+        1860,
+        1200
       ],
       "redaction_rectangles": [],
       "unchanged_outside_redactions": true,
-      "note": "v0.3.5 Electron application, isolated synthetic fixtures and generic default persona; no personal profile or wallpaper"
+      "note": "Screenshot provided by user, copied byte-for-byte; any masking was already present in the supplied file."
     },
     {
       "file": "desktop-sessions.png",
       "origin": "actual Windows application screenshot",
-      "source_sha256": "46a1d8095063ef47e5a574246c2fb1703c95f87e80f71a639f166797f81d93b4",
-      "output_sha256": "46a1d8095063ef47e5a574246c2fb1703c95f87e80f71a639f166797f81d93b4",
+      "source_sha256": "ae82ef238c6e36ea8f0377f282b55526dc3b43f53aaa71af7a30b2965eed4686",
+      "output_sha256": "ae82ef238c6e36ea8f0377f282b55526dc3b43f53aaa71af7a30b2965eed4686",
       "source_size": [
-        1487,
-        1058
+        1860,
+        1200
       ],
       "crop": [
         0,
         0,
-        1487,
-        1058
+        1860,
+        1200
       ],
       "redaction_rectangles": [],
       "unchanged_outside_redactions": true,
-      "note": "v0.3.5 Electron application, isolated synthetic fixtures and generic default persona; no personal profile or wallpaper"
+      "note": "Screenshot provided by user, copied byte-for-byte; any masking was already present in the supplied file."
     },
     {
       "file": "desktop-settings.png",
       "origin": "actual Windows application screenshot",
-      "source_sha256": "72ac77176da3d171acb3528669a5fbf05dea31b72cca33691e9c6723616520c1",
-      "output_sha256": "72ac77176da3d171acb3528669a5fbf05dea31b72cca33691e9c6723616520c1",
+      "source_sha256": "c88a43b877b8a1eeb28b394caa689916d437ed731edc6b0fa17924a69c51295f",
+      "output_sha256": "c88a43b877b8a1eeb28b394caa689916d437ed731edc6b0fa17924a69c51295f",
       "source_size": [
-        1586,
-        992
+        1859,
+        1200
       ],
       "crop": [
         0,
         0,
-        1586,
-        992
+        1859,
+        1200
       ],
       "redaction_rectangles": [],
       "unchanged_outside_redactions": true,
-      "note": "v0.3.5 Electron application, isolated synthetic fixtures and generic default persona; no personal profile or wallpaper"
+      "note": "Screenshot provided by user, copied byte-for-byte; any masking was already present in the supplied file."
     },
     {
       "file": "desktop-stickers.png",
       "origin": "actual Windows application screenshot",
-      "source_sha256": "8df58332a6a77613bf2414848fc4982fab8f3762f74a067917d7d914dc7795a1",
-      "output_sha256": "8df58332a6a77613bf2414848fc4982fab8f3762f74a067917d7d914dc7795a1",
+      "source_sha256": "c0db18e89cb1048ab385a94f813296c2306546dd2c0d975f974161060dcbe4bb",
+      "output_sha256": "c0db18e89cb1048ab385a94f813296c2306546dd2c0d975f974161060dcbe4bb",
       "source_size": [
-        1586,
-        992
+        1860,
+        1199
       ],
       "crop": [
         0,
         0,
-        1586,
-        992
+        1860,
+        1199
       ],
       "redaction_rectangles": [],
       "unchanged_outside_redactions": true,
-      "note": "v0.3.5 Electron application, isolated synthetic fixtures and generic default persona; no personal profile or wallpaper"
+      "note": "Screenshot provided by user, copied byte-for-byte; any masking was already present in the supplied file."
     },
     {
       "file": "desktop-workbench.png",
       "origin": "actual Windows application screenshot",
-      "source_sha256": "4be96a6beb2453020e4cc15d0cb5fdf08871117dc90168f735bf5a8325d20dc0",
-      "output_sha256": "4be96a6beb2453020e4cc15d0cb5fdf08871117dc90168f735bf5a8325d20dc0",
+      "source_sha256": "b638e69ddf2d25661636fd9663a62e9bde9dc8efa3949993c55e860ad5a021a3",
+      "output_sha256": "b638e69ddf2d25661636fd9663a62e9bde9dc8efa3949993c55e860ad5a021a3",
       "source_size": [
-        1562,
-        1007
+        1860,
+        1200
       ],
       "crop": [
         0,
         0,
-        1562,
-        1007
+        1860,
+        1200
       ],
       "redaction_rectangles": [],
       "unchanged_outside_redactions": true,
-      "note": "v0.3.5 Electron application, isolated synthetic fixtures and generic default persona; no personal profile or wallpaper"
+      "note": "Screenshot provided by user, copied byte-for-byte; any masking was already present in the supplied file."
+    },
+    {
+      "file": "desktop-schedules.png",
+      "origin": "actual Windows application screenshot",
+      "source_sha256": "83c8cb3a33be4c955dd80da4b215fa7efdb04c6d02dac483175f7cfbd0ed7906",
+      "output_sha256": "83c8cb3a33be4c955dd80da4b215fa7efdb04c6d02dac483175f7cfbd0ed7906",
+      "source_size": [
+        1860,
+        1199
+      ],
+      "crop": [
+        0,
+        0,
+        1860,
+        1199
+      ],
+      "redaction_rectangles": [],
+      "unchanged_outside_redactions": true,
+      "note": "Screenshot provided by user, copied byte-for-byte; any masking was already present in the supplied file."
     }
   ]
 }
