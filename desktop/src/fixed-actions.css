@@ -90,6 +90,22 @@
 
 .directory-capture { margin-inline-end: auto; }
 .companion-footer { margin-top: 0; }
+.companion-footer.glass,
+.settings-general .settings-footer.glass {
+  align-self: center;
+  width: calc(100vw - var(--rail-width) - 2px);
+  box-sizing: border-box;
+  margin-inline: 0;
+  border-width: 1px 0 0;
+  border-radius: 0;
+  background: rgb(28 27 43 / var(--glass-alpha));
+  box-shadow: none;
+}
+.main-pane[data-page="settings"]:has(.settings-page[data-tab="general"]) > .routes {
+  padding-bottom: 0;
+}
+.settings-page[data-tab="general"] { grid-template-columns: minmax(0, 1fr); }
+.settings-general { min-width: 0; }
 .companion-columns { flex: none; }
 .companion-tabs { max-width: 100%; }
 .companion-tabs .button { flex: 1 1 0; min-width: 0; white-space: normal; }
@@ -156,7 +172,6 @@
   .companion-scroll { padding-inline: 18px 4px; margin-inline-start: -18px; }
   .companion-footer.glass {
     min-height: 96px;
-    margin-inline: calc(-1 * var(--content-gutter)) calc(-1 * var(--content-end));
     padding-inline: 32px 24px;
     border-width: 1px 0 0;
     border-radius: 0;
