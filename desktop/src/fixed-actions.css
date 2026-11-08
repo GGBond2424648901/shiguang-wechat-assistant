@@ -10,6 +10,12 @@
 }
 
 .main-pane[data-page="companion"] > .routes { padding-bottom: 0; overflow: hidden; }
+.main-pane[data-page="companion"] > .routes,
+.main-pane[data-page="settings"]:has(.settings-page[data-tab="general"]) > .routes {
+  scrollbar-gutter: auto;
+  padding-left: calc(var(--content-gutter) + 10px);
+  padding-right: calc(var(--content-end) + 10px);
+}
 
 .sessions-page { grid-template-rows: minmax(0, 1fr); }
 .session-list { min-height: 0; }
