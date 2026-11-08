@@ -5,7 +5,7 @@ Set shell = CreateObject("WScript.Shell")
 folder = fs.GetParentFolderName(WScript.ScriptFullName)
 pythonw = fs.BuildPath(folder, ".venv\Scripts\pythonw.exe")
 installed = fs.BuildPath(shell.ExpandEnvironmentStrings("%LOCALAPPDATA%"), "Programs\XiaomaoAssistant")
-requiredVersion = "0.3.5"
+requiredVersion = "0.3.6"
 launchLegacy = WScript.Arguments.Named.Exists("legacy")
 shell.CurrentDirectory = folder
 If BundleReady(installed) Then

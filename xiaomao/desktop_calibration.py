@@ -25,6 +25,7 @@ class Capture:
     expires: float
     draft: Calibration | None = None
     busy: bool = False
+    image: object = None
 
 
 class DesktopCalibration:
@@ -34,6 +35,13 @@ class DesktopCalibration:
         self._lock = RLock()
         self._candidates = {}
         self._capture = None
+        self._vision = None
+
+    def _recognizer(self):
+        if self._vision is None:
+            from .vision import Vision
+            self._vision = Vision()
+        return self._vision
 
     def discover(self, session=''):
         cfg = Settings.load(self.root)
@@ -112,12 +120,15 @@ class DesktopCalibration:
         return 'data:image/jpeg;base64,' + base64.b64encode(result.getvalue()).decode('ascii')
 
     def _projection(self, capture, image, observed='', note='', *, identified=False):
+        capture.image = image
         draft = capture.draft
         return {'token': capture.id, 'target': draft.target_group, 'kind': draft.target_kind,
                 'width': draft.width, 'height': draft.height, 'regions': draft.regions,
                 'image': self._picture(image), 'observed': observed, 'note': note, 'identified': identified}
 
-    def capture(self, window, session=''):
+    def capture(self, window, session='', deferIdentify=False):
+        if type(deferIdentify) is not bool:
+            raise ValueError('截图选项无效')
         cfg = Settings.load(self.root)
         name = next((name for name in cfg.saved_groups if cfg.conversation_pause_key(name) == session), None)
         if session and not name:
@@ -143,8 +154,11 @@ class DesktopCalibration:
                 if capture.cancelled.is_set():
                     raise ValueError('校准已取消')
                 image, capture.draft = selection.preview_window(cfg, choice, name)
+                if deferIdentify:
+                    return self._projection(capture, image, note='截图已就绪，正在核对会话身份…')
                 try:
-                    verified, identity = selection.identify_reviewed_window(cfg, capture.draft, capture.cancelled)
+                    verified, identity = selection.identify_reviewed_window(
+                        cfg, capture.draft, capture.cancelled, vision=self._recognizer())
                 except selection.CalibrationIdentityError as error:
                     return self._projection(capture, image, error.observed_title, str(error))
                 except ValueError as error:
@@ -174,8 +188,12 @@ class DesktopCalibration:
             if config_revision(cfg) != capture.revision:
                 raise ValueError('校准期间设置已变化，请重新截图')
             draft = self._edit(capture, regions)
-            image, identity = selection.identify_reviewed_window(cfg, draft, capture.cancelled,
-                                                                 choose_observed=chooseObserved)
+            try:
+                image, identity = selection.identify_reviewed_window(cfg, draft, capture.cancelled,
+                    choose_observed=chooseObserved, vision=self._recognizer())
+            except selection.CalibrationIdentityError as error:
+                capture.draft = draft
+                return self._projection(capture, capture.image, error.observed_title, str(error))
             capture.draft = identity.calibration
             return self._projection(capture, image, identity.name, '请核对区域、聊天底部和空白输入框', identified=True)
 
@@ -189,7 +207,7 @@ class DesktopCalibration:
             draft = self._edit(capture, regions)
             if not draft.target_group:
                 raise ValueError('请先识别当前会话')
-            checked, contact = selection.verify_reviewed_window(cfg, draft, capture.cancelled)
+            checked, contact = selection.verify_reviewed_window(cfg, draft, capture.cancelled, vision=self._recognizer())
             updated = selection.bind_reviewed_window(cfg, checked, contact, stage_for_enable=True)
             if capture.cancelled.is_set():
                 raise ValueError('校准已取消')

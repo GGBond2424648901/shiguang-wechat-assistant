@@ -299,3 +299,8 @@ packaging/build_desktop.ps1
 tests/test_profile_entry.py
 desktop/scripts/check-corner-pixels.cjs
 xiaomao/default_persona.md
+desktop/src/session-draft.ts
+desktop/scripts/session-draft.test.cjs
+desktop/scripts/check-session-sync.cjs
+tests/test_calibration_preview.py
+tests/test_owner_persona_context.py

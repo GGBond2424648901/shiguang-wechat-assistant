@@ -35,7 +35,8 @@ class DesktopSessions:
             identity = cfg.conversation_pause_key(name)
             binding = cfg.binding_for(name)
             rules = cfg.conversation_rules.get(cfg.conversation_scope(name), {})
-            rows.append({'id': identity, 'name': name, 'kind': target.get('kind', 'group'),
+            rows.append({'id': identity, 'contactId': 'contact_' + identity[:32] if target else '',
+                         'name': name, 'kind': target.get('kind', 'group'),
                          'placeholder': placeholder,
                          'bound': bool(target), 'paused': cfg.is_conversation_paused(name),
                          'calibrated': bool(binding and binding.bottom_confirmed),
@@ -44,7 +45,8 @@ class DesktopSessions:
                          'replyMode': rules.get('reply_mode'), 'stickerFrequency': rules.get('sticker_frequency')})
         return {'items': rows, 'monitorAll': cfg.monitor_all_groups, 'stickersEnabled': cfg.stickers_enabled,
                 'defaultReplyMode': cfg.reply_mode, 'defaultStickerFrequency': cfg.sticker_frequency,
-                'accountLabel': cfg.account_display_name, 'revision': config_revision(cfg)}
+                'accountLabel': cfg.account_display_name,
+                'accountKey': hashlib.sha256(configured_account(cfg).encode()).hexdigest(), 'revision': config_revision(cfg)}
 
     @staticmethod
     def _placeholder(cfg):
@@ -62,11 +64,13 @@ class DesktopSessions:
             self._cache = (account, monotonic() + 20, rows)
             return rows
 
-    def directory(self, query='', kind='all', offset=0, refresh=False):
+    def directory(self, query='', kind='all', offset=0, refresh=False, accountKey=None):
         if (not isinstance(query, str) or len(query) > 120 or kind not in ('all', 'group', 'private', 'service')
                 or type(offset) is not int or not 0 <= offset <= 50000 or type(refresh) is not bool):
             raise ValueError('通讯录搜索条件无效')
         cfg = Settings.load(self.root)
+        if accountKey is not None and accountKey != hashlib.sha256(configured_account(cfg).encode()).hexdigest():
+            raise ValueError('微信账号已切换，请刷新通讯录')
         rows = search_directory(self._directory(cfg, refresh), query.strip(), kind)
         saved = {t['account'] + '/' + t['id']: name for name, t in cfg.conversation_targets.items()}
         page = []

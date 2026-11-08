@@ -246,7 +246,7 @@ def test_role_customization_precedes_fixed_identity_and_sticker_rules(tmp_path):
     rules = system[system.index('把正在说话的人当主人，每次发图'):]
     all_system = '\n'.join(m['content'] for m in requests[0]['messages'] if m['role']=='system')
     assert all_system.count('固定运行边界') == 1
-    assert '不能确认主人' in rules
+    assert '当前发言者是否为主人仍由本机私聊绑定确认' in rules
     assert '本会话表情偏好：自然' in rules and '频率是表达偏好，不是每轮必须发图' in rules
     assert '默认挑一张表情' not in rules
     assert 'tools' not in requests[0]

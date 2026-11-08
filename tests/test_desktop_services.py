@@ -369,6 +369,24 @@ def test_desktop_sessions_save_does_not_unpause_existing_conversations(tmp_path,
     assert Settings.load(tmp_path).for_group(group.name).reply_mode == settings.reply_mode
 
 
+def test_directory_rejects_a_page_from_the_previous_account(tmp_path, monkeypatch):
+    from xiaomao import selection
+    from xiaomao.contacts import Contact
+    from xiaomao.desktop_service import DesktopService
+
+    configured(tmp_path)
+    service = DesktopService(tmp_path)
+    original = service.call('sessions.read', {})
+    other = Contact('other-person', 'other-account', '新账号联系人', 'private')
+    Settings(tmp_path, group=other.name, conversation_targets={other.name: other.binding}).save()
+    monkeypatch.setattr(selection, 'load_directory', lambda *_: [other])
+    with pytest.raises(ValueError, match='账号已切换'):
+        service.call('sessions.directory', {'accountKey': original['accountKey']})
+    current = service.call('sessions.read', {})
+    directory = service.call('sessions.directory', {'accountKey': current['accountKey']})
+    assert directory['items'][0]['name'] == other.name
+
+
 def test_adding_a_paused_conversation_does_not_interrupt_a_pending_reply(tmp_path, monkeypatch):
     from xiaomao import selection
     from xiaomao.contacts import Contact

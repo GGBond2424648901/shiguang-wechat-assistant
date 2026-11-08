@@ -252,7 +252,7 @@ function registerIpc() {
     if (!["discover", "openWechat", "capture", "identify", "save", "cancel"].includes(action))
       throw new Error("不支持此校准操作");
     const session = calibrationTarget;
-    const data = action === "discover" ? { session } : action === "capture" ? { session, window: params.window } : params;
+    const data = action === "discover" ? { session } : action === "capture" ? { session, window: params.window, deferIdentify: true } : params;
     if (action === "capture") from.hide();
     if (action === "save") calibrationSaving = true;
     try {

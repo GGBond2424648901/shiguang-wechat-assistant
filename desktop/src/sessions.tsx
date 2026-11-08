@@ -2,21 +2,11 @@ import {
   ArrowLeft, ChevronRight, CircleHelp, Crosshair, Info, Layers2, MessageCircle, Monitor, PauseCircle,
   Plus, RefreshCcw, Save, Search, ShieldCheck, Smile, Star, Trash2, UserRound, UsersRound, X,
 } from "lucide-react";
-import { useEffect, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { errorMessage, frequencies, request, ruleLabels, type Status } from "./api";
 import { Button, Empty, IconButton, PanelTitle, Select, StatusPill, Switch, useDraftGuard } from "./components";
+import { rebaseSessions, rulesOf, sameOrder, type Conversation, type DraftRule, type SavedSessions, type SessionDraft } from "./session-draft";
 
-interface Conversation {
-  id: string; name: string; kind: "group" | "private" | "service";
-  bound: boolean; paused: boolean; calibrated: boolean;
-  placeholder?: boolean;
-  windowKind?: string | null; windowSize?: [number, number] | null;
-  replyMode?: string | null; stickerFrequency?: string | null;
-}
-interface SavedSessions {
-  items: Conversation[]; monitorAll: boolean; stickersEnabled: boolean;
-  defaultReplyMode: string; defaultStickerFrequency: string; accountLabel: string; revision: string;
-}
 interface Contact {
   id: string; name: string; kind: Conversation["kind"];
   eligible: boolean; reason: string; saved: boolean; calibrated: boolean;
@@ -24,12 +14,10 @@ interface Contact {
 interface Directory {
   items: Contact[]; total: number; offset: number;
 }
-type DraftRule = { replyMode: string | null; stickerFrequency: string | null };
 type Notify = (text: string, error?: boolean) => void;
 
 const kindLabels = { group: "群聊", private: "私聊", service: "服务" };
 const replyOptions = Object.entries(ruleLabels).map(([value, label]) => ({ value, label }));
-const rulesOf = (row: Conversation): DraftRule => ({ replyMode: row.replyMode ?? null, stickerFrequency: row.stickerFrequency ?? null });
 
 function Avatar({ kind }: { kind: Conversation["kind"] }) {
   const Icon = kind === "group" ? UsersRound : kind === "private" ? UserRound : MessageCircle;
@@ -60,36 +48,59 @@ export function SessionsPage({ active, status, notify, calibrate, directory, set
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  const accountDrafts = useRef(new Map<string, { base: SavedSessions; draft: SessionDraft; selected: string }>());
   const mutable = !!status && !status.readOnly && !busy;
   const row = order.find(item => item.id === selected) ?? order[0];
   const originalRow = base?.items.find(item => item.id === row?.id);
   const running = status?.sessions.find(item => item.id === row?.id);
   const rule = row ? rules[row.id] ?? rulesOf(row) : undefined;
-  const changed = !!base && (order !== base.items || monitor !== base.monitorAll || stickers !== base.stickersEnabled ||
+  const changed = !!base && (!sameOrder(order, base.items) || monitor !== base.monitorAll || stickers !== base.stickersEnabled ||
     defaultMode !== base.defaultReplyMode);
-  useDraftGuard("sessions", changed || !!Object.keys(rules).length);
+  useDraftGuard("sessions", changed || !!Object.keys(rules).length || !!accountDrafts.current.size);
   const ruleChanged = !!row && !!rule && (rule.replyMode !== row.replyMode || rule.stickerFrequency !== row.stickerFrequency)
     && Object.hasOwn(rules, row.id);
 
-  function accept(next: SavedSessions, preserveRules = false) {
+  function accept(next: SavedSessions, preserveRules = false, committed: { range?: boolean; rule?: string } = {}) {
+    const remainingRules = { ...rules };
+    if (committed.rule) delete remainingRules[committed.rule];
+    const currentDraft = committed.range && base ? {
+      order: base.items, monitor: base.monitorAll, stickers: base.stickersEnabled,
+      defaultMode: base.defaultReplyMode, rules: remainingRules,
+    } : { order, monitor, stickers, defaultMode, rules: remainingRules };
+    const switched = !!base && base.accountKey !== next.accountKey;
+    if (preserveRules && switched) {
+      const dirty = !sameOrder(currentDraft.order, base.items) || currentDraft.monitor !== base.monitorAll
+        || currentDraft.stickers !== base.stickersEnabled || currentDraft.defaultMode !== base.defaultReplyMode
+        || !!Object.keys(currentDraft.rules).length;
+      if (dirty) accountDrafts.current.set(base.accountKey, { base, draft: currentDraft, selected });
+      else accountDrafts.current.delete(base.accountKey);
+    }
+    const stored = preserveRules && switched ? accountDrafts.current.get(next.accountKey) : undefined;
+    if (stored) accountDrafts.current.delete(next.accountKey);
+    const draft = stored ? rebaseSessions(stored.base, stored.draft, next)
+      : preserveRules && base ? rebaseSessions(base, currentDraft, next) : undefined;
     setBase(next);
-    setOrder(next.items);
-    setMonitor(next.monitorAll);
-    setStickers(next.stickersEnabled);
-    setDefaultMode(next.defaultReplyMode);
-    setSelected(current => next.items.some(item => item.id === current) ? current : next.items[0]?.id ?? "");
-    if (!preserveRules) setRules({});
+    const items = draft?.order ?? next.items;
+    setOrder(items);
+    setMonitor(draft?.monitor ?? next.monitorAll);
+    setStickers(draft?.stickers ?? next.stickersEnabled);
+    setDefaultMode(draft?.defaultMode ?? next.defaultReplyMode);
+    setSelected(current => items.find(item => item.id === (stored?.selected ?? current)
+      || item.contactId === (stored?.selected ?? current))?.id ?? items[0]?.id ?? "");
+    setRules(draft?.rules ?? {});
+    if (switched) notify("微信账号已切换，会话草稿按账号分别保留");
+    else if (draft?.orderConflict) notify("监听列表在其他窗口发生变化，移除操作冲突，已载入最新列表供核对");
   }
 
   useEffect(() => {
-    if (!active || busy || changed || Object.keys(rules).length) return;
+    if (!active || busy) return;
     let alive = true;
     request<SavedSessions>("sessions.read").then(next => {
-      if (alive && next.revision !== base?.revision) accept(next);
+      if (alive && next.revision !== base?.revision) accept(next, true);
       if (alive) setError("");
     }).catch(e => { if (alive) setError(errorMessage(e)); });
     return () => { alive = false; };
-  }, [active, status?.revision, busy, changed, base?.revision, rules]);
+  }, [active, status?.revision, busy, base?.revision, order, monitor, stickers, defaultMode, rules]);
 
   async function run(action: string, operation: () => Promise<void>) {
     if (busy) return;
@@ -115,35 +126,32 @@ export function SessionsPage({ active, status, notify, calibrate, directory, set
       expected: base.revision, order: order.map(item => item.id), monitorAll: monitor,
       stickersEnabled: stickers, defaultReplyMode: defaultMode,
     });
-    accept(next, true);
+    accept(next, true, { range: true });
     setSelected(next.items.find(item => item.name === selection)?.id ?? next.items[0]?.id ?? "");
     notify("会话范围已保存");
   });
 
   const saveRules = () => base && row && rule && run("rules", async () => {
     const next = await request<SavedSessions>("sessions.rules", { expected: base.revision, session: row.id, ...rule });
-    if (changed) setBase(next);
-    else accept(next, true);
-    setRules(previous => {
-      const updated = { ...previous };
-      delete updated[row.id];
-      return updated;
-    });
+    accept(next, true, { rule: row.id });
     notify(`“${row.name}”的独立回复规则已保存`);
   });
 
   if (!base || !row || !rule) return <div className="glass phase-note"><Empty
     title={error ? "会话设置未载入" : "正在读取会话设置"} detail={error || undefined} /></div>;
-  if (directory) return <DirectoryPage notify={notify} existing={order.filter(item => !item.placeholder)} close={() => setDirectory(false)}
+  if (directory) return <DirectoryPage key={base.accountKey} accountKey={base.accountKey} notify={notify} existing={order.filter(item => !item.placeholder)} close={() => setDirectory(false)}
     capture={() => void run("calibrate", async () => { await calibrate(); setDirectory(false); })}
     add={contacts => {
       const retained = order.filter(item => !item.placeholder);
-      setOrder([...retained, ...contacts.map(item => ({ ...item, paused: true, bound: true,
+      const additions = contacts.filter(item => !retained.some(row => row.id === item.id || row.contactId === item.id || row.name === item.name));
+      if (retained.length + additions.length > 8) { notify("监听列表已更新，最多选择 8 个会话，请重新核对", true); return; }
+      setOrder([...retained, ...additions.map(item => ({ ...item, paused: true, bound: true,
         replyMode: null, stickerFrequency: null }))]);
-      if (contacts.length + retained.length > 1) setMonitor(true);
-      setSelected(contacts.at(-1)?.id ?? selected);
+      if (additions.length + retained.length > 1) setMonitor(true);
+      setSelected(additions.at(-1)?.id ?? selected);
+      setQuery("");
       setDirectory(false);
-      notify(`已加入 ${contacts.length} 个会话，保存后应用`);
+      notify(additions.length ? `已加入 ${additions.length} 个会话，保存后应用` : "所选会话已经加入监听列表");
     }} />;
   const pending = !originalRow;
   const paused = row.paused || (status?.mode !== "paused" && running?.mode === "paused");
@@ -211,8 +219,7 @@ export function SessionsPage({ active, status, notify, calibrate, directory, set
             onChange={value => void run("pause", async () => {
               await request("run.selected", { session: row.id, action: value ? "pause" : "enable" });
               const next = await request<SavedSessions>("sessions.read");
-              if (changed) setBase(next);
-              else accept(next, true);
+              accept(next, true);
               notify(value ? "会话已暂停" : "会话已开启");
             })}>暂停此会话</Switch>} />
         <SessionBlock icon={<Monitor size={21} />} title="窗口绑定" hint="逐个校准主窗口或独立聊天窗口"
@@ -238,8 +245,8 @@ export function SessionsPage({ active, status, notify, calibrate, directory, set
   </div>;
 }
 
-function DirectoryPage({ existing, notify, close, add, capture }: {
-  existing: Conversation[]; notify: Notify; close: () => void; add: (rows: Contact[]) => void; capture: () => void;
+function DirectoryPage({ accountKey, existing, notify, close, add, capture }: {
+  accountKey: string; existing: Conversation[]; notify: Notify; close: () => void; add: (rows: Contact[]) => void; capture: () => void;
 }) {
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState("all");
@@ -254,19 +261,20 @@ function DirectoryPage({ existing, notify, close, add, capture }: {
     let alive = true;
     setBusy(true);
     const timer = setTimeout(() => {
-      request<Directory>("sessions.directory", { query, kind, offset: page * 60, refresh: version !== refreshed.count })
+      request<Directory>("sessions.directory", { accountKey, query, kind, offset: page * 60, refresh: version !== refreshed.count })
         .then(next => { if (alive) { refreshed.count = version; setResult(next); setError(""); } })
         .catch(e => { if (alive) setError(errorMessage(e)); })
         .finally(() => { if (alive) setBusy(false); });
     }, 140);
     return () => { alive = false; clearTimeout(timer); };
-  }, [query, kind, page, version, refreshed]);
+  }, [accountKey, query, kind, page, version, refreshed]);
   const current = result?.items ?? [];
-  const contains = (row: Contact) => existing.some(item => item.name === row.name) || row.saved;
+  const contains = (row: Contact) => existing.some(item => item.name === row.name || item.id === row.id || item.contactId === row.id) || row.saved;
+  const pending = checked.filter(row => !contains(row));
   const toggle = (row: Contact) => {
+    if (checked.some(item => item.id === row.id)) { setChecked(checked.filter(item => item.id !== row.id)); return; }
     if (!row.eligible || contains(row)) return;
-    if (checked.some(item => item.id === row.id)) setChecked(checked.filter(item => item.id !== row.id));
-    else if (checked.length + existing.length >= 8) notify("最多保存 8 个监听会话", true);
+    if (pending.length + existing.length >= 8) notify("最多保存 8 个监听会话", true);
     else setChecked([...checked, row]);
   };
   return <div className="glass directory-page">
@@ -303,9 +311,9 @@ function DirectoryPage({ existing, notify, close, add, capture }: {
         </div>}
       </section>
       <section className="glass panel directory-selected">
-        <PanelTitle icon={<Layers2 size={18} />} end={<span className="muted">{existing.length + checked.length} / 8</span>}>本次选择</PanelTitle>
+        <PanelTitle icon={<Layers2 size={18} />} end={<span className="muted">{existing.length + pending.length} / 8</span>}>本次选择</PanelTitle>
         <div className="directory-picked">
-          {checked.length ? checked.map(item => <div className="flex" key={item.id}>
+          {pending.length ? pending.map(item => <div className="flex" key={item.id}>
             <Avatar kind={item.kind} /><b>{item.name}</b>
             <IconButton label={`移除 ${item.name}`} icon={<X size={15} />} onClick={() => toggle(item)} />
           </div>) : <Empty icon={<CircleHelp size={23} />} title="勾选左侧群聊或联系人" detail="支持一次加入多个会话。" />}
@@ -318,8 +326,8 @@ function DirectoryPage({ existing, notify, close, add, capture }: {
       <Button className="directory-capture" aria-label="识别当前微信会话" title="识别当前微信会话" icon={<Crosshair size={15} />}
         onClick={capture}><span>识别当前微信会话</span></Button>
       <Button onClick={close}>取消</Button>
-      <Button variant="primary" disabled={!checked.length} onClick={() => add(checked)}>
-        加入监听列表 {checked.length} / {8 - existing.length}</Button>
+      <Button variant="primary" disabled={!pending.length || pending.length + existing.length > 8} onClick={() => add(pending)}>
+        加入监听列表 {pending.length} / {Math.max(0, 8 - existing.length)}</Button>
     </footer>
   </div>;
 }

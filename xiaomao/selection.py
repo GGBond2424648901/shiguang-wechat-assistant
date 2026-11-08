@@ -366,13 +366,13 @@ def _reviewed_identity(cfg,draft,cancelled,vision):
     return image,CurrentGroup(name,checked,contact),rows
 
 
-def identify_reviewed_window(cfg,draft,cancelled,*,choose_observed=False):
+def identify_reviewed_window(cfg,draft,cancelled,*,choose_observed=False,vision=None):
     """Preview the exact account-bound object; choosing another object is explicit."""
     from .vision import Vision
     if choose_observed:
         draft=replace(draft,target_group='',ocr_title='',bottom_confirmed=False)
     draft.validate()
-    vision=Vision()
+    vision=vision or Vision()
     previous=None
     for _ in range(2):
         image,current,_rows=_reviewed_identity(cfg,draft,cancelled,vision)
@@ -383,11 +383,11 @@ def identify_reviewed_window(cfg,draft,cancelled,*,choose_observed=False):
     return image,current
 
 
-def verify_reviewed_window(cfg,draft,cancelled):
+def verify_reviewed_window(cfg,draft,cancelled,*,vision=None):
     """Match the user's four regions twice before persisting any window or recipient."""
     from .vision import Vision,calibration_send_matches
     draft.validate()
-    vision=Vision()
+    vision=vision or Vision()
     checked=None
     previous=None
     for _ in range(2):

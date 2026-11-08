@@ -285,7 +285,7 @@ async function main() {
     await page.getByRole("button", { name: "人格", exact: true }).click();
     await page.getByRole("heading", { name: "人格模块", exact: true }).waitFor();
     const original = await page.getByRole("textbox", { name: "人格提示词" }).inputValue();
-    assert.ok(original.length > 1000);
+    assert.equal(original.trim(), (await fs.readFile(path.join(project, 'xiaomao/default_persona.md'), 'utf8')).trim());
     await page.screenshot({ path: path.join(output, "persona.png"), animations: "disabled" });
     await page.getByRole("button", { name: /聊天示例/ }).click();
     const editor = page.getByRole("textbox", { name: "人格提示词" });

@@ -67,7 +67,13 @@ export function CalibrationWindow() {
 
   const capture = () => run("capture", async () => {
     setUndo([]);
-    update(await rpc<Preview>("capture", { window: windowId }));
+    const preview = await rpc<Preview>("capture", { window: windowId });
+    update(preview);
+    if (!preview.identified) {
+      setBusy("identify");
+      try { update(await rpc<Preview>("identify", { token: preview.token, regions: preview.regions })); }
+      catch (error) { setNote(""); throw error; }
+    }
   });
   const reselect = () => run("back", async () => {
     await rpc("cancel", { token: picture?.token });

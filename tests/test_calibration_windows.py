@@ -117,7 +117,7 @@ def test_desktop_calibration_requires_the_selected_window_but_not_foreground(tmp
         actions.append(('capture', hwnd))
         return Image.new('RGB', (width, height), 'white')
 
-    def unrecognized(*_):
+    def unrecognized(*_, **_kwargs):
         raise ValueError('测试中没有可识别的会话标题')
 
     monkeypatch.setattr(windows, 'U', SimpleNamespace(ShowWindowAsync=restore, GetForegroundWindow=lambda: 99,
