@@ -320,6 +320,80 @@ def test_detached_click_is_blocked_when_an_overlay_covers_the_exact_click_point(
         desktop._click('send')
 
 
+@pytest.mark.parametrize('variant', ['moved', 'ambiguous', 'wrong_label', 'editing'])
+def test_detached_send_recovers_only_a_unique_verified_button_before_editing(tmp_path, monkeypatch, variant):
+    from dataclasses import asdict
+    import numpy as np
+    from xiaomao.config import Settings
+    from xiaomao.domain import ReplyTask
+    from xiaomao.engine import Engine
+    from xiaomao.store import StateStore
+
+    original=binding()
+    original.window_kind='detached'
+    original.target_group='示例会话'
+    original.manual_regions=True
+    original.regions['input']=[.02,.80,.90,.885]
+    original.regions['send']=[.68,.90,.80,.973]
+    cfg=Settings(tmp_path, group=original.target_group, context_limit=0,
+                 conversation_targets={original.target_group:{'account':'qa','id':'room@chatroom','kind':'group'}},
+                 window_bindings={'qa/room@chatroom':asdict(original)})
+    image=Image.new('RGB',(800,600),(237,237,237))
+    draw=ImageDraw.Draw(image)
+    for left in ((617,707) if variant=='ambiguous' else (707,)):
+        draw.rounded_rectangle((left,542,left+88,583),radius=5,fill=(224,224,224))
+        draw.rectangle((left+22,556,left+29,566),fill=(143,143,143))
+        draw.rectangle((left+58,556,left+64,566),fill=(136,136,136))
+    label='打开' if variant=='wrong_label' else '发送(S)'
+
+    def recognize(crop):
+        if crop.size==(800,60):
+            return [vision.TextLine('示例会话(2)',(12,12,112,30),.99)]
+        pixels=np.asarray(crop.convert('RGB'))
+        ys1,xs1=np.where(np.all(pixels==143,axis=2))
+        ys2,xs2=np.where(np.all(pixels==136,axis=2))
+        if not len(xs1) or not len(xs2):return []
+        return [vision.TextLine(label,(int(xs1.min()),int(ys1.min()),int(xs2.max()+1),int(ys2.max()+1)),.99)]
+
+    desktop=windows.WindowsDesktop(original)
+    monkeypatch.setattr(desktop,'capture',lambda:image)
+    store=StateStore(cfg.runtime)
+    feed=SimpleNamespace(assert_identity=lambda:None,poll=lambda:SimpleNamespace(history=[],new=[]))
+    try:
+        engine=Engine(cfg,store,desktop,vision.Vision(recognize),object(),message_source=feed)
+        if variant=='editing':
+            desktop._input_cookie=(10,20)
+        if variant!='moved':
+            with pytest.raises(ValueError,match='发送按钮'):
+                engine._frame()
+            assert desktop.calibration is original
+            return
+        frame=engine._frame()
+        assert frame.safe and frame.at_bottom and frame.draft_empty
+        assert desktop.calibration.rect('send')==(707,542,796,584)
+        assert {k:v for k,v in desktop.calibration.regions.items() if k!='send'}=={
+            k:v for k,v in original.regions.items() if k!='send'}
+        assert cfg.binding.rect('send')==original.rect('send')
+
+        # A control that moves or changes after exact draft readback still
+        # cannot be clicked or recorded as an attempted send.
+        label='打开'
+        desktop._input_cookie=(10,20)
+        monkeypatch.setattr(desktop,'assert_input_focus',lambda:None)
+        monkeypatch.setattr(desktop,'click_send',lambda:pytest.fail('wrong control was clicked'))
+        now=engine.clock()
+        task=ReplyTask(store.create('detached-send',now),now,now,'',reply='验收',state='staged')
+        store.update(task.id,'staged')
+        engine.tasks.append(task)
+        engine.mode='auto'
+        with pytest.raises(windows.DesktopUnavailable,match='发送按钮'):
+            engine._send_verified(task,task.reply,frame)
+        assert store.get(task.id)['state']=='staged'
+        assert store.db.execute('SELECT count(*) FROM attempts').fetchone()[0]==0
+    finally:
+        store.close()
+
+
 def test_background_detached_send_waits_without_activation(monkeypatch):
     original=binding();original.window_kind='detached'
     desktop=windows.WindowsDesktop(original)

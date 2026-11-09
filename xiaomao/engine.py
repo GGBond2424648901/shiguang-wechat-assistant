@@ -307,7 +307,12 @@ class Engine:
         else:
             self.desktop.validate_target(image)
         reader=getattr(self.vision,'read_controls',self.vision.read) if self.message_source else self.vision.read
-        frame = reader(image, binding)
+        read_bound = getattr(self.desktop, 'read_bound_frame', None)
+        if read_bound:
+            frame = read_bound(image, reader, getattr(self.vision, 'ocr', None))
+            binding = self.desktop.calibration
+        else:
+            frame = reader(image, binding)
         if frame.safe and frame.at_bottom and frame.group==self.settings.group and not frame.draft and not frame.draft_empty:
             confirm=getattr(self.desktop,'confirm_empty_editor',None)
             painted=confirm(image,self.vision) if confirm else None
@@ -1418,6 +1423,9 @@ class Engine:
             with self.lock:self._record(baseline.new)
             if hasattr(self.message_source,'assert_identity'):self.message_source.assert_identity()
             self.desktop.assert_input_focus()
+        verify_send = getattr(self.desktop, 'verify_send_control', None)
+        if verify_send:
+            verify_send(getattr(self.vision, 'ocr', None))
         if not self._active(task):return
         if task.proactive and not task.continuation_of:self.companion.begin_send(task.proactive)
         # 在发送事件之前先持久化；即便此刻崩溃，也不会在重启后重发。

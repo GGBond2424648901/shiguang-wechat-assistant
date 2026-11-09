@@ -441,11 +441,30 @@ class WindowsDesktop:
             else:image=capture_window(self.calibration.hwnd,info['width'],info['height'])
         except (CaptureError,OSError):raise DesktopTemporarilyHidden('微信画面暂时无法读取，等待重试') from None
         self._background_binding()
-        from .layout import adapt_calibration
-        self.calibration=adapt_calibration(image,self.calibration,self._dpi_scale())
+        if self._input_cookie is None or self.calibration.window_kind != 'detached':
+            from .layout import adapt_calibration
+            self.calibration=adapt_calibration(image,self.calibration,self._dpi_scale())
         if foreground:
             self._visible_capture=(weakref.ref(image),self.calibration,info['rect'],captured_at)
         return image
+
+    def read_bound_frame(self, image, reader, ocr):
+        from .vision import DETACHED_SEND_UNVERIFIED, recover_detached_send_region
+        frame = reader(image, self.calibration)
+        if ocr is None or self._input_cookie is not None or getattr(frame, 'reason', '') != DETACHED_SEND_UNVERIFIED:
+            return frame
+        recovered = recover_detached_send_region(ocr, image, self.calibration)
+        if recovered is None:
+            return frame
+        recovered_frame = reader(image, recovered)
+        if not recovered_frame.safe:
+            return frame
+        self.calibration = recovered
+        if self._visible_capture:
+            reference, _, rect, captured_at = self._visible_capture
+            if reference() is image:
+                self._visible_capture = (reference, recovered, rect, captured_at)
+        return recovered_frame
 
     def confirm_empty_editor(self,visible,vision):
         """Return the fresh native image only for a corroborated desktop halo."""
@@ -530,7 +549,7 @@ class WindowsDesktop:
         # checks instead; unchanged manual geometry remains authoritative.
         candidate=replace(original,width=info['width'],height=info['height'],manual_regions=False)
         if original.manual_regions:
-            from .vision import LocalOCR,read_header,header_matches,calibration_send_matches
+            from .vision import LocalOCR,read_header,header_matches,calibration_send_matches,recover_detached_send_region
             if self._sidebar_ocr is None:self._sidebar_ocr=LocalOCR()
         previous=None
         for _ in range(2):
@@ -541,14 +560,19 @@ class WindowsDesktop:
             if any(current[key]!=info[key] for key in ('pid','width','height','rect')):
                 raise DesktopTemporarilyHidden('窗口仍在调整，等待布局稳定后自动继续')
             detected=adapt_calibration(image,candidate,self._dpi_scale())
-            if detected is candidate or (previous and previous.regions!=detected.regions):
+            if detected is candidate:
                 raise DesktopTemporarilyHidden('窗口布局暂不完整，等待重新识别后自动继续')
             if original.manual_regions:
                 lines=read_header(self._sidebar_ocr,image.crop(detected.rect('header')),detected)
                 if (not lines or any(line.score<.92 for line in lines)
-                        or not header_matches(''.join(line.text for line in lines),detected)
-                        or not calibration_send_matches(self._sidebar_ocr,image,detected)):
-                    raise DesktopTemporarilyHidden('窗口缩放后标题或发送按钮未能核实，等待清晰画面')
+                        or not header_matches(''.join(line.text for line in lines),detected)):
+                    raise DesktopTemporarilyHidden('窗口缩放后会话标题未能核实，等待清晰画面')
+                if not calibration_send_matches(self._sidebar_ocr,image,detected):
+                    detected=recover_detached_send_region(self._sidebar_ocr,image,detected)
+                    if detected is None:
+                        raise DesktopTemporarilyHidden('窗口缩放后发送按钮未能核实，等待清晰画面')
+            if previous and previous.regions!=detected.regions:
+                raise DesktopTemporarilyHidden('窗口布局仍在变化，等待重新识别后自动继续')
             previous=detected
         if self.cancelled.is_set():raise DesktopUnavailable('助手已暂停')
         self.calibration=previous
@@ -637,23 +661,36 @@ class WindowsDesktop:
         generation=self.input_generation()
         self._return_window=None
         self._wake_generation=None
-        def valid():
+        def idle_context():
             if (self.cancelled.is_set() or not input_desktop_available() or
                     window_cloaked(b.hwnd) or
                     self.input_generation()!=generation or self.idle_for()<idle_seconds or
                     U.GetForegroundWindow() not in (original,b.hwnd)):return False
             _check_calibration_lease(b.hwnd)
-            return self._bound_details()['pid']==b.pid
+            return True
+        def valid():
+            return idle_context() and self._bound_details()['pid']==b.pid
         if not valid():return False
         self._last_wake=now
         was_minimized=bool(U.IsIconic(b.hwnd))
         if was_minimized:
             U.ShowWindowAsync(b.hwnd,4)  # SW_SHOWNOACTIVATE: restore before requesting focus.
-            for _ in range(10):
-                if not valid():return False
-                if not U.IsIconic(b.hwnd):break
+            for _ in range(16):
+                if not idle_context():return False
+                try:
+                    restored=self._bound_details()
+                except DesktopUnavailable:
+                    # Qt can clear IsIconic while the HWND still has the
+                    # minimized rectangle. Wait for the bound window to be
+                    # recognizable again before any focus or input attempt.
+                    pass
+                else:
+                    if restored['pid']!=b.pid:return False
+                    if not U.IsIconic(b.hwnd):break
                 if self.cancelled.wait(.05):return False
-            if U.IsIconic(b.hwnd):return False
+            else:
+                self.wake_reason='微信窗口仍在恢复，等待原窗口可用后重试'
+                return False
         if not valid() or not U.IsWindowVisible(b.hwnd):return False
         if not self.is_foreground():U.SetForegroundWindow(b.hwnd)
         if not self.is_foreground() and valid():
@@ -720,7 +757,7 @@ class WindowsDesktop:
         for _ in range(2):
             if not valid():return
             image=self.capture();b=self.calibration
-            frame=self._wake_vision.read_controls(image,b)
+            frame=self.read_bound_frame(image,self._wake_vision.read_controls,getattr(self._wake_vision,'ocr',None))
             # Activation must precede go_to_latest: a detached window left in
             # history cannot scroll until foreground. No text is entered here;
             # Engine._frame still requires latest position before any edit/send.
@@ -1223,7 +1260,7 @@ class WindowsDesktop:
         """
         from dataclasses import replace
         from .layout import adapt_calibration
-        from .vision import LocalOCR,calibration_send_matches
+        from .vision import LocalOCR,calibration_send_matches,recover_detached_send_region
         if self.idle_for()<idle_seconds:return None
         generation=self.input_generation()
         image=self.capture();scale=self._dpi_scale()
@@ -1245,7 +1282,10 @@ class WindowsDesktop:
         # not drag across unknown UI. adapt_calibration scans this same band.
         if target<round(detected.height*.55)+2 or target>=toolbar:return None
         if self._sidebar_ocr is None:self._sidebar_ocr=LocalOCR()
-        if not calibration_send_matches(self._sidebar_ocr,image,detected):return None
+        if not calibration_send_matches(self._sidebar_ocr,image,detected):
+            detected=recover_detached_send_region(self._sidebar_ocr,image,detected)
+            if detected is None:return None
+            self.calibration=detected
         self._sticker_resize_retry_at=time.monotonic()+5
         idle_credit=self.idle_for()
         generation=self._drag_editor_separator(((x1+x2)//2,toolbar),((x1+x2)//2,target),generation)
@@ -1259,9 +1299,12 @@ class WindowsDesktop:
             image=self.capture()
             current=adapt_calibration(image,candidate,scale)
             if current is candidate:return None
-            if previous and current.regions!=previous.regions:return None
             self.calibration=current;self.validate_target(image)
-            if not calibration_send_matches(self._sidebar_ocr,image,current):return None
+            if not calibration_send_matches(self._sidebar_ocr,image,current):
+                current=recover_detached_send_region(self._sidebar_ocr,image,current)
+                if current is None:return None
+                self.calibration=current
+            if previous and current.regions!=previous.regions:return None
             previous=current
         if self.input_generation()!=generation:return None
         return generation if self.sticker_preview_fits(prepared) else None
@@ -1289,6 +1332,15 @@ class WindowsDesktop:
             if U.SendInput(1,(INPUT*1)(events[1]),ctypes.sizeof(INPUT))!=1:
                 raise DesktopUnavailable('输入区分隔线释放未确认')
         return self.input_generation()
+
+    def verify_send_control(self, ocr):
+        if self.calibration.window_kind != 'detached':
+            return
+        from .vision import calibration_send_matches
+        image = self.capture()
+        if ocr is None or not calibration_send_matches(ocr, image, self.calibration):
+            raise DesktopUnavailable('微信发送按钮已移动或无法核实，已保留草稿')
+        self.assert_input_focus()
 
     def click_send(self) -> None:
         self.assert_input_focus()

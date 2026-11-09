@@ -1,5 +1,5 @@
 """本地 OCR 与聊天气泡识别；不把任意屏幕文字当作聊天正文。"""
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import re
 import hashlib
 from collections import OrderedDict
@@ -84,83 +84,108 @@ def read_header(ocr, image, binding=None):
         line.box[2]+left-30,line.box[3]+top-30),line.score) for line in ocr(padded)],key=lambda r:r.box[0])
 
 
-def _button_at_detached_send_point(image, binding, point):
-    """Read the complete painted control around the existing click point."""
+DETACHED_SEND_UNVERIFIED = "独立聊天窗口的发送按钮未核实。请确认右下角按钮完整可见，位置变动时重新框选按钮"
+
+
+def _detached_send_candidates(image, binding):
+    """Find complete button shapes in the footer below the bound editor."""
     width, height = image.size
     left = max(0, width - 540)
     top = max(binding.rect('input')[3], height - 220)
     right, bottom = width - 2, height - 2
-    click_x, click_y = point
-    if not (left < click_x < right and top < click_y < bottom):
-        return None
+    if left >= right or top >= bottom:
+        return
     footer = np.asarray(image.crop((left, top, right, bottom)).convert('RGB'))
     colors, counts = np.unique(footer.reshape(-1, 3), axis=0, return_counts=True)
     majority = counts.argmax()
     background = colors[majority].astype(np.int16)
     if counts[majority] < footer.shape[0] * footer.shape[1] * .55 or np.ptp(background) > 7:
-        return None
+        return
 
     paint = np.max(np.abs(footer.astype(np.int16) - background), axis=2) >= 8
-    _, labels, stats, _ = cv2.connectedComponentsWithStats(paint.astype(np.uint8), 8)
-    component = labels[click_y - top, click_x - left]
-    if not component:
-        return None
-    x, y, w, h, area = map(int, stats[component])
-    if (not 18 <= h <= 112 or not 2.1*h <= w <= 5*h
-            or area < .85*w*h or x < 1 or y < 1
-            or x+w >= footer.shape[1] or y+h >= footer.shape[0]):
-        return None
-    rect = (left+x, top+y, left+x+w, top+y+h)
-    if not (3 <= width-rect[2] <= 2.6*h and 3 <= height-rect[3] <= 2.1*h):
-        return None
-    margin = max(2, round(h*.12))
-    if not (rect[0]+margin <= click_x < rect[2]-margin and rect[1]+margin <= click_y < rect[3]-margin):
-        return None
-
-    # A complete light/dark or green button has a flat fill. Loose glyphs,
-    # partial shapes and nearby decorations cannot prove the click location.
-    fill, counts = np.unique(footer[y:y+h, x:x+w].reshape(-1, 3), axis=0, return_counts=True)
-    dominant = counts.argmax()
-    r, g, b = map(int, fill[dominant])
-    neutral = max(r, g, b) - min(r, g, b) <= 8
-    if counts[dominant] < .60*w*h or not (neutral or g >= max(r, b)+20):
-        return None
-    return image.crop(rect)
+    _, _, stats, _ = cv2.connectedComponentsWithStats(paint.astype(np.uint8), 8)
+    for component in stats[1:]:
+        x, y, w, h, area = map(int, component)
+        if (not 18 <= h <= 112 or not 2.1*h <= w <= 5*h
+                or area < .85*w*h or x < 1 or y < 1
+                or x+w >= footer.shape[1] or y+h >= footer.shape[0]):
+            continue
+        rect = (left+x, top+y, left+x+w, top+y+h)
+        if not (3 <= width-rect[2] <= 2.6*h and 3 <= height-rect[3] <= 2.1*h):
+            continue
+        # An intact light, dark or green button has a flat fill.
+        fill, counts = np.unique(footer[y:y+h, x:x+w].reshape(-1, 3), axis=0, return_counts=True)
+        dominant = counts.argmax()
+        r, g, b = map(int, fill[dominant])
+        neutral = max(r, g, b) - min(r, g, b) <= 8
+        if counts[dominant] >= .60*w*h and (neutral or g >= max(r, b)+20):
+            yield rect
 
 
-def calibration_send_matches(ocr,image,binding):
-    """Prove that the reviewed click point still lands on Send."""
-    rect=binding.rect('send')
-    crop=image.crop(rect)
-    if crop.width<4 or crop.height<4:return False
-    def matches(sample):
-        lines=ocr(sample)
-        if not lines or any(line.score<.9 for line in lines):return False
-        text=title_key(''.join(line.text for line in sorted(lines,key=lambda r:r.box[0]))).casefold()
-        if not re.fullmatch(r'(?:发送|send)(?:\((?:s|enter|ctrl\+enter)\))?',text):return False
-        x1=min(line.box[0] for line in lines);x2=max(line.box[2] for line in lines)
-        y1=min(line.box[1] for line in lines);y2=max(line.box[3] for line in lines)
-        pad=max(1,(y2-y1)*.30)
-        return x1-pad <= sample.width/2 <= x2+pad and y1-pad <= sample.height/2 <= y2+pad
-    if matches(crop):return True
-    # The disabled button is pale; resample its complete crop to retain short labels.
+def _send_label_matches(ocr, sample):
+    lines = ocr(sample)
+    if not lines or any(line.score < .9 for line in lines):
+        return False
+    text = title_key(''.join(line.text for line in sorted(lines, key=lambda r: r.box[0]))).casefold()
+    if not re.fullmatch(r'(?:发送|send)(?:\((?:s|enter|ctrl\+enter)\))?', text):
+        return False
+    x1 = min(line.box[0] for line in lines)
+    x2 = max(line.box[2] for line in lines)
+    y1 = min(line.box[1] for line in lines)
+    y2 = max(line.box[3] for line in lines)
+    pad = max(1, (y2-y1)*.30)
+    return x1-pad <= sample.width/2 <= x2+pad and y1-pad <= sample.height/2 <= y2+pad
+
+
+def _detached_button_matches(ocr, button):
     from PIL import ImageOps
-    enlarged=ImageOps.autocontrast(crop.convert('L')).convert('RGB').resize((crop.width*3,crop.height*3))
-    if matches(enlarged):return True
-    if getattr(binding,'window_kind','main')!='detached':return False
-    x1,y1,x2,y2=rect
-    button=_button_at_detached_send_point(image,binding,((x1+x2)//2,(y1+y2)//2))
-    if button is None:return False
-    if matches(button):return True
-    # Keep the complete shortcut suffix and give the OCR detector room around
-    # a short label. The locator above still proves the original click point.
-    button=ImageOps.autocontrast(button.convert('L'))
-    fill=button.getpixel((button.width//2,2))
-    if fill<128:
-        button=ImageOps.invert(button)
-        fill=255-fill
-    button=ImageOps.expand(button,border=8,fill=fill).convert('RGB')
-    return matches(button.resize((button.width*3,button.height*3),Image.Resampling.BICUBIC))
+    if _send_label_matches(ocr, button):
+        return True
+    # Preserve the shortcut suffix and give OCR room around a short label.
+    button = ImageOps.autocontrast(button.convert('L'))
+    fill = button.getpixel((button.width//2, 2))
+    if fill < 128:
+        button = ImageOps.invert(button)
+        fill = 255-fill
+    button = ImageOps.expand(button, border=8, fill=fill).convert('RGB')
+    return _send_label_matches(ocr, button.resize((button.width*3, button.height*3), Image.Resampling.BICUBIC))
+
+
+def calibration_send_matches(ocr, image, binding):
+    """Prove that the reviewed click point still lands on Send."""
+    from PIL import ImageOps
+    rect = binding.rect('send')
+    crop = image.crop(rect)
+    if crop.width < 4 or crop.height < 4:
+        return False
+    if _send_label_matches(ocr, crop):
+        return True
+    # Resample the complete crop when the disabled label is pale.
+    enlarged = ImageOps.autocontrast(crop.convert('L')).convert('RGB').resize((crop.width*3, crop.height*3))
+    if _send_label_matches(ocr, enlarged):
+        return True
+    if binding.window_kind != 'detached':
+        return False
+    x1, y1, x2, y2 = rect
+    click_x, click_y = (x1+x2)//2, (y1+y2)//2
+    for left, top, right, bottom in _detached_send_candidates(image, binding):
+        margin = max(2, round((bottom-top)*.12))
+        if left+margin <= click_x < right-margin and top+margin <= click_y < bottom-margin:
+            return _detached_button_matches(ocr, image.crop((left, top, right, bottom)))
+    return False
+
+
+def recover_detached_send_region(ocr, image, binding):
+    """Resolve a new click point only for one fully visible and labeled Send."""
+    if binding.window_kind != 'detached' or image.size != (binding.width, binding.height):
+        return None
+    matches = [rect for rect in _detached_send_candidates(image, binding)
+               if _detached_button_matches(ocr, image.crop(rect))]
+    if len(matches) != 1:
+        return None
+    left, top, right, bottom = matches[0]
+    width, height = image.size
+    return replace(binding, regions={**binding.regions, 'send': [left/width, top/height, right/width, bottom/height]})
 
 
 def scrollbar_thumb(image,messages=()):
@@ -412,7 +437,7 @@ class Vision:
             return Frame("", safe=False, reason="群标题识别不确定")
         detached=getattr(calibration,'window_kind','main')=='detached'
         if detached and not calibration_send_matches(self.ocr,image,calibration):
-            return Frame("", safe=False, reason="独立聊天窗口的发送按钮未核实。请确认右下角按钮完整可见，位置变动时重新框选按钮")
+            return Frame("", safe=False, reason=DETACHED_SEND_UNVERIFIED)
         check_bottom=detached or not controls_only
         message_crop = image.crop(calibration.rect("messages")) if check_bottom else None
         lines = self.ocr(message_crop) if check_bottom else []

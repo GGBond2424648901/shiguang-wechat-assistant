@@ -97,7 +97,9 @@ def test_minimized_bound_window_is_never_restored_for_capture(monkeypatch):
 
 
 @pytest.mark.parametrize('case,expected',[('allowed',['restore','focus']),('new_input',['restore']),
-                                           ('denied',['restore','focus']),('wrong_pid',[])])
+                                           ('denied',['restore','focus']),('wrong_pid',[]),
+                                           ('qt_restoring',['restore','focus']),('qt_unavailable',['restore']),
+                                           ('qt_new_input',['restore'])])
 def test_opt_in_wake_checks_identity_input_and_os_result_without_repeated_activation(monkeypatch,case,expected):
     from xiaomao import windows
     from test_vision import binding
@@ -114,25 +116,36 @@ def test_opt_in_wake_checks_identity_input_and_os_result_without_repeated_activa
         def SetForegroundWindow(self,h):
             assert h==b.hwnd
             events.append('focus')
-            if case=='allowed':state['foreground']=h
+            if case in ('allowed','qt_restoring'):state['foreground']=h
     monkeypatch.setattr(windows,'U',Api())
     monkeypatch.setattr(windows,'input_desktop_available',lambda:True)
     monkeypatch.setattr(windows,'_check_calibration_lease',lambda _:None)
     monkeypatch.setattr(d,'input_generation',lambda:state['generation'])
     monkeypatch.setattr(d,'idle_for',lambda:30)
-    monkeypatch.setattr(d,'_bound_details',lambda:{'pid':-1 if case=='wrong_pid' else b.pid})
+    def details():
+        if events==['restore'] and case.startswith('qt_') and (
+                case=='qt_unavailable' or not state.get('settled')):
+            state['settled']=True
+            raise windows.DesktopUnavailable('Qt has cleared IsIconic but still reports the minimized rectangle')
+        return {'pid':-1 if case=='wrong_pid' else b.pid}
+    def settle(_seconds):
+        if case=='qt_new_input':state['generation']+=1
+        return False
+    monkeypatch.setattr(d,'_bound_details',details)
+    monkeypatch.setattr(d.cancelled,'wait',settle)
     # This contract isolates OS activation; pixel/caption fallback has its
     # separate two-frame and input-generation regression tests.
     monkeypatch.setattr(d,'_prepare_idle_caption',lambda valid:False)
-    assert d.try_idle_wake(10)==(case=='allowed')
+    allowed=case in ('allowed','qt_restoring')
+    assert d.try_idle_wake(10)==allowed
     assert events==expected
-    if case=='allowed':
+    if allowed:
         # Successful delivery is not a denied activation. Its next bubble may
         # activate after the configured pacing rather than waiting 20 seconds.
         state['foreground']=222
         assert d.try_idle_wake(10)
         assert events==expected+['focus']
-    if case!='allowed':
+    else:
         assert not d.try_idle_wake(10)
         assert events==expected
 
