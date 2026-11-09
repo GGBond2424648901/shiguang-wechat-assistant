@@ -11,7 +11,7 @@ from .client import ControlUnavailable
 from .config import Settings, TARGET_GROUP
 from .contacts import search_directory
 from .desktop_settings import config_revision
-from .reply_preferences import validate_rule_changes
+from .reply_preferences import persist_preferences, validate_rule_changes
 from .settings_service import apply_saved_settings
 
 
@@ -134,10 +134,20 @@ class DesktopSessions:
             values['reply_mode'] = defaultReplyMode
         return self._apply(cfg, replace(updated, **values))
 
-    def rules(self, expected, session, replyMode, stickerFrequency):
+    def rules(self, expected, session, replyMode, stickerFrequency, before=None):
         values = validate_rule_changes({'reply_mode': replyMode, 'sticker_frequency': stickerFrequency})
-        cfg = self._current(expected)
+        cfg = self._current(expected) if before is None else Settings.load(self.root)
         name = next((name for name in cfg.saved_groups if cfg.conversation_pause_key(name) == session), None)
         if not name or not cfg.conversation_targets.get(name):
             raise ValueError('请选择已确认身份的会话')
-        return self._apply(cfg, cfg.with_conversation_rules(name, values))
+        if before is None:
+            return self._apply(cfg, cfg.with_conversation_rules(name, values))
+
+        previous = validate_rule_changes(before)
+        if set(previous) != set(values):
+            raise ValueError('回复规则的原始值不完整，请重新读取会话')
+        changes = {key: value for key, value in values.items() if value != previous[key]}
+        if changes:
+            persist_preferences(self.root, changes, name, cfg.conversation_scope(name), client=self.client,
+                                expected={key: previous[key] for key in changes})
+        return self.read()

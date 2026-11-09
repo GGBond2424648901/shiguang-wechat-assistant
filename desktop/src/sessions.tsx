@@ -2,7 +2,7 @@ import {
   ArrowLeft, ChevronRight, CircleHelp, Crosshair, Info, Layers2, MessageCircle, Monitor, PauseCircle,
   Plus, RefreshCcw, Save, Search, ShieldCheck, Smile, Star, Trash2, UserRound, UsersRound, X,
 } from "lucide-react";
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
 import { errorMessage, frequencies, request, ruleLabels, type Status } from "./api";
 import { Button, Empty, IconButton, PanelTitle, Select, StatusPill, Switch, useDraftGuard } from "./components";
 import { rebaseSessions, rulesOf, sameOrder, type Conversation, type DraftRule, type SavedSessions, type SessionDraft } from "./session-draft";
@@ -92,15 +92,19 @@ export function SessionsPage({ active, status, notify, calibrate, directory, set
     else if (draft?.orderConflict) notify("监听列表在其他窗口发生变化，移除操作冲突，已载入最新列表供核对");
   }
 
+  const updateFromWorker = useEffectEvent((next: SavedSessions) => {
+    if (next.revision !== base?.revision) accept(next, true);
+    setError("");
+  });
+
   useEffect(() => {
     if (!active || busy) return;
     let alive = true;
     request<SavedSessions>("sessions.read").then(next => {
-      if (alive && next.revision !== base?.revision) accept(next, true);
-      if (alive) setError("");
+      if (alive) updateFromWorker(next);
     }).catch(e => { if (alive) setError(errorMessage(e)); });
     return () => { alive = false; };
-  }, [active, status?.revision, busy, base?.revision, order, monitor, stickers, defaultMode, rules]);
+  }, [active, status?.revision, busy]);
 
   async function run(action: string, operation: () => Promise<void>) {
     if (busy) return;
@@ -131,8 +135,12 @@ export function SessionsPage({ active, status, notify, calibrate, directory, set
     notify("会话范围已保存");
   });
 
-  const saveRules = () => base && row && rule && run("rules", async () => {
-    const next = await request<SavedSessions>("sessions.rules", { expected: base.revision, session: row.id, ...rule });
+  const saveRules = () => base && row && originalRow && rule && run("rules", async () => {
+    const savedRule = rulesOf(originalRow);
+    const next = await request<SavedSessions>("sessions.rules", {
+      expected: base.revision, session: row.id, ...rule,
+      before: { reply_mode: savedRule.replyMode, sticker_frequency: savedRule.stickerFrequency },
+    });
     accept(next, true, { rule: row.id });
     notify(`“${row.name}”的独立回复规则已保存`);
   });

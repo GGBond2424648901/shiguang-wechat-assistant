@@ -112,6 +112,24 @@ def test_requested_generation_cannot_send_after_new_message(tmp_path):
     finally:r.close();s.close()
 
 
+def test_requested_chat_survives_a_brief_queue_wait_before_and_after_generation(tmp_path):
+    r,s,q,now=build(tmp_path)
+    try:
+        r.request_once('one')
+        now[0]+=30
+        blocked=dict(epoch='one',eligible=False,waiting_reason='等待当前发送任务完成')
+        assert r.tick([],**blocked) is None
+        assert not q.calls and r.once is not None
+        r.tick([],epoch='one',eligible=True)
+        q.finish()
+        assert r.tick([],**blocked) is None
+        assert s.db.execute('SELECT count(*) FROM proactive').fetchone()[0]==0
+        now[0]+=5
+        candidate,_=r.tick([],epoch='one',eligible=True)
+        assert candidate.kind=='requested' and len(q.calls)==1
+    finally:r.close();s.close()
+
+
 @pytest.mark.parametrize('change',['incoming','pause','epoch','expired','clock'])
 def test_requested_proactive_invalidates_before_generation(tmp_path,change):
     r,s,q,now=build(tmp_path)
@@ -277,6 +295,30 @@ def test_delayed_proactive_has_a_fresh_send_window_with_short_task_expiry(system
         e._reply_and_send(task)
         assert screen.events==['focus','type','send']
         assert store.get(task.id)['state']=='verified'
+    finally:e.companion.close()
+
+
+def test_queued_routine_can_still_send_after_regular_reply_expiry(system):
+    from xiaomao.companion_runtime import CompanionRuntime
+    from test_routines import at as routine_time, preferences
+    e,screen,model,clock,store=system
+    clock.value=routine_time(9)
+    e.settings.expiry_seconds=120
+    e.settings.conversation_targets={e.settings.group:{'id':'chat@chatroom','account':'a','kind':'group'}}
+    e.mode='auto';e.cancelled.clear()
+    model.proactive=lambda *args:'早安呀。'
+    e.companion=CompanionRuntime(e.settings,store,model,clock,executor=Deferred())
+    try:
+        e.companion.configure(preferences())
+        e._companion_tick()
+        e.companion.executor.finish()
+        e._companion_tick()
+        task=e.tasks[0]
+        clock.advance(125)
+        assert e._ready_for_input(task)
+        clock.value=routine_time(9,5,second=1)
+        assert not e._active(task)
+        assert screen.events==[]
     finally:e.companion.close()
 
 

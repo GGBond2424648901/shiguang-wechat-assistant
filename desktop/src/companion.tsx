@@ -21,7 +21,7 @@ interface Live {
   connected: boolean; reason: string; mode?: string; nextAt?: number; nextStage?: string; once?: string;
   previewState?: string; preview?: string; pending?: number;
   routines: { id: string; time: string; intent: string; enabled: boolean; status: string; next_due_at: number }[];
-  history: { day: string; status: string; routine_id: string; attempts: number }[];
+  history: { day: string; status: string; routine_id: string; attempts: number; detail?: string }[];
 }
 interface Memory {
   messages: number; facts: number; diaries: number; summary: string;
@@ -34,6 +34,7 @@ const rangeLabels = { idle: "空闲话题", followup: "聊后续话", checkin: "
 const statuses: Record<string, string> = {
   planned: "已排程", verified: "已确认", unknown: "结果未知", partial: "部分确认",
   missed: "已错过", candidate: "候选中", staged: "待发送", retry: "等待重试",
+  generating: "生成中", queued: "待发送", sending: "等待回执",
 };
 const fromTime = (time: string) => {
   if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(time)) throw new Error("请填写有效的免打扰时间");
@@ -248,6 +249,7 @@ export function CompanionPage({ active, status, notify }: { active: boolean; sta
               ? `${dateText(live.nextAt)} · ${live.nextStage}`
               : live?.reason || (live?.connected ? "暂未安排" : "等待读取后台状态")}</small>}>下一次候选</PanelTitle>
             <p className="preview-text">{live?.preview || "尚未生成预览"}</p>
+            {live?.nextAt && live.reason ? <p className="muted">{live.reason}</p> : null}
             {(live?.once || live?.previewState) && <small className="muted">{[live.once, live.previewState].filter(Boolean).join(" · ")}</small>}
             <div className="flex">
               <Button className="peach-outline" icon={<Eye size={16} />} busy={busy === "preview"} disabled={!mutable || !live?.connected}
@@ -295,10 +297,14 @@ export function CompanionPage({ active, status, notify }: { active: boolean; sta
           <PanelTitle icon={<Activity size={18} />}>执行记录</PanelTitle>
           <p className="routine-next"><Clock size={16} />{!base?.preferences.enabled ? "主动聊天未开启" : live?.mode === "paused" ?
             "此会话已暂停" : nextRun ? `下一次 · ${dateText(nextRun.next_due_at)}` : "暂无执行时间"}</p>
+          {live?.reason && live.mode !== "paused" && <p className="muted">{live.reason}</p>}
           {(live?.history ?? []).length ? <div className="routine-history">{[...live!.history].reverse().map((row, index) => <div
-            className="companion-summary-row" key={row.routine_id + row.day + index}>
-            <time>{row.day}</time><span>{base?.preferences.routines.find(item => item.id === row.routine_id)?.intent || "历史任务"}</span>
-            <span className="tag">{statuses[row.status] || row.status}</span>
+            key={row.routine_id + row.day + index}>
+            <div className="companion-summary-row">
+              <time>{row.day}</time><span>{base?.preferences.routines.find(item => item.id === row.routine_id)?.intent || "历史任务"}</span>
+              <span className="tag">{statuses[row.status] || row.status}</span>
+            </div>
+            {row.detail && <p className="muted routine-detail">{row.detail}{row.attempts ? ` · 已尝试 ${row.attempts} 次` : ""}</p>}
           </div>)}</div> : <Empty title="暂无执行记录" />}
         </section>
       </div>}

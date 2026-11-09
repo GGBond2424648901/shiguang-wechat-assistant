@@ -306,9 +306,9 @@ def test_one_proactive_reservation_covers_only_its_original_turn(delivery, monke
     calls_to_runtime = []
     for name in ('begin_send','finish','replied'):
         original = getattr(runtime,name)
-        def counted(*args, method=original, label=name):
+        def counted(*args, method=original, label=name, **kwargs):
             calls_to_runtime.append(label)
-            return method(*args)
+            return method(*args, **kwargs)
         monkeypatch.setattr(runtime,name,counted)
     try:
         engine.observe_once()

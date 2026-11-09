@@ -273,6 +273,42 @@ def test_wide_send_selection_with_text_only_at_far_edge_cannot_authorize_click()
     assert not vision.calibration_send_matches(read,screenshot(),original)
 
 
+@pytest.mark.parametrize('button, label, click_hits_button, accepted', [
+    (True, '发送(S)', True, True),
+    (True, 'Send (S)', True, True),
+    (False, '发送(S)', True, False),
+    (True, '打开', True, False),
+    (True, '发送(S)', False, False),
+])
+def test_detached_send_crop_can_cut_label_only_if_click_still_hits_proven_button(
+        button, label, click_hits_button, accepted):
+    import numpy as np
+
+    original = binding()
+    original.window_kind = 'detached'
+    original.regions['input'] = [.02, .80, .98, .89]
+    original.regions['send'] = [.86 if click_hits_button else .77, .905, .952, .96]
+    image = Image.new('RGB', (800, 600), (237, 237, 237))
+    draw = ImageDraw.Draw(image)
+    if button:
+        draw.rounded_rectangle((704, 543, 787, 574), radius=5, fill=(224, 224, 224))
+    # Two separate glyph markers. The saved crop misses the final mark.
+    draw.rectangle((718, 552, 726, 565), fill=(140, 142, 145))
+    draw.rectangle((766, 552, 773, 565), fill=(131, 133, 136))
+
+    def recognize(crop):
+        pixels = np.asarray(crop.convert('RGB'))
+        marks = [np.where(np.all(pixels == color, axis=2))
+                 for color in ((140, 142, 145), (131, 133, 136))]
+        if not all(len(x) for _, x in marks):
+            return []
+        (ys1, xs1), (ys2, xs2) = marks
+        return [vision.TextLine(label, (int(xs1.min()), int(ys1.min()),
+            int(xs2.max()+1), int(ys2.max()+1)), .99)]
+
+    assert vision.calibration_send_matches(recognize, image, original) is accepted
+
+
 def test_detached_click_is_blocked_when_an_overlay_covers_the_exact_click_point(monkeypatch):
     original=binding();original.window_kind='detached'
     desktop=windows.WindowsDesktop(original)

@@ -74,20 +74,24 @@ class RoutineScheduler:
                 self.recovered.append((identity, 'skipped'))
                 row.update(status='planned', candidate_id='')
 
-    def invalidate(self):
+    def invalidate(self, detail=''):
         for row in self.history:
             if row['status'] in ('planned', 'generating', 'queued'):
+                if detail and row['candidate_id']:
+                    row['detail'] = detail
                 row.update(status='planned', candidate_id='')
 
     def _record(self, identity, day):
         return next((row for row in self.history if row['routine_id'] == identity and row['day'] == day), None)
 
-    def maintain(self, rows, now):
+    def maintain(self, rows, now, *, blocked_reason=''):
         value = datetime.fromtimestamp(now, LOCAL)
         day = value.strftime('%Y-%m-%d')
         for row in self.history:
             if row['status'] in ('planned', 'generating', 'queued') and now > row['expires_at']:
                 row['status'] = 'missed'
+                if not row.get('detail'):
+                    row['detail'] = blocked_reason or '超过执行时限，未发送'
         for routine in rows:
             if not routine['enabled'] or value.weekday() not in routine['weekdays']:
                 continue
@@ -101,9 +105,13 @@ class RoutineScheduler:
             elif (record['status'] not in {'verified','unknown','partial','sending'}
                   and record['definition'] != routine):
                 record.update(due_at=due, expires_at=due+DUE_WINDOW, status='planned', attempts=0,
-                              last_attempt_at=0, candidate_id='', definition=deepcopy(routine))
+                              last_attempt_at=0, candidate_id='', definition=deepcopy(routine), detail='')
             if record['status'] == 'planned' and now > record['expires_at']:
                 record['status'] = 'missed'
+                record['detail'] = blocked_reason or '超过执行时限，未进入发送队列'
+            elif (blocked_reason and due <= now and record['status'] == 'planned'
+                  and not record['candidate_id'] and not record.get('detail')):
+                record['detail'] = blocked_reason
         self.history.sort(key=lambda row: (row['day'], row['due_at'], row['routine_id']))
         del self.history[:-MAX_HISTORY]
 
@@ -119,7 +127,7 @@ class RoutineScheduler:
                     or now > record['expires_at']
                     or record['last_attempt_at'] and now < record['last_attempt_at']+RETRY_SECONDS):
                 continue
-            record.update(candidate_id=uuid.uuid4().hex, revision=revision,
+            record.update(candidate_id=uuid.uuid4().hex, revision=revision, detail='',
                           attempts=record['attempts']+1, last_attempt_at=now)
             return record
 
@@ -143,12 +151,15 @@ class RoutineScheduler:
         if record and record['candidate_id'] == candidate.id and record['status'] == 'sending':
             record['confirmed_parts'] += 1
 
-    def finish(self, candidate, status):
+    def finish(self, candidate, status, *, detail=''):
         record = self._record(candidate.routine_id, candidate.day)
         if not record or record['candidate_id'] != candidate.id:
             return
         if record['status'] in TERMINAL:
+            if record['status'] == 'missed' and detail and record['candidate_id'] == candidate.id:
+                record['detail'] = detail
             return record['status']
+        record['detail'] = detail
         if status in ('verified', 'unknown', 'partial'):
             # Intermediate receipts call progress; the final receipt calls
             # finish directly. Count it here once before sealing the record.

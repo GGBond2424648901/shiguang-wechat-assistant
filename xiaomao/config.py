@@ -364,7 +364,7 @@ class Settings:
                        **overrides,
                        self_name_unique_confirmed=self.self_name_unique_confirmed if name==self.group else False)
 
-    def with_conversation_rules(self,name,changes):
+    def with_conversation_rules(self,name,changes,*,expected=None):
         from .reply_preferences import validate_rule_changes
         changes=validate_rule_changes(changes)
         target=self.conversation_targets.get(name)
@@ -373,6 +373,12 @@ class Settings:
         scope=target['account']+'/'+target['id']
         rules={key:dict(value) for key,value in self.conversation_rules.items()}
         current=rules.get(scope,{})
+        if expected is not None:
+            expected=validate_rule_changes(expected)
+            if set(expected)!=set(changes):
+                raise ValueError('回复规则的核对字段不一致')
+            if any(current.get(key) not in (expected[key],value) for key,value in changes.items()):
+                raise ValueError('该会话的回复规则已在其他窗口更改，草稿已保留，请重新核对')
         for key,value in changes.items():
             if value is None:current.pop(key,None)
             else:current[key]=value

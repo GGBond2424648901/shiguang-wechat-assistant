@@ -148,13 +148,13 @@ class Resident:
                            'rules_pending':s['rules_pending'],
                            'pending_count':s['pending_count'],'companion':s.get('companion')} for s in states]}
 
-    def configure_reply_rules(self,group,scope,preferences):
-        return self._configure_rules(preferences,group,scope)
+    def configure_reply_rules(self,group,scope,preferences,*,expected=None):
+        return self._configure_rules(preferences,group,scope,expected=expected)
 
     def configure_reply_defaults(self,preferences):
         return self._configure_rules(preferences)
 
-    def _configure_rules(self,preferences,group=None,scope=None):
+    def _configure_rules(self,preferences,group=None,scope=None,*,expected=None):
         from .reply_preferences import validate_rule_changes
         preferences=validate_rule_changes(preferences,allow_inherit=group is not None)
         with self.lock:
@@ -164,7 +164,7 @@ class Resident:
                     target=cfg.conversation_targets.get(group,{})
                     if group not in cfg.saved_groups or scope!=target.get('account','')+'/'+target.get('id',''):
                         raise ValueError('该会话身份已改变，请重新选择')
-                fresh=saved.with_conversation_rules(group,preferences)
+                fresh=saved.with_conversation_rules(group,preferences,expected=expected)
             else:fresh=replace(saved,**preferences)
             # Persist first. Failed writes must not claim success or affect the worker.
             fresh.save(expected=saved)

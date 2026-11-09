@@ -144,3 +144,47 @@ def test_authenticated_rule_api_updates_recipient_and_rejects_extra_fields(live)
             assert response.status_code==400
         client.configure_reply_defaults({'sticker_frequency':'expressive'})
         assert live.engines[1].settings.sticker_frequency=='expressive'
+
+
+@pytest.mark.parametrize('mode', [None, 'natural', 'mentions', 'all'])
+def test_desktop_rule_save_accepts_unrelated_changes_and_keeps_the_paused_state(live, mode):
+    from xiaomao.client import ControlClient
+    from xiaomao.control import ControlServer
+    from xiaomao.desktop_service import DesktopService
+
+    a, b, _ = live.engines
+    root = live.settings.root
+    live.configure_reply_rules('乙群', b.settings.memory_scope, {'reply_mode': 'all' if mode == 'mentions' else 'mentions'})
+    initial_mode = b.policy.mode
+    with ControlServer(root, live):
+        panel = DesktopService(root, client=ControlClient(root))
+        snapshot = panel.call('sessions.read', {})
+        target = next(row for row in snapshot['items'] if row['name'] == '乙群')
+        original = Settings.load(root)
+        # A separate UI saves window/monitor preferences while the rule is drafted.
+        changed = original.with_conversation_pause('乙群', True)
+        replace(changed, idle_wake=not original.idle_wake).save(expected=original)
+        live.configure_reply_rules('乙群', b.settings.memory_scope, {'sticker_frequency': 'requested'})
+        result = panel.call('sessions.rules', {'expected': snapshot['revision'], 'session': target['id'],
+            'replyMode': mode, 'stickerFrequency': None,
+            'before': {'reply_mode': initial_mode, 'sticker_frequency': None}})
+    saved = Settings.load(root)
+    updated = next(row for row in result['items'] if row['id'] == target['id'])
+    assert updated['replyMode'] == mode and updated['paused']
+    assert updated['stickerFrequency'] == 'requested'
+    assert saved.idle_wake != original.idle_wake
+    assert b.policy.mode == (mode or saved.reply_mode) and a.policy.mode == saved.reply_mode
+
+
+def test_reply_rule_api_refuses_to_overwrite_a_newer_edit_of_the_same_field(live):
+    from xiaomao.client import ControlClient, ControlUnavailable
+    from xiaomao.control import ControlServer
+
+    root = live.settings.root
+    scope = live.engines[0].settings.memory_scope
+    live.configure_reply_rules('甲群', scope, {'reply_mode': 'mentions'})
+    with ControlServer(root, live):
+        client = ControlClient(root)
+        with pytest.raises(ControlUnavailable, match='已在其他窗口更改'):
+            client.configure_reply_rules('甲群', scope, {'reply_mode': 'all'}, expected={'reply_mode': None})
+    assert Settings.load(root).for_group('甲群').reply_mode == 'mentions'

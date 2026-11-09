@@ -84,9 +84,54 @@ def read_header(ocr, image, binding=None):
         line.box[2]+left-30,line.box[3]+top-30),line.score) for line in ocr(padded)],key=lambda r:r.box[0])
 
 
+def _button_at_detached_send_point(image, binding, point):
+    """Read the complete painted control around the existing click point."""
+    width, height = image.size
+    left = max(0, width - 540)
+    top = max(binding.rect('input')[3], height - 220)
+    right, bottom = width - 2, height - 2
+    click_x, click_y = point
+    if not (left < click_x < right and top < click_y < bottom):
+        return None
+    footer = np.asarray(image.crop((left, top, right, bottom)).convert('RGB'))
+    colors, counts = np.unique(footer.reshape(-1, 3), axis=0, return_counts=True)
+    majority = counts.argmax()
+    background = colors[majority].astype(np.int16)
+    if counts[majority] < footer.shape[0] * footer.shape[1] * .55 or np.ptp(background) > 7:
+        return None
+
+    paint = np.max(np.abs(footer.astype(np.int16) - background), axis=2) >= 8
+    _, labels, stats, _ = cv2.connectedComponentsWithStats(paint.astype(np.uint8), 8)
+    component = labels[click_y - top, click_x - left]
+    if not component:
+        return None
+    x, y, w, h, area = map(int, stats[component])
+    if (not 18 <= h <= 112 or not 2.1*h <= w <= 5*h
+            or area < .85*w*h or x < 1 or y < 1
+            or x+w >= footer.shape[1] or y+h >= footer.shape[0]):
+        return None
+    rect = (left+x, top+y, left+x+w, top+y+h)
+    if not (3 <= width-rect[2] <= 2.6*h and 3 <= height-rect[3] <= 2.1*h):
+        return None
+    margin = max(2, round(h*.12))
+    if not (rect[0]+margin <= click_x < rect[2]-margin and rect[1]+margin <= click_y < rect[3]-margin):
+        return None
+
+    # A complete light/dark or green button has a flat fill. Loose glyphs,
+    # partial shapes and nearby decorations cannot prove the click location.
+    fill, counts = np.unique(footer[y:y+h, x:x+w].reshape(-1, 3), axis=0, return_counts=True)
+    dominant = counts.argmax()
+    r, g, b = map(int, fill[dominant])
+    neutral = max(r, g, b) - min(r, g, b) <= 8
+    if counts[dominant] < .60*w*h or not (neutral or g >= max(r, b)+20):
+        return None
+    return image.crop(rect)
+
+
 def calibration_send_matches(ocr,image,binding):
-    """Require the complete send label at the actual click point of the reviewed crop."""
-    crop=image.crop(binding.rect('send'))
+    """Prove that the reviewed click point still lands on Send."""
+    rect=binding.rect('send')
+    crop=image.crop(rect)
     if crop.width<4 or crop.height<4:return False
     def matches(sample):
         lines=ocr(sample)
@@ -101,7 +146,21 @@ def calibration_send_matches(ocr,image,binding):
     # The disabled button is pale; resample its complete crop to retain short labels.
     from PIL import ImageOps
     enlarged=ImageOps.autocontrast(crop.convert('L')).convert('RGB').resize((crop.width*3,crop.height*3))
-    return matches(enlarged)
+    if matches(enlarged):return True
+    if getattr(binding,'window_kind','main')!='detached':return False
+    x1,y1,x2,y2=rect
+    button=_button_at_detached_send_point(image,binding,((x1+x2)//2,(y1+y2)//2))
+    if button is None:return False
+    if matches(button):return True
+    # Keep the complete shortcut suffix and give the OCR detector room around
+    # a short label. The locator above still proves the original click point.
+    button=ImageOps.autocontrast(button.convert('L'))
+    fill=button.getpixel((button.width//2,2))
+    if fill<128:
+        button=ImageOps.invert(button)
+        fill=255-fill
+    button=ImageOps.expand(button,border=8,fill=fill).convert('RGB')
+    return matches(button.resize((button.width*3,button.height*3),Image.Resampling.BICUBIC))
 
 
 def scrollbar_thumb(image,messages=()):
@@ -353,7 +412,7 @@ class Vision:
             return Frame("", safe=False, reason="群标题识别不确定")
         detached=getattr(calibration,'window_kind','main')=='detached'
         if detached and not calibration_send_matches(self.ocr,image,calibration):
-            return Frame("", safe=False, reason="独立聊天窗口发送区域无法确认，请检查校准")
+            return Frame("", safe=False, reason="独立聊天窗口的发送按钮未核实。请确认右下角按钮完整可见，位置变动时重新框选按钮")
         check_bottom=detached or not controls_only
         message_crop = image.crop(calibration.rect("messages")) if check_bottom else None
         lines = self.ocr(message_crop) if check_bottom else []

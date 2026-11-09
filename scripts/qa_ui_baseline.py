@@ -168,6 +168,14 @@ def start_fixture(root, *, visual=False):
     runtime.mkdir(exist_ok=True)
 
     class Handler(BaseHTTPRequestHandler):
+        def respond(self, data):
+            payload = json.dumps(data, ensure_ascii=False).encode()
+            self.send_response(200)
+            self.send_header('Content-Type', 'application/json')
+            self.send_header('Content-Length', str(len(payload)))
+            self.end_headers()
+            self.wfile.write(payload)
+
         def do_GET(self):
             if self.headers.get('Authorization') != 'Bearer ' + token:
                 self.send_error(403)
@@ -199,12 +207,27 @@ def start_fixture(root, *, visual=False):
             else:
                 self.send_error(404)
                 return
-            payload = json.dumps(data, ensure_ascii=False).encode()
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.send_header('Content-Length', str(len(payload)))
-            self.end_headers()
-            self.wfile.write(payload)
+            self.respond(data)
+
+        def do_POST(self):
+            if self.headers.get('Authorization') != 'Bearer ' + token:
+                self.send_error(403)
+                return
+            if self.path != '/configure_reply_rules':
+                self.send_error(404)
+                return
+            try:
+                body = json.loads(self.rfile.read(int(self.headers['Content-Length'])))
+                current = Settings.load(root)
+                name = body['group']
+                if current.conversation_scope(name) != body['scope']:
+                    raise ValueError('Fixture conversation changed')
+                updated = current.with_conversation_rules(name, body['preferences'], expected=body['expected'])
+                updated.save(expected=current)
+            except (KeyError, ValueError, TypeError):
+                self.send_error(409)
+                return
+            self.respond({'accepted': True})
 
         def log_message(self, *_):
             pass

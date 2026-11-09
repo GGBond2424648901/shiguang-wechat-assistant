@@ -60,8 +60,10 @@ class ControlClient:
     def pause_selected(self,group,scope):
         return self.request('pause_selected',dict(group=group,scope=scope))
     def reload_windows(self):return self.request('reload_windows')
-    def configure_reply_rules(self,group,scope,preferences):
-        return self.request('configure_reply_rules',dict(group=group,scope=scope,preferences=preferences))
+    def configure_reply_rules(self,group,scope,preferences,*,expected=None):
+        payload=dict(group=group,scope=scope,preferences=preferences)
+        if expected is not None:payload['expected']=expected
+        return self.request('configure_reply_rules',payload)
     def configure_reply_defaults(self,preferences):
         return self.request('configure_reply_defaults',dict(preferences=preferences))
     def queue_text(self, group, text, request_id):

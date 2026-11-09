@@ -396,7 +396,8 @@ class Engine:
                     'expired':'未发送：等待超过时限',
                     'insufficient_input_time':'未发送：等待超过安全输入时限',
                     'uncertain_send':'发送结果未知，未重发'}
-            labels.update(draft_expired='表情等待已到期，保留草稿且未补发；继续监听',
+            labels.update(draft_expired='表情草稿未能在时限内核对，已保留且未发送',
+                          proactive_expired='主动消息已失效，未发送',
                           draft_removed='表情草稿已被清空，未重新粘贴或发送')
             self.last_result={'state':state,'reason':reason,'at':self.clock(),'group':self.settings.group,
                               'summary':'上一条回复已确认发送' if state=='verified' else
@@ -410,7 +411,8 @@ class Engine:
                         self._companion_call('progress',task.proactive)
                     else:
                         outcome='partial' if state=='skipped' and task.continuation_of else state
-                        self._companion_call('finish',task.proactive,outcome)
+                        detail=self.last_result['summary'] if state=='skipped' else ''
+                        self._companion_call('finish',task.proactive,outcome,detail=detail)
                 elif state=='verified' and not task.continuation_of:self._companion_call('replied',task.id,self.clock())
             if task in self.tasks:
                 self.tasks.remove(task)
@@ -422,6 +424,10 @@ class Engine:
 
     def _deadline(self,task):
         base=task.created+self.settings.expiry_seconds
+        if task.proactive:
+            # A routine owns its due window. Other proactive drafts can expire
+            # sooner than a regular reply if generation used part of their time.
+            return task.proactive.expires if task.proactive.kind=='routine' else min(base,task.proactive.expires)
         if task.idle_deadline and (task.state in ('staged','sending','awaiting_receipt') or
                 (task.messages and self.last_arrival_id==task.messages[-1].message_id)):
             return task.idle_deadline
@@ -719,13 +725,21 @@ class Engine:
             choices=self.stickers.candidates(selection_context,excluded=self.store.recent_stickers(self.settings.memory_scope,self.clock()))
         return self.model.proactive_plan(context,candidate,profile,choices=choices)
 
-    def _companion_tick(self):
+    def _companion_tick(self, *, source_wait=''):
         if not self.companion:return
         try:
             with self.lock:
+                blocked_reason=''
+                if self.mode!='auto' or self.cancelled.is_set():
+                    blocked_reason='仅观察，未开启自动回复' if self.mode=='observe' else '本会话已暂停'
+                elif not self.settings.conversation_targets.get(self.settings.group):
+                    blocked_reason='尚未绑定准确的回复对象'
+                waiting_reason=''
+                if not blocked_reason:
+                    waiting_reason=source_wait or ('等待当前发送任务完成' if self.tasks else '')
                 result=self.companion.tick(self._context_snapshot(),epoch=self.epoch,
-                    eligible=self.mode=='auto' and not self.cancelled.is_set() and not self.tasks
-                        and bool(self.settings.conversation_targets.get(self.settings.group)),memory=self.memory)
+                    eligible=not (blocked_reason or waiting_reason),memory=self.memory,
+                    waiting_reason=waiting_reason,blocked_reason=blocked_reason)
                 if result:
                     candidate,reply=result
                     from .stickers import ReplyPlan,StickerRequest,StickerUnavailable
@@ -738,7 +752,7 @@ class Engine:
                             try:prepared=self._prepare_sticker_plan(plan,self.stickers.items,StickerRequest())
                             except (StickerUnavailable,OSError):pass  # Retain a usable text opening.
                         if not reply and not prepared:
-                            self.companion.finish(candidate,'skipped')
+                            self.companion.finish(candidate,'skipped',detail='未生成可发送的文字或表情')
                             return
                     # Scheduling/generation time is distinct from the send queue.
                     # The candidate still retains its original expiry/revision guard.
@@ -835,7 +849,7 @@ class Engine:
                 self._companion_tick()
                 now = self.clock()
                 for task in list(self.tasks):
-                    if now-task.created > self.settings.expiry_seconds or now < task.created:
+                    if not task.created<=now<=self._deadline(task):
                         self._retire(task, "skipped", "expired")
                 if self.mode != "auto" or self.cancelled.is_set() or not self.tasks:
                     return
@@ -881,6 +895,7 @@ class Engine:
                     self.reason=str(error)+'；自动重试中' if isinstance(error,DatabaseUnavailable) else '数据库暂时不可读，正在后台自动重连'
                     logging.getLogger(__name__).warning('数据库接收重试: %s',type(error).__name__)
                     self.ready_at=self.clock()+min(15,self.source_failures)
+                    self._companion_tick(source_wait='等待消息监听恢复')
             return
         with self.lock:
             if epoch!=self.epoch or self.cancelled.is_set():return
@@ -1554,7 +1569,7 @@ class Engine:
                     return True
                 self.reason='回复已由微信数据库确认，继续后台监听'
                 if not (text or stickers):return True
-                if not 0<=self.clock()-task.created<self.settings.expiry_seconds:
+                if not task.created<=self.clock()<self._deadline(task):
                     if task.proactive:self._companion_call('finish',task.proactive,'partial')
                     return True
                 # Only one successor exists at a time. It keeps the original

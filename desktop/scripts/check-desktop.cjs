@@ -274,6 +274,14 @@ async function main() {
     await page.getByRole("button", { name: "逐条回复", exact: true }).click();
     await page.getByText("有未保存的修改", { exact: true }).waitFor();
     await page.getByRole("button", { name: "撤销", exact: true }).click();
+    for (const label of ["逐条回复", "仅 @ 或点名", "自然参与", "继承默认"]) {
+      const choice = page.getByRole("button", { name: label, exact: true });
+      await choice.click();
+      await page.getByRole("button", { name: "保存当前会话", exact: true }).click();
+      await page.getByText("“小禾”的独立回复规则已保存", { exact: true }).waitFor();
+      assert.equal(await choice.getAttribute("aria-pressed"), "true");
+      await page.getByRole("button", { name: "关闭提示" }).click();
+    }
     await page.getByRole("button", { name: /晨光摄影群/ }).click();
     await page.screenshot({ path: path.join(output, "sessions.png"), animations: "disabled" });
     await page.evaluate(() => {

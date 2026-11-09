@@ -747,6 +747,7 @@ h1, h2, h3, p { margin: 0; }
 .routine-days label { display: inline-flex; gap: 2px; align-items: center; }
 .routine-days input { accent-color: var(--peach); }
 .routine-history { max-height: 420px; overflow: auto; }
+.routine-detail { margin: 4px 0 9px; font-size: 12px; overflow-wrap: anywhere; }
 .memory-metrics { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 9px; }
 .memory-metric { display: flex; align-items: center; gap: 8px; padding: 12px 10px; }
 .memory-metric svg { color: var(--lavender); }

@@ -209,3 +209,32 @@ def test_same_routine_identity_on_two_accounts_is_scoped_and_encrypted(tmp_path)
         assert '早安'.encode() not in a.notes.path.read_bytes()
     finally:
         a.close(); b.close(); store.close()
+
+
+def test_busy_routine_expires_with_wait_reason_without_calling_model(tmp_path):
+    r, store, now = build(tmp_path)
+    try:
+        now[0] = at(9)
+        blocked = dict(epoch='live', eligible=False, waiting_reason='等待当前发送任务完成')
+        r.tick([], **blocked)
+        assert history(r)[0]['detail'] == blocked['waiting_reason']
+        now[0] = at(9, 6)
+        r.tick([], **blocked)
+        record = history(r)[0]
+        assert record['status'] == 'missed' and record['attempts'] == 0
+        assert record['detail'] == blocked['waiting_reason']
+        assert not r.executor.calls
+    finally:
+        r.close(); store.close()
+
+
+def test_routine_model_error_remains_in_execution_history(tmp_path):
+    r, store, now = build(tmp_path)
+    try:
+        now[0] = at(9)
+        r.tick([], epoch='live', eligible=True)
+        r.executor.calls[-1][0].set_exception(RuntimeError('PRIVATE_MODEL_DETAIL'))
+        r.tick([], epoch='live', eligible=True)
+        assert history(r)[0]['detail'] == '模型生成失败，未发送'
+    finally:
+        r.close(); store.close()

@@ -173,7 +173,8 @@ class Planner:
                 self.state['followup_at']=0
                 self.state['unanswered']=False
                 self.end_sequence()
-        if revision!=self.state['revision']:self.routines.invalidate()
+        if revision!=self.state['revision']:
+            self.routines.invalidate('收到新消息，旧草稿已作废')
 
     def replied(self,message_id,now):
         if message_id==self.state['last_reply']:return
@@ -212,8 +213,8 @@ class Planner:
         if not self._clock_ok(now):return
         p,s=self.preferences,self.state
         if not p.enabled:self.reason='主动聊天未开启';return
-        self.routines.maintain(p.routines,now)
         if quiet_now(now,p):
+            self.routines.maintain(p.routines,now,blocked_reason='安静时段内暂不执行')
             self.end_sequence()
             self.reason='免打扰时段';return
         routine=self.routines.plan(p.routines,now,s['revision'])

@@ -72,7 +72,8 @@ class DesktopCompanion:
         info = row.get('companion') or {}
         self._checked_snapshot(session, cfg)
         return {'connected': True, 'mode': row.get('mode', status.get('mode')),
-                'reason': (row.get('reason') if row.get('mode') == 'paused' else info.get('reason')) or '',
+                'reason': (row.get('reason') if row.get('mode') == 'paused' or row.get('pending_count')
+                           else info.get('reason')) or '',
                 'nextAt': info.get('next_candidate_at', 0), 'nextStage': info.get('next_stage', ''),
                 'once': info.get('once_state', ''), 'previewState': info.get('preview_state', ''),
                 'preview': info.get('preview', ''), 'pending': row.get('pending_count'),

@@ -114,6 +114,10 @@ class ControlServer:
                         elif (self.path in ('/enable_selected','/pause_selected','/companion_configure','/configure_reply_rules') or
                                 self.path in ('/reply_latest','/companion_preview','/companion_once') and payload!={}):
                             keys={'group','scope','preferences'} if self.path in ('/companion_configure','/configure_reply_rules') else {'group','scope'}
+                            if self.path=='/configure_reply_rules' and isinstance(payload,dict) and 'expected' in payload:
+                                keys.add('expected')
+                                if not isinstance(payload['expected'],dict):
+                                    return self.answer(400, {"error": "回复规则的原始值无效"})
                             if not isinstance(payload,dict) or set(payload)!=keys or not all(isinstance(payload[k],str) and payload[k] for k in ('group','scope')):
                                 return self.answer(400, {"error": "请指定监听会话及身份"})
                         elif payload != {}:

@@ -94,14 +94,15 @@ class CompanionRuntime:
             if candidate.kind=='requested':self.once_state='部分消息已确认，仍在发送后续内容'
             self.planner.reason='部分主动消息已确认，等待其余发送回执'
 
-    def finish(self,candidate,state):
+    def finish(self,candidate,state,*,detail=''):
         with self.lock:
             if candidate.kind=='routine':
-                recorded=self.planner.routines.finish(candidate,state)
+                recorded=self.planner.routines.finish(candidate,state,detail=detail)
                 if recorded in ('verified','unknown','partial'):state=recorded
             if candidate.kind=='requested':
                 self.once_state={'verified':'已发送并确认','unknown':'发送结果未知，不会重发',
                     'partial':'仅部分消息已确认，其余未发送','skipped':'已取消，未发送'}.get(state,state)
+                if state=='skipped' and detail:self.once_state=detail
             self.store.proactive_result(candidate.id,state)
             if state in ('verified','unknown','partial'):
                 # A new inbound during receipt readback already answered this turn.
@@ -185,24 +186,46 @@ class CompanionRuntime:
             self.future=self.executor.submit(self.proactive_generate,self.enrich(context),c,self.profile)
             self.job=('preview',epoch,c,[]);self.preview_state='生成中，仅预览不发送';self.preview_text=''
 
-    def tick(self,context,*,epoch,eligible,memory=None):
+    def tick(self,context,*,epoch,eligible,memory=None,waiting_reason='',blocked_reason=''):
         with self.lock:
             if self.closed:return
             now=self.clock()
             # Observe regressions even while a model call is pending. Otherwise
             # a clock that catches up before completion resurrects the candidate.
-            if not self.planner._clock_ok(now):self.save()
+            clock_ok=self.planner._clock_ok(now)
+            if not clock_ok:self.save()
+            preferences=self.planner.preferences
+            if clock_ok and preferences.enabled and (not eligible or self.future or self.once):
+                history=deepcopy(self.planner.routines.history)
+                reason=waiting_reason or blocked_reason
+                if quiet_now(now,preferences):
+                    reason='安静时段内暂不执行'
+                elif not reason and self.job:
+                    reason='等待当前陪伴任务生成完成'
+                elif not reason and self.once:
+                    reason='等待已安排的主动聊天'
+                self.planner.routines.maintain(preferences.routines,now,blocked_reason=reason)
+                if history!=self.planner.routines.history:self.save()
+            if not eligible and (waiting_reason or blocked_reason):
+                self.planner.reason=waiting_reason or blocked_reason
             if self.once:
                 requested_epoch,candidate,due=self.once
-                if requested_epoch!=epoch or not eligible or not self.valid(candidate):
+                if requested_epoch!=epoch or not self.valid(candidate) or (not eligible and not waiting_reason):
                     self.once=None;self.once_state='已取消，未发送';return
+                if not eligible:
+                    self.once_state=waiting_reason
+                    return
                 if now<due:return
                 self.once=None;self.once_state='正在生成主动消息'
                 self.future=self.executor.submit(self.proactive_generate,self.enrich(context),candidate,self.profile)
                 self.job=('proactive',epoch,candidate,[]);return
             if self.future and self.future.done():
-                future,job=self.future,self.job;self.future=self.job=None
-                kind,job_epoch,candidate,sources=job
+                kind,job_epoch,candidate,sources=self.job
+                if (kind=='proactive' and not eligible and waiting_reason
+                        and job_epoch==epoch and self.valid(candidate)):
+                    if candidate.kind=='requested':self.once_state=waiting_reason
+                    return
+                future=self.future;self.future=self.job=None
                 try:result=future.result()
                 except Exception:
                     self.error='本次陪伴生成未完成，普通聊天继续'
@@ -240,9 +263,9 @@ class CompanionRuntime:
                             if candidate.kind=='requested':self.once_state='已生成，等待安全发送'
                             return candidate,result
                         outcome='今日主动额度已用完，继续普通聊天'
-                    elif not result:outcome='生成失败，未发送' if self.error else '选择保持安静，未发送'
+                    elif not result:outcome='模型生成失败，未发送' if self.error else '选择保持安静，未发送'
                     self.planner.reason=outcome
-                    if candidate.kind=='routine':self.finish(candidate,'skipped')
+                    if candidate.kind=='routine':self.finish(candidate,'skipped',detail=outcome)
                     if candidate.kind=='requested':self.once_state=outcome
                 # Never immediately start another job in the same completion poll.
                 return
