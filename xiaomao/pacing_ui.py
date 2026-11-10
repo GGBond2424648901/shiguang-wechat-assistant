@@ -1,6 +1,8 @@
 """Compact inline numeric pacing editor shared with the runtime settings card."""
 import tkinter as tk
+import unicodedata
 
+from .config import CONTINUATION_MIN, CONTINUATION_MAX, MAX_SENDS_PER_MINUTE, MAX_SENDS_PER_HOUR, validate_send_pacing
 from .persona_ui import BG, FONT, INK, LINE, MUTED, PAPER, PEACH, _action
 from .sessions_ui import RATE_FIELDS, parse_rate, rate_fields
 
@@ -19,12 +21,18 @@ class PacingEditor(tk.Frame):
         fields.columnconfigure((0,1),weight=1,uniform='pacing')
         initial=rate_fields((cfg.min_interval,cfg.hourly_limit,cfg.minute_limit,cfg.pacing_jitter))
         self.rate_values=[tk.StringVar(self,value=value) for value in initial]
+        self.continuation_value = tk.StringVar(self, value=f'{cfg.continuation_interval:g}')
         self.entries=[]
-        limits=((3,3600,.5,'3–3600 秒'),(0,30,.5,'0–30 秒'),(1,10,1,'1–10 条'),(1,500,1,'1–500 条'))
-        for index,(title,var,(minimum,maximum,step,hint)) in enumerate(zip(RATE_FIELDS,self.rate_values,limits)):
+        limits = ((3, 3600, .5, '3–3600 秒'), (0, 30, .5, '0–30 秒'),
+                  (1, MAX_SENDS_PER_MINUTE, 1, f'1–{MAX_SENDS_PER_MINUTE} 条'),
+                  (1, MAX_SENDS_PER_HOUR, 1, f'1–{MAX_SENDS_PER_HOUR} 条'),
+                  (CONTINUATION_MIN, CONTINUATION_MAX, .5, f'{CONTINUATION_MIN:g}–{CONTINUATION_MAX:g} 秒'))
+        names = (*RATE_FIELDS, '同轮续发间隔')
+        variables = (*self.rate_values, self.continuation_value)
+        for index,(title,var,(minimum,maximum,step,hint)) in enumerate(zip(names, variables, limits)):
             cell=tk.Frame(fields,bg=PAPER)
             cell.grid(row=index//2,column=index%2,sticky='ew',padx=(0,6) if index%2==0 else (6,0),pady=(0,8))
-            tk.Label(cell,text=title+('（秒）' if index<2 else '（条）'),bg=PAPER,fg=INK,
+            tk.Label(cell,text=title+('（秒）' if index in (0, 1, 4) else '（条）'),bg=PAPER,fg=INK,
                      font=(FONT,9),anchor='w').pack(fill='x')
             entry=tk.Spinbox(cell,textvariable=var,from_=minimum,to=maximum,increment=step,
                              width=8,bg=PAPER,fg=INK,insertbackground=INK,buttonbackground=BG,
@@ -52,9 +60,18 @@ class PacingEditor(tk.Frame):
         self.panel.notice.set('已取消发送节奏修改，原设置保持不变')
         self.close()
 
+    def values(self):
+        rate = parse_rate([value.get() for value in self.rate_values])
+        try:
+            continuation = float(unicodedata.normalize('NFKC', self.continuation_value.get()).strip())
+        except ValueError:
+            raise ValueError('同轮续发间隔请填写秒数') from None
+        validate_send_pacing(*rate, continuation)
+        return (*rate, continuation)
+
     def save(self):
         if self.busy:return
-        try:rate=parse_rate([value.get() for value in self.rate_values])
+        try:rate=self.values()
         except ValueError as error:
             self.status.set(str(error));self.feedback.configure(fg='#9B4436');return
         self._set_busy(True)

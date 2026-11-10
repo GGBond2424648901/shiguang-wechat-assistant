@@ -81,3 +81,4 @@ class ReplyTask:
     media_first: bool = False
     draft_waiting: bool = False
     part_index: int = 0
+    previous_part_id: str = ''

@@ -26,6 +26,7 @@ class StateStore:
               id TEXT PRIMARY KEY, digest TEXT NOT NULL, created REAL NOT NULL,
               state TEXT NOT NULL, reason TEXT NOT NULL DEFAULT '');
             CREATE TABLE IF NOT EXISTS attempts (task_id TEXT PRIMARY KEY, at REAL NOT NULL);
+            CREATE INDEX IF NOT EXISTS attempts_by_time ON attempts(at);
             CREATE TABLE IF NOT EXISTS latest_claims (digest TEXT PRIMARY KEY, at REAL NOT NULL);
             CREATE TABLE IF NOT EXISTS send_receipts (
               task_id TEXT PRIMARY KEY, group_digest TEXT NOT NULL,
@@ -145,10 +146,30 @@ class StateStore:
             self.db.execute("UPDATE tasks SET state='skipped',reason='restart' WHERE state IN ('candidate','generated','staged')")
             return self.db.execute("SELECT count(*) FROM tasks WHERE state='unknown'").fetchone()[0]
 
-    def allow_send(self, now: float, min_interval: float, hourly_limit: int, *, minute_limit: int = 0) -> tuple[bool, str]:
+    def interval_ready_at(self, min_interval, *, previous_part_id='', continuation_interval=0):
         with self.lock:
-            last = self.db.execute("SELECT max(at) FROM attempts").fetchone()[0]
-            if last is not None and now - last < min_interval:
+            last = self.db.execute('SELECT task_id, at FROM attempts ORDER BY at DESC, rowid DESC LIMIT 1').fetchone()
+            if last is None:
+                return None
+            ordinary = last['at'] + min_interval
+            if not previous_part_id:
+                return ordinary
+            previous = self.db.execute(
+                "SELECT a.at FROM attempts a JOIN tasks t ON t.id=a.task_id WHERE a.task_id=? AND t.state='verified'",
+                (previous_part_id,),
+            ).fetchone()
+            if previous is None:
+                return ordinary
+            continuation = previous['at'] + continuation_interval
+            # A different intervening send keeps its own ordinary spacing.
+            return continuation if last['task_id'] == previous_part_id else max(ordinary, continuation)
+
+    def allow_send(self, now: float, min_interval: float, hourly_limit: int, *, minute_limit: int = 0,
+                   previous_part_id: str = '', continuation_interval: float = 0) -> tuple[bool, str]:
+        with self.lock:
+            ready_at = self.interval_ready_at(min_interval, previous_part_id=previous_part_id,
+                                              continuation_interval=continuation_interval)
+            if ready_at is not None and now < ready_at:
                 return False, "interval"
             count = self.db.execute("SELECT count(*) FROM attempts WHERE at>?", (now - 3600,)).fetchone()[0]
             if count >= hourly_limit:return False,'hourly_limit'

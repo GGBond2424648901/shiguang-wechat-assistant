@@ -242,7 +242,7 @@ def test_unedited_low_frequency_legacy_rate_stays_unchanged_on_unrelated_save(pa
 
 
 @pytest.mark.parametrize('values',[['3','','10','500'],['NaN','3','10','500'],['3','31','1','2'],
-                                     ['3','1','2.5','5'], ['3','1','11','1'], ['3','1','1','501']])
+                                     ['3','1','2.5','5'], ['3','1','61','1'], ['3','1','1','3601']])
 def test_invalid_custom_rates_never_reach_service(panel,values):
     page=SessionsPage(panel.root,panel)
     for field,text in zip(page.rate_values,values):

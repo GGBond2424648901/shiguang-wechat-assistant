@@ -166,12 +166,14 @@ def test_pacing_save_disables_controls_and_updates_summary_after_persistence(pan
     editor = open_editor(page)
     for var, value in zip(editor.rate_values, ('17.5', '2.5', '4', '120')):
         var.set(value)
+    editor.continuation_value.set('0.75')
     editor.save_button.invoke()
     assert editor.save_button.instate(('disabled',)) and editor.cancel_button.instate(('disabled',))
     assert all(str(entry.cget('state')) == 'disabled' for entry in editor.entries)
     finish(panel)
     cfg = Settings.load(panel.directory)
     assert (cfg.min_interval, cfg.pacing_jitter, cfg.minute_limit, cfg.hourly_limit) == (17.5, 2.5, 4, 120)
+    assert cfg.continuation_interval == .75
     assert page.pacing_editor is None
     assert '4 条 / 分钟' in page.rate_text.get() and '120 条 / 小时' in page.rate_text.get()
     assert '已保存' in panel.notice.get()

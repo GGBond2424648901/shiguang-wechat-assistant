@@ -79,6 +79,23 @@ def test_pacing_save_preserves_edit_that_happens_while_waiting_for_idle(pacing_p
     assert panel.client.restarted is None
 
 
+def test_desktop_pacing_saves_faster_continuations_and_higher_caps(pacing_panel):
+    from xiaomao.desktop_settings import DesktopSettings
+
+    service = DesktopSettings(pacing_panel.directory, pacing_panel.client)
+    before = service.read()
+    updated = service.pacing(before['revision'], 3, 3600, 60, 2.5, continuation=.75)
+    assert updated['pacing'] == [3, 3600, 60, 2.5]
+    assert updated['continuationInterval'] == .75
+
+    # Older callers that only send the four ordinary settings keep the new value.
+    changed = service.pacing(updated['revision'], 4, 600, 20, 1)
+    assert changed['continuationInterval'] == .75
+    with pytest.raises(ValueError, match='同轮续发'):
+        service.pacing(changed['revision'], 4, 600, 20, 1, continuation=.1)
+    assert Settings.load(pacing_panel.directory).continuation_interval == .75
+
+
 def test_invalid_pacing_does_not_stop_or_save(pacing_panel):
     panel = pacing_panel
     errors = []

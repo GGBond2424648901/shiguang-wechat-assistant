@@ -34,7 +34,7 @@ class StickerClipboardBlocked(DesktopInputNotStarted):
 
 
 class NavigationActivity:
-    """仅识别程序自己的选群点击，避免把它误计为新的人工活动。"""
+    """Keep verified program input distinct from new keyboard or mouse activity."""
     def __init__(self):
         self.generation=None
         self.credit=0
@@ -385,6 +385,8 @@ class WindowsDesktop:
         self._return_window=None
         self._wake_generation=None
         self._sent_generation=None
+        self._editor_idle_credit=None
+        self._last_send_activity=None
         self.navigation=navigation or NavigationActivity()
 
     def _bound_details(self):
@@ -619,6 +621,7 @@ class WindowsDesktop:
         # Only called before a new editor transaction. Once input starts,
         # check()/capture() keep strict geometry and focus guards.
         self._input_cookie=None
+        self._editor_idle_credit=None
         if not self.calibration:raise DesktopUnavailable('尚未校准微信窗口')
         _check_calibration_lease(self.calibration.hwnd)
         if not self.is_foreground():raise DesktopTemporarilyHidden('等待微信自然回到前台，不切换当前应用')
@@ -627,10 +630,12 @@ class WindowsDesktop:
         if self._return_window and generation!=self._wake_generation:
             self._return_window=None
             self._wake_generation=None
-        if self.idle_for()<idle_seconds:raise DesktopTemporarilyHidden('正在操作电脑，等待空闲后发送')
+        idle_credit=self.idle_for()
+        if idle_credit<idle_seconds:raise DesktopTemporarilyHidden('正在操作电脑，等待空闲后发送')
         if self.input_generation()!=generation:raise DesktopTemporarilyHidden('检测到人工输入，等待空闲后发送')
         self.check()
         if self.input_generation()!=generation:raise DesktopTemporarilyHidden('窗口核对期间检测到人工输入，等待空闲后发送')
+        self._editor_idle_credit=idle_credit
         return generation
 
     def is_foreground(self):
@@ -1343,9 +1348,23 @@ class WindowsDesktop:
         self.assert_input_focus()
 
     def click_send(self) -> None:
+        self._last_send_activity=None
         self.assert_input_focus()
-        self._click("send")
+        self._click("send", self._input_cookie[1])
         self._sent_generation=self.input_generation()
+        if self._editor_idle_credit is not None:
+            self._last_send_activity=(self._sent_generation,self._editor_idle_credit)
+        self._editor_idle_credit=None
+
+    def continue_after_receipt(self):
+        activity,self._last_send_activity=self._last_send_activity,None
+        if not activity or self.cancelled.is_set():
+            return
+        try:
+            if self.input_generation()==activity[0]:
+                self.navigation.note(*activity)
+        except DesktopUnavailable:
+            pass  # The next part must earn normal idle proof if the desktop changed.
 
 
 _WORKER_MUTEX = "Local\\XiaomaoWechatVisibleWorker"

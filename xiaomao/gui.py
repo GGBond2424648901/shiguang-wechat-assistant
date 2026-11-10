@@ -416,11 +416,12 @@ class Panel:
         rate=tuple(rate)
         def save():
             from .config import validate_send_pacing
-            validate_send_pacing(*rate)
             original=Settings.load(self.directory)
-            minimum,hour,minute,jitter=rate
-            updated=replace(original,min_interval=minimum,hourly_limit=hour,
-                            minute_limit=minute,pacing_jitter=jitter,natural_pacing=True)
+            minimum,hour,minute,jitter,*continuation=rate
+            interval, = continuation or [original.continuation_interval]
+            validate_send_pacing(minimum,hour,minute,jitter,interval)
+            updated=replace(original,min_interval=minimum,hourly_limit=hour,minute_limit=minute,
+                            pacing_jitter=jitter,continuation_interval=interval,natural_pacing=True)
             return apply_saved_settings(self.client,original,updated)
         def saved(result):
             self.settings=Settings.load(self.directory)
@@ -586,12 +587,11 @@ class Panel:
                 if dialog is not None and dialog.winfo_exists() and dialog.editor.get('1.0','end-1c').strip():return True
             pacing=getattr(page,'pacing_editor',None)
             if pacing is not None and settings is not None:
-                from .sessions_ui import parse_rate
                 try:
-                    value=parse_rate([variable.get() for variable in pacing.rate_values])
+                    value=pacing.values()
                     saved=Settings.load(self.directory)
-                    persisted=(saved.min_interval,saved.hourly_limit,saved.minute_limit,saved.pacing_jitter)
-                    original=(settings.min_interval,settings.hourly_limit,settings.minute_limit,settings.pacing_jitter)
+                    persisted=(saved.min_interval,saved.hourly_limit,saved.minute_limit,saved.pacing_jitter,saved.continuation_interval)
+                    original=(settings.min_interval,settings.hourly_limit,settings.minute_limit,settings.pacing_jitter,settings.continuation_interval)
                     if value not in (persisted,original):return True
                 except ValueError:return True
             if key=='companion' and getattr(page,'ready',False):

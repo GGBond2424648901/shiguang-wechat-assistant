@@ -81,6 +81,29 @@ def test_minute_limit_is_rolling_shared_and_survives_restart(tmp_path):
     finally:store.close()
 
 
+def test_continuation_interval_cannot_bypass_shared_quotas_or_interleaved_send(tmp_path):
+    store = StateStore(tmp_path)
+    try:
+        prior = store.create('prior', 100)
+        store.mark_sending(prior, 100)
+        opts = dict(previous_part_id=prior, continuation_interval=.75)
+        assert store.allow_send(100.75, 3, 20, **opts) == (False, 'interval')
+        store.update(prior, 'verified')
+        assert store.allow_send(100.74, 3, 20, **opts) == (False, 'interval')
+        assert store.allow_send(100.75, 3, 20, **opts) == (True, '')
+        assert store.allow_send(100.75, 3, 20, minute_limit=1, **opts) == (False, 'minute_limit')
+        assert store.allow_send(100.75, 3, 1, **opts) == (False, 'hourly_limit')
+
+        other = store.create('other', 103)
+        store.mark_sending(other, 103)
+        store.update(other, 'verified')
+        assert store.allow_send(104, 3, 20, **opts) == (False, 'interval')
+        assert store.allow_send(106, 3, 20, **opts) == (True, '')
+        assert store.allow_send(106, 3, 20, previous_part_id=prior, continuation_interval=10) == (False, 'interval')
+    finally:
+        store.close()
+
+
 def test_minute_cap_prevents_engine_activating_input_until_window_advances(system,monkeypatch):
     engine,screen,model,clock,store=paced_engine(system,monkeypatch,[2,0])
     for index,at in enumerate((56,66,76,86,96,104)):
@@ -114,9 +137,9 @@ def test_configurable_fast_pacing_roundtrips_and_honors_tenth_message(tmp_path,s
     assert screen.events.count('send')==1
 
 
-@pytest.mark.parametrize('kwargs',[{'minute_limit':0},{'minute_limit':11},{'minute_limit':True},
-    {'hourly_limit':501},{'hourly_limit':True},{'hourly_limit':1.5},
-    {'min_interval':float('nan')},{'pacing_jitter':-1},{'pacing_jitter':True}])
+@pytest.mark.parametrize('kwargs',[{'minute_limit':0},{'minute_limit':61},{'minute_limit':True},
+    {'hourly_limit':3601},{'hourly_limit':True},{'hourly_limit':1.5},
+    {'min_interval':float('nan')},{'pacing_jitter':-1},{'pacing_jitter':True}, {'continuation_interval':True}, {'continuation_interval':.49}, {'continuation_interval':31}])
 def test_pacing_limits_validate(tmp_path,kwargs):
     from xiaomao.config import Settings
     with pytest.raises(ValueError):Settings(tmp_path,**kwargs)

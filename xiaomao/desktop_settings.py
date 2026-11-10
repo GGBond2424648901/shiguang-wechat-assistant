@@ -80,6 +80,7 @@ class DesktopSettings:
             'scopeRevision': hashlib.sha256(identity.encode()).hexdigest(),
             'current': cfg.group, 'receive': cfg.receive_mode,
             'pacing': [cfg.min_interval, cfg.hourly_limit, cfg.minute_limit, cfg.pacing_jitter],
+            'continuationInterval': cfg.continuation_interval,
             'pacingPresets': [{'label': label, 'values': rate} for label, rate in SEND_PACING_PRESETS.items()],
             'models': list(dict.fromkeys((cfg.model_name, 'deepseek-flash', 'deepseek-v4-pro'))),
             'keys': rows, 'credentialError': credential_error, 'revision': config_revision(cfg),
@@ -120,11 +121,12 @@ class DesktopSettings:
             updated.at_note = ''
         return self._apply(original, updated)
 
-    def pacing(self, expected, minimum, hourly, minute, jitter):
-        validate_send_pacing(minimum, hourly, minute, jitter)
+    def pacing(self, expected, minimum, hourly, minute, jitter, continuation=None):
         original = self._current(expected)
+        interval = original.continuation_interval if continuation is None else continuation
+        validate_send_pacing(minimum, hourly, minute, jitter, interval)
         updated = replace(original, min_interval=minimum, hourly_limit=hourly, minute_limit=minute,
-                          pacing_jitter=jitter, natural_pacing=True)
+                          pacing_jitter=jitter, continuation_interval=interval, natural_pacing=True)
         return self._apply(original, updated)
 
     def credentials(self, mode, values):

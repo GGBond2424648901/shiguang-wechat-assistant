@@ -503,11 +503,46 @@ class Engine:
                     task.retry_at=now+5 if reason else 0
             candidates=[t for t in self.tasks if not t.sticker_clipboard_wait]
             if not candidates:return min(waiting,key=lambda t:t.retry_at)
-            if self.settings.reply_mode!='natural':return candidates[0]
-            addressed=next((t for t in candidates if any(self.policy.addressed(m) for m in t.messages)),None)
-            if addressed:return addressed
-            from .stickers import named_catalog_order
-            return next((t for t in candidates if named_catalog_order(t.messages)),candidates[0])
+            return self._prioritized_task(candidates)
+
+    def _prioritized_task(self, candidates):
+        if self.settings.reply_mode != 'natural':
+            return candidates[0]
+        addressed = next((task for task in candidates if any(self.policy.addressed(m) for m in task.messages)), None)
+        if addressed:
+            return addressed
+        from .stickers import named_catalog_order
+        return next((task for task in candidates if named_catalog_order(task.messages)), candidates[0])
+
+    def next_poll_delay(self):
+        with self.lock:
+            default = self.settings.poll_seconds
+            if not self.message_source or self.mode != 'auto' or self.cancelled.is_set():
+                return default
+            candidates = [task for task in self.tasks if not task.sticker_clipboard_wait]
+            if not any(task.previous_part_id and task.state == 'generated' for task in candidates):
+                return default
+            if any(task.state in ('staged', 'sending', 'awaiting_receipt', 'unknown') for task in self.tasks):
+                return default
+            task = self._prioritized_task(candidates)
+            now = self.clock()
+            if (not task.previous_part_id or task.state != 'generated' or task.wait_reason not in ('', 'interval')
+                    or now < max(task.retry_at, self.ready_at) or now >= self._deadline(task)):
+                return default
+            due = self.store.interval_ready_at(max(self.settings.min_interval, task.send_interval),
+                                               previous_part_id=task.previous_part_id,
+                                               continuation_interval=self.settings.continuation_interval)
+            # An already-ready continuation gets one early turn, but waits for
+            # normal polling if that turn hits a quota, busy editor or window.
+            return min(default, max(.12, (due or now) - now))
+
+    def _send_allowed(self, task, now, *, planned=False):
+        cfg = self.settings
+        minimum = max(cfg.min_interval, task.send_interval) if planned else cfg.min_interval
+        return self.store.allow_send(now, minimum, cfg.hourly_limit,
+                                     minute_limit=cfg.minute_limit if cfg.natural_pacing else 0,
+                                     previous_part_id=task.previous_part_id,
+                                     continuation_interval=cfg.continuation_interval)
 
     def _can_merge(self, previous_id, message, speaker, now):
         if not speaker or not self.tasks:return False
@@ -876,7 +911,7 @@ class Engine:
                     return
                 if self.settings.reply_mode=='mentions' and now-task.last_added < self.settings.merge_seconds:
                     return
-                allowed, reason = self.store.allow_send(now, self.settings.min_interval, self.settings.hourly_limit,minute_limit=self.settings.minute_limit if self.settings.natural_pacing else 0)
+                allowed, reason = self._send_allowed(task, now)
                 if not allowed and not self._participation_pending(task):
                     with self.lock:
                         self.reason = "已达发送频率限制，任务过期后会跳过"
@@ -959,7 +994,7 @@ class Engine:
         if now<task.retry_at:
             self.reason=task.wait_detail or _STICKER_CLIPBOARD_WAIT.get(task.sticker_clipboard_wait,'正在等待本条回复自动重试；仍在后台接收消息')
             return
-        allowed,limit_reason=self.store.allow_send(now,self.settings.min_interval,self.settings.hourly_limit,minute_limit=self.settings.minute_limit if self.settings.natural_pacing else 0)
+        allowed,limit_reason=self._send_allowed(task, now)
         if not allowed and not self._participation_pending(task):
             self._waiting(task,limit_reason)
             return
@@ -1072,7 +1107,7 @@ class Engine:
             return self._resume_sticker_draft(task)
         if task.state not in ('candidate','generated') or not self._active(task):return
         if not task.pacing_planned:
-            task.reply_not_before=task.created+(random.uniform(2,5) if self.settings.natural_pacing else 0)
+            task.reply_not_before=task.created+(random.uniform(2,5) if self.settings.natural_pacing and not task.previous_part_id else 0)
             task.send_interval=self.settings.min_interval+(random.uniform(0,self.settings.pacing_jitter) if self.settings.natural_pacing else 0)
             task.pacing_planned=True
         from .stickers import named_catalog_order,turn_sticker_request
@@ -1228,7 +1263,7 @@ class Engine:
         if self.clock()<task.reply_not_before:
             self._waiting(task,'paced')
             return
-        allowed,limit_reason=self.store.allow_send(self.clock(),max(self.settings.min_interval,task.send_interval),self.settings.hourly_limit,minute_limit=self.settings.minute_limit if self.settings.natural_pacing else 0)
+        allowed,limit_reason=self._send_allowed(task, self.clock(), planned=True)
         if not allowed:
             self._waiting(task,limit_reason)
             return
@@ -1414,7 +1449,7 @@ class Engine:
     def _send_verified(self,task,reply,before):
         if not self._active(task):
             return
-        allowed, _ = self.store.allow_send(self.clock(), max(self.settings.min_interval,task.send_interval), self.settings.hourly_limit,minute_limit=self.settings.minute_limit if self.settings.natural_pacing else 0)
+        allowed, _ = self._send_allowed(task, self.clock(), planned=True)
         if not allowed:
             if task.draft_waiting:
                 self._defer_sticker_draft(task);return
@@ -1610,7 +1645,10 @@ class Engine:
                         continuation_of=task.continuation_of or task.id,remaining_text=rest_text,
                         sticker=sticker,sticker_requested=task.sticker_requested,sticker_source_id=task.sticker_source_id,
                         remaining_stickers=stickers,operator_plan=task.operator_plan,media_first=task.media_first,
-                        part_index=task.part_index+1))
+                        part_index=task.part_index+1,previous_part_id=task.id))
+                    continue_idle = getattr(self.desktop, 'continue_after_receipt', None)
+                    if continue_idle:
+                        continue_idle()
                 elif task.proactive:self._companion_call('finish',task.proactive,'partial')
                 return True
             return False
@@ -1618,4 +1656,4 @@ class Engine:
     def run(self):
         while not self.stop_event.is_set():
             self.observe_once()
-            self.stop_event.wait(self.settings.poll_seconds)
+            self.stop_event.wait(self.next_poll_delay())

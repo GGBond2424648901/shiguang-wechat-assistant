@@ -343,6 +343,39 @@ def test_navigation_idle_credit_is_revoked_by_new_manual_input():
     assert activity.idle(101,0)==0
 
 
+@pytest.mark.parametrize('human_input', [False, True])
+def test_continuation_keeps_verified_idle_only_for_the_own_send_click(monkeypatch, human_input):
+    from xiaomao import windows
+    from test_vision import binding
+
+    desktop = windows.WindowsDesktop(binding())
+    generation = [100]
+    monkeypatch.setattr(windows, '_check_calibration_lease', lambda hwnd: None)
+    monkeypatch.setattr(desktop, 'is_foreground', lambda: True)
+    monkeypatch.setattr(desktop, '_background_binding', lambda: None)
+    monkeypatch.setattr(desktop, 'input_generation', lambda: generation[0])
+    monkeypatch.setattr(desktop, 'idle_for', lambda: 12)
+    monkeypatch.setattr(desktop, 'check', lambda: None)
+    monkeypatch.setattr(desktop, 'assert_input_focus', lambda: None)
+
+    def click(region, expected_generation=None):
+        assert region == 'send' and expected_generation == 100
+        generation[0] = 120
+
+    monkeypatch.setattr(desktop, '_click', click)
+    desktop.prepare_send(10)
+    desktop._input_cookie = (10, 100)
+    desktop.click_send()
+    assert desktop.navigation.idle(120, 0) == 0  # A click alone is not a receipt.
+    desktop.finish_input()
+    if human_input:
+        generation[0] = 121
+    desktop.continue_after_receipt()
+    idle = desktop.navigation.idle(generation[0], 0)
+    assert idle == 0 if human_input else idle >= 12
+    assert desktop.navigation.idle(122, 0) == 0
+
+
 def test_latest_navigation_does_not_click_ordinary_outgoing_text(monkeypatch):
     from PIL import Image,ImageDraw
     from xiaomao import windows

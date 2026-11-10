@@ -50,15 +50,24 @@ SEND_PACING_PRESETS = {
 }
 
 
-def validate_send_pacing(min_interval, hourly_limit, minute_limit, jitter):
+CONTINUATION_INTERVAL = 1.0
+CONTINUATION_MIN = .5
+CONTINUATION_MAX = 30
+MAX_SENDS_PER_MINUTE = 60
+MAX_SENDS_PER_HOUR = 3600
+
+
+def validate_send_pacing(min_interval, hourly_limit, minute_limit, jitter, continuation_interval=CONTINUATION_INTERVAL):
     if type(min_interval) not in (int, float) or not 3 <= min_interval <= 3600:
         raise ValueError('最短间隔须为 3 至 3600 秒')
     if type(jitter) not in (int, float) or not 0 <= jitter <= 30:
         raise ValueError('随机加时须为 0 至 30 秒')
-    if type(minute_limit) is not int or not 1 <= minute_limit <= 10:
-        raise ValueError('每分钟上限须为 1 至 10 的整数')
-    if type(hourly_limit) is not int or not 1 <= hourly_limit <= 500:
-        raise ValueError('每小时上限须为 1 至 500 的整数')
+    if type(minute_limit) is not int or not 1 <= minute_limit <= MAX_SENDS_PER_MINUTE:
+        raise ValueError(f'每分钟上限须为 1 至 {MAX_SENDS_PER_MINUTE} 的整数')
+    if type(hourly_limit) is not int or not 1 <= hourly_limit <= MAX_SENDS_PER_HOUR:
+        raise ValueError(f'每小时上限须为 1 至 {MAX_SENDS_PER_HOUR} 的整数')
+    if type(continuation_interval) not in (int, float) or not CONTINUATION_MIN <= continuation_interval <= CONTINUATION_MAX:
+        raise ValueError(f'同轮续发间隔须为 {CONTINUATION_MIN:g} 至 {CONTINUATION_MAX:g} 秒')
 
 
 def group_name(label: str) -> str:
@@ -134,6 +143,7 @@ class Settings:
     natural_pacing: bool = True
     minute_limit: int = 6
     pacing_jitter: float = 7
+    continuation_interval: float = CONTINUATION_INTERVAL
     context_limit: int = 24
     idle_seconds: float = 10
     auto_on_launch: bool = False
@@ -196,7 +206,8 @@ class Settings:
             raise ValueError('唤醒别名设置无效')
         if not (1 <= self.poll_seconds <= 30 and 1 <= self.merge_seconds <= 30 and 10 <= self.expiry_seconds <= 120):
             raise ValueError("观察与任务时效设置无效")
-        validate_send_pacing(self.min_interval,self.hourly_limit,self.minute_limit,self.pacing_jitter)
+        validate_send_pacing(self.min_interval, self.hourly_limit, self.minute_limit, self.pacing_jitter,
+                             self.continuation_interval)
         if not (0 <= self.context_limit <= 24 and 2 <= self.idle_seconds <= 120):
             raise ValueError("上下文或空闲时间设置无效")
         if len(self.self_display_name) > 80:

@@ -10,7 +10,7 @@ type General = {
 };
 type Settings = General & {
   account: string; scopeRevision: string; current: string; receive: string; owner_available: boolean; revision: string;
-  pacing: [number, number, number, number]; models: string[];
+  pacing: [number, number, number, number]; continuationInterval: number; models: string[];
   pacingPresets: { label: string; values: number[] }[];
   keys: { identifier: string; suffix: string }[]; credentialError: string;
 };
@@ -32,8 +32,11 @@ const fieldsOf = (state: Settings): General => ({
   self_name_unique_confirmed: state.self_name_unique_confirmed, owner_confirmed: state.owner_confirmed,
 });
 const rateLabels = [
-  { name: "最短间隔（秒）", min: 3, max: 3600 }, { name: "每小时（条）", min: 1, max: 500 },
-  { name: "每分钟（条）", min: 1, max: 10 }, { name: "随机加时（秒）", min: 0, max: 30 },
+  { name: "最短间隔（秒）", min: 3, max: 3600, step: "any" },
+  { name: "每小时（条）", min: 1, max: 3600, step: 1 },
+  { name: "每分钟（条）", min: 1, max: 60, step: 1 },
+  { name: "随机加时（秒）", min: 0, max: 30, step: "any" },
+  { name: "同轮续发间隔（秒）", min: 0.5, max: 30, step: "any" },
 ];
 
 export function SettingsPage({ active, status, appearance, setAppearance, notify, navigate }: {
@@ -53,6 +56,11 @@ export function SettingsPage({ active, status, appearance, setAppearance, notify
   const readOnly = status?.readOnly ?? true;
   const draft = general?.value;
   const rate = pacing?.value ?? [];
+  const rateInvalid = rateLabels.some(({ min, max, step }, index) => {
+    const value = Number(rate[index]);
+    return !rate[index] || !Number.isFinite(value) || value < min || value > max
+      || (step === 1 && !Number.isInteger(value));
+  });
   const configurationDirty = changed(general) || changed(pacing);
   const dirty = configurationDirty || keys.some(key => !!key.trim());
   const configChanged = Boolean(data && status?.revision && data.revision !== status.revision);
@@ -64,7 +72,8 @@ export function SettingsPage({ active, status, appearance, setAppearance, notify
   const accept = useCallback((next: Settings, operation = "") => {
     setData(next);
     setGeneral(previous => updateDraft(previous, fieldsOf(next), next, operation === "general" || operation === "reload", operation === "rate"));
-    setPacing(previous => updateDraft(previous, next.pacing.map(String), next, operation === "rate" || operation === "reload", operation === "general"));
+    setPacing(previous => updateDraft(previous, [...next.pacing, next.continuationInterval].map(String), next,
+      operation === "rate" || operation === "reload", operation === "general"));
     setError("");
   }, []);
   useEffect(() => {
@@ -115,6 +124,14 @@ export function SettingsPage({ active, status, appearance, setAppearance, notify
     setGeneral(previous => previous && ({ ...previous, value: { ...previous.value, [key]: value } }));
   const setRate = (value: string[] | ((previous: string[]) => string[])) =>
     setPacing(previous => previous && ({ ...previous, value: typeof value === "function" ? value(previous.value) : value }));
+  const rateField = (index: number) => {
+    const { name, min, max, step } = rateLabels[index];
+    return <label key={index} className="field">
+      {name}<input type="number" step={step} min={min} max={max}
+        value={rate[index] ?? ""} disabled={editingDisabled}
+        onChange={event => setRate(values => values.map((value, at) => at === index ? event.target.value : value))} />
+    </label>;
+  };
   const targetOptions = status?.sessions.map(session => ({ value: session.id, label: session.name })) ?? [];
   const selected = status?.sessions.find(session => session.id === target)
     ?? status?.sessions.find(session => session.id === status.primary);
@@ -195,23 +212,23 @@ export function SettingsPage({ active, status, appearance, setAppearance, notify
           <section className="glass panel pacing-panel">
             <PanelTitle icon={<Send size={19} />} end={<div className="pacing-presets flex">
               <span className="muted fine-print">节奏预设</span>
-              <Select label="节奏预设" value={data.pacingPresets.find(preset => preset.values.join(",") === rate.join(","))?.label || ""}
+              <Select label="节奏预设" value={data.pacingPresets.find(preset => preset.values.join(",") === rate.slice(0, 4).join(","))?.label || ""}
                 options={[{ value: "", label: "自定义节奏" }, ...data.pacingPresets.map(({ label }) => ({ value: label, label }))]}
                 onChange={label => {
                   const preset = data.pacingPresets.find(item => item.label === label);
-                  if (preset) setRate(preset.values.map(String));
+                  if (preset) setRate(values => [...preset.values.map(String), values[4]]);
                 }} disabled={readOnly || !!busy} />
             </div>}>发送节奏</PanelTitle>
-            <div className="rate-fields">{[0, 3, 2, 1].map(index => <label key={index} className="field">
-              {rateLabels[index].name}<input type="number" step={index === 0 || index === 3 ? "any" : 1}
-                min={rateLabels[index].min} max={rateLabels[index].max}
-                value={rate[index] ?? ""} disabled={readOnly || !!busy}
-                onChange={event => setRate(values => values.map((value, at) => at === index ? event.target.value : value))} />
-            </label>)}
-            <Button variant="primary" icon={<Save size={16} />} disabled={editingDisabled || rateStale}
-              onClick={() => void perform("rate", "settings.pacing", {
-                expected: pacing?.revision, minimum: Number(rate[0]), hourly: Number(rate[1]), minute: Number(rate[2]), jitter: Number(rate[3]),
-              }, "发送节奏已保存")}>保存节奏</Button></div>
+            <div className="rate-fields">{[0, 3, 2, 1].map(rateField)}</div>
+            <div className="pacing-followup">
+              {rateField(4)}
+              <span className="muted fine-print">同一轮从第 2 条起生效，仍逐条确认微信回执。</span>
+              <Button variant="primary" icon={<Save size={16} />} disabled={editingDisabled || rateStale || rateInvalid}
+                onClick={() => void perform("rate", "settings.pacing", {
+                  expected: pacing?.revision, minimum: Number(rate[0]), hourly: Number(rate[1]),
+                  minute: Number(rate[2]), jitter: Number(rate[3]), continuation: Number(rate[4]),
+                }, "发送节奏已保存")}>保存节奏</Button>
+            </div>
           </section>
         </div>
         <footer className="settings-footer flex glass">

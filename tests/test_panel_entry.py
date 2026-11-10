@@ -204,7 +204,7 @@ def test_explicit_exit_protects_unsaved_persona_and_settings_drafts(tmp_path,mon
         p.view.pages={'settings':SimpleNamespace(key_entries=[SimpleNamespace(get=lambda:'UNSAVED_KEY')])}
     elif draft=='settings_pacing':
         p.view.pages={'settings':SimpleNamespace(pacing_editor=SimpleNamespace(
-            rate_values=[SimpleNamespace(get=lambda value=value:value) for value in ('30','1','3','50')]))}
+            values=lambda: (30, 50, 3, 1, 1)))}
     else:
         prefs=CompanionPreferences()
         p.view.pages={'companion':SimpleNamespace(ready=True,loaded_preferences=prefs,values=lambda:prefs,

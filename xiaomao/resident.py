@@ -718,7 +718,10 @@ class Resident:
         try:
             while not self.stop_event.is_set():
                 self.observe_once()
-                self.stop_event.wait(self.settings.poll_seconds)
+                with self.lock:
+                    delay = min((engine.next_poll_delay() for engine in self.engines),
+                                default=self.settings.poll_seconds)
+                self.stop_event.wait(delay)
         finally:
             if self.account_detector:self.account_detector.close()
             for engine in self.engines:

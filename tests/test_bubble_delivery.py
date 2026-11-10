@@ -170,6 +170,39 @@ def test_pending_exposes_every_planned_bubble_before_first_receipt(delivery):
     assert feed.sent == PARTS[:1]
 
 
+def test_continuations_send_on_their_own_clock_but_next_reply_waits(delivery):
+    engine, feed, calls, clock, store = delivery
+    engine.settings.continuation_interval = .75
+    engine.settings.poll_seconds = 3
+    confirmed_before_continuation = []
+    engine.desktop.continue_after_receipt = lambda: confirmed_before_continuation.append(store.counts()['verified'])
+    question(engine)
+    question(engine, '另一位成员', 'q2', BOB)
+
+    engine.observe_once()
+    assert feed.sent == PARTS[:1]
+    assert store.counts()['verified'] == 1
+    clock.advance(.5)
+    engine.observe_once()
+    assert feed.sent == PARTS[:1]
+    clock.advance(.25)
+    engine.observe_once()
+    assert feed.sent == PARTS[:2]
+    assert engine.next_poll_delay() == pytest.approx(.75)
+    clock.advance(.75)
+    engine.observe_once()
+    assert feed.sent == PARTS and store.counts()['verified'] == 3
+    assert confirmed_before_continuation == [1, 2]
+    assert len(calls) == 1
+
+    clock.advance(3.75)
+    engine.observe_once()
+    assert feed.sent == PARTS and len(calls) == 1
+    clock.advance(.25)
+    engine.observe_once()
+    assert len(calls) == 2 and calls[-1][-1].message_id == 'q2'
+
+
 def test_each_verified_text_has_own_receipt_rate_slot_and_reply_link(delivery):
     from xiaomao.memory import ConversationMemory
     engine, feed, calls, clock, store = delivery
