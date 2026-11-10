@@ -70,6 +70,30 @@ def test_dashboard_filters_by_verified_identity_and_rejects_old_account(tmp_path
     assert len(worker.calls) == 1
 
 
+def test_dashboard_returns_the_entire_pending_list_with_planned_parts(tmp_path):
+    from xiaomao.desktop_service import DesktopService
+
+    configured(tmp_path)
+    worker = FixtureClient()
+    first = worker.pending()['tasks'][0]
+    remaining = [
+        {**first, 'id': f'task-{index}', 'group': '小禾' if index >= 20 else '晨光群'}
+        for index in range(1, 43)
+    ]
+    worker.pending = lambda: {'tasks': [
+        {**first, 'following': [{'id': 'a:1', 'reply': '后续表情'}]},
+        *remaining,
+    ]}
+    service = DesktopService(tmp_path, client=worker)
+
+    result = service.call('view.queue', {'limit': None})
+    assert result['total'] == len(result['tasks']) == 44
+    assert result['tasks'][1]['id'] == 'a:1'
+    assert result['tasks'][1]['reply'] == '后续表情'
+    assert result['tasks'][1]['progress'] == '等待前一条确认'
+    assert result['tasks'][-1]['group'] == '小禾'
+
+
 def test_queue_pages_scoped_receipts_without_rereading_the_archive(tmp_path, monkeypatch):
     from xiaomao import receipts
     from xiaomao.desktop_service import DesktopService
@@ -413,6 +437,36 @@ def test_adding_a_paused_conversation_does_not_interrupt_a_pending_reply(tmp_pat
     assert Settings.load(tmp_path).group == cfg.group
 
 
+def test_desktop_removes_verified_sessions_including_last_with_live_worker(tmp_path):
+    from xiaomao.desktop_service import DesktopService
+
+    cfg = configured(tmp_path)
+    cfg = cfg.with_conversation_rules('晨光群', {'reply_mode': 'mentions'})
+    cfg = cfg.with_conversation_rules('小禾', {'reply_mode': 'all'})
+    cfg.with_conversation_pause('小禾', True).save()
+    worker = FixtureClient()
+    status = worker.status()
+    worker.status = lambda: {**status, 'pending_count': 1, 'window_reload_pending': False}
+    worker.reload_windows = lambda: worker.calls.append('reload')
+    service = DesktopService(tmp_path, client=worker)
+    before = service.call('sessions.read', {})
+
+    with pytest.raises(ValueError, match='账号已切换'):
+        service.call('sessions.remove', {'accountKey': 'stale', 'session': before['items'][0]['id']})
+    assert worker.calls == []
+    after = service.call('sessions.remove', {'accountKey': before['accountKey'], 'session': before['items'][0]['id']})
+    assert [row['name'] for row in after['items']] == ['小禾']
+    assert after['items'][0]['paused'] and after['items'][0]['replyMode'] == 'all'
+    assert Settings.load(tmp_path).group == '小禾'
+
+    empty = service.call('sessions.remove', {'accountKey': after['accountKey'], 'session': after['items'][0]['id']})
+    assert empty['items'] == []
+    assert empty['accountKey'] == before['accountKey']
+    assert service.call('view.status', {})['sessions'] == []
+    assert Settings.load(tmp_path).conversation_rules == {}
+    assert worker.calls == ['reload', 'reload']
+
+
 def test_first_real_contact_replaces_the_factory_placeholder(tmp_path, monkeypatch):
     from xiaomao import selection, windows
     from xiaomao.contacts import Contact
@@ -423,10 +477,10 @@ def test_first_real_contact_replaces_the_factory_placeholder(tmp_path, monkeypat
     monkeypatch.setattr(windows, 'worker_scope', lambda *_: None)
     service = DesktopService(tmp_path)
     before = service.call('sessions.read', {})
-    assert before['items'][0]['placeholder']
+    assert before['items'] == []
     directory = service.call('sessions.directory', {})
     after = service.call('sessions.save', {'expected': before['revision'], 'monitorAll': False,
-                        'order': [before['items'][0]['id'], directory['items'][0]['id']]})
+                        'order': [directory['items'][0]['id']]})
     assert len(after['items']) == 1
     assert after['items'][0]['name'] == contact.name and after['items'][0]['paused']
     assert Settings.load(tmp_path).conversation_targets[contact.name] == contact.binding

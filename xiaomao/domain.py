@@ -80,3 +80,4 @@ class ReplyTask:
     operator_plan: bool = False
     media_first: bool = False
     draft_waiting: bool = False
+    part_index: int = 0

@@ -32,6 +32,10 @@ def apply_saved_settings(client,original,updated,key=''):
     route_fields=('group','group_names','monitor_all_groups','conversation_targets','calibration',
                   'calibration_account','window_bindings','paused_conversations')
     if 'idle_wake' in status:route_fields+=('idle_wake',)
+    kept_scopes = {updated.conversation_scope(name) for name in updated.saved_groups}
+    if updated.conversation_rules == {key: value for key, value in original.conversation_rules.items()
+                                      if key in kept_scopes}:
+        route_fields += ('conversation_rules',)
     if original.group!=updated.group and not updated.self_name_unique_confirmed:route_fields+=('self_name_unique_confirmed',)
     route_only=replace(original,**{k:getattr(updated,k) for k in route_fields})==updated
     if not key.strip() and route_only and 'window_reload_pending' in status:

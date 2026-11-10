@@ -1284,7 +1284,7 @@ wheels = [
 
 [[package]]
 name = "xiaomao-wechat-assistant"
-version = "0.3.11"
+version = "0.3.12"
 source = { editable = "." }
 dependencies = [
     { name = "cryptography" },

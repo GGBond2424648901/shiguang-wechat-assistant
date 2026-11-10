@@ -1,4 +1,4 @@
-import { Check, CircleCheck, Eye, Headphones, Image, MessageCircle, Pause, Play, RefreshCw, Send, Settings2, UsersRound, UserRound } from "lucide-react";
+import { Check, CircleCheck, Crosshair, Eye, Headphones, Image, MessageCircle, Pause, Play, RefreshCw, Send, Settings2, UsersRound, UserRound } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { errorMessage, request, ruleLabels, type PageKey, type Queue, type Session, type Status } from "./api";
 import { Button, Confirm, Empty, IconButton, PanelTitle, Select, StatusPill } from "./components";
@@ -12,9 +12,8 @@ const number = new Intl.NumberFormat("zh-CN");
 const time = new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", hour12: false });
 const detailTime = new Intl.DateTimeFormat("zh-CN", { hour: "2-digit", minute: "2-digit", second: "2-digit", hour12: false });
 const dateAndTime = new Intl.DateTimeFormat("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false });
-const TASK_PAGE = 40;
 const RECEIPT_PAGE = 4;
-type QueuePosition = { scope: string; offset: number; receiptOffset: number };
+type QueuePosition = { scope: string; receiptOffset: number };
 type QueueView = "tasks" | "receipts";
 type Receipt = Queue["receipts"][number];
 type Task = Queue["tasks"][number];
@@ -68,9 +67,10 @@ function ReplyDetail({ session, receipt, task }: { session?: Session; receipt?: 
   </>;
 }
 
-export function Workbench({ active, status, notify, navigate }: {
+export function Workbench({ active, status, notify, navigate, calibrate }: {
   active: boolean; status?: Status;
   notify: (message: string, error?: boolean) => void; navigate: (page: PageKey) => void;
+  calibrate: (session: string) => Promise<void>;
 }) {
   const [selected, setSelected] = useState("");
   const [queue, setQueue] = useState<QueuePosition & { value: Queue }>();
@@ -86,11 +86,10 @@ export function Workbench({ active, status, notify, navigate }: {
   const revision = status?.revision;
   const scopeKey = `${revision ?? ""}:${scope}`;
   const pagingScope = JSON.stringify([status?.primary, scope, status?.sessions.map(item => item.id)]);
-  const offset = position?.scope === pagingScope ? position.offset : 0;
   const receiptOffset = position?.scope === pagingScope ? position.receiptOffset : 0;
   const shown = status?.connected && queue?.scope === scopeKey ? queue : undefined;
   const data = shown?.value;
-  const loadingPage = shown?.offset !== offset || shown?.receiptOffset !== receiptOffset;
+  const loadingPage = shown?.receiptOffset !== receiptOffset;
   const shownReceiptOffset = shown?.receiptOffset ?? 0;
   const receiptTotal = data?.receiptTotal ?? 0;
   const activeView = view ?? (data?.total ? "tasks" : "receipts");
@@ -110,19 +109,19 @@ export function Workbench({ active, status, notify, navigate }: {
     const load = () => {
       if (document.hidden || reading) return;
       reading = true;
-      request<Queue>("view.queue", { session: scope, offset, limit: TASK_PAGE, receipt_offset: receiptOffset, revision }).then(value => {
-        if (valid) setQueue(old => old?.scope === scopeKey && old.offset === offset && old.receiptOffset === receiptOffset
+      request<Queue>("view.queue", { session: scope, limit: null, receipt_offset: receiptOffset, revision }).then(value => {
+        if (valid) setQueue(old => old?.scope === scopeKey && old.receiptOffset === receiptOffset
           && JSON.stringify(old.value) === JSON.stringify(value)
-          ? old : { scope: scopeKey, offset, receiptOffset, value });
+          ? old : { scope: scopeKey, receiptOffset, value });
       }).catch(error => {
-        if (valid) setQueue({ scope: scopeKey, offset, receiptOffset,
+        if (valid) setQueue({ scope: scopeKey, receiptOffset,
           value: { tasks: [], receipts: [], total: 0, receiptTotal: 0, note: errorMessage(error) } });
       }).finally(() => { reading = false; });
     };
     load();
     const timer = stats?.pending ? window.setInterval(load, 1000) : undefined;
     return () => { valid = false; window.clearInterval(timer); };
-  }, [active, status?.connected, stats?.pending, stats?.verified, stats?.unknown, stats?.failed, scope, offset, receiptOffset, revision, scopeKey, refresh]);
+  }, [active, status?.connected, stats?.pending, stats?.verified, stats?.unknown, stats?.failed, scope, receiptOffset, revision, scopeKey, refresh]);
 
   const act = async (key: string, method: string, params = {}) => {
     if (working) return;
@@ -147,15 +146,27 @@ export function Workbench({ active, status, notify, navigate }: {
     setView(next);
     if (next !== activeView) setPicked("");
   };
-  const pageTo = (tasks: number, receipts: number) => {
+  const pageTo = (receiptOffset: number) => {
     setPicked("");
-    setPosition({ scope: pagingScope, offset: tasks, receiptOffset: receipts });
+    setPosition({ scope: pagingScope, receiptOffset });
   };
   const toggle = (session: Session) => act(session.id, "run.selected",
     { session: session.id, action: session.mode === "auto" ? "pause" : "enable" });
+  const calibrateSession = async (session: Session) => {
+    if (working) return;
+    setWorking(`calibrate:${session.id}`);
+    try {
+      await calibrate(session.id);
+    } catch (error) {
+      notify(errorMessage(error), true);
+    } finally {
+      setWorking("");
+    }
+  };
   const controlsDisabled = !status?.connected || status.readOnly || Boolean(working);
-  const canPauseAll = status?.connected && status.mode !== "paused";
-  const canEnableAll = status && (status.mode !== "auto" || status.sessions.some(session => session.mode !== "auto"));
+  const canPauseAll = status?.connected && status.sessions.length > 0 && status.mode !== "paused";
+  const canEnableAll = status && status.sessions.length > 0
+    && (status.mode !== "auto" || status.sessions.some(session => session.mode !== "auto"));
   const queueEmpty = tasksVisible ? !data?.tasks.length : !data?.receipts.length;
   const emptyTitle = !status?.connected ? "等待后台连接" : !data ? "正在读取队列"
     : tasksVisible ? "当前没有待回复消息" : "当前没有已确认回执";
@@ -208,14 +219,10 @@ export function Workbench({ active, status, notify, navigate }: {
           <span className="muted" aria-live="polite">{data?.receipts.length
             ? `第 ${shownReceiptOffset + 1}–${shownReceiptOffset + data.receipts.length} 条` : "没有更多回执"}</span>
           <Button variant="ghost" disabled={loadingPage || shownReceiptOffset === 0}
-            onClick={() => pageTo(offset, Math.max(0, receiptOffset - RECEIPT_PAGE))}>较新</Button>
+            onClick={() => pageTo(Math.max(0, receiptOffset - RECEIPT_PAGE))}>较新</Button>
           <Button variant="ghost" disabled={loadingPage || shownReceiptOffset + RECEIPT_PAGE >= receiptTotal}
-            onClick={() => pageTo(offset, receiptOffset + RECEIPT_PAGE)}>更早</Button>
+            onClick={() => pageTo(receiptOffset + RECEIPT_PAGE)}>更早</Button>
         </nav>}
-        {tasksVisible && (offset > 0 || (data?.total ?? 0) > TASK_PAGE) && <>
-          <Button variant="ghost" disabled={loadingPage || offset === 0} onClick={() => pageTo(Math.max(0, offset - TASK_PAGE), receiptOffset)}>上一页</Button>
-          <Button variant="ghost" disabled={loadingPage || offset + TASK_PAGE >= (data?.total ?? 0)} onClick={() => pageTo(offset + TASK_PAGE, receiptOffset)}>下一页</Button>
-        </>}
         <div className="queue-actions">
           <Button variant="ghost" icon={<Eye size={16} />} disabled={controlsDisabled}
             onClick={() => void act("observe", "run.mode", { action: "observe" })}>只观察</Button>
@@ -236,6 +243,9 @@ export function Workbench({ active, status, notify, navigate }: {
             <SessionIcon session={session} /><span><b>{session.name}</b><small>{sessionRule(session)}</small></span>
           </button>
           <StatusPill mode={session.mode} compact />
+          <IconButton className="watch-calibrate" label={`${session.calibrated ? "重新校准" : "校准"} ${session.name}`}
+            icon={<Crosshair size={17} />} disabled={status?.readOnly !== false || Boolean(working)}
+            busy={working === `calibrate:${session.id}`} onClick={() => void calibrateSession(session)} />
           <Button variant="primary" icon={session.mode === "auto" ? <Pause size={15} /> : <Play size={15} />}
             disabled={controlsDisabled || !session.bound} busy={working === session.id}
             onClick={() => void toggle(session)} aria-label={`${session.mode === "auto" ? "暂停" : "开启"} ${session.name}`}>

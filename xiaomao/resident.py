@@ -272,7 +272,10 @@ class Resident:
             # Only window routes and their explicitly selected recipients
             # belong to this operation. Live model/pacing settings are not
             # reconfigured halfway through a generated turn.
+            kept_scopes = {saved.conversation_scope(name) for name in saved.saved_groups}
+            rules = {key: value for key, value in self.settings.conversation_rules.items() if key in kept_scopes}
             self.reload_request=replace(self.settings,group=saved.group,group_names=saved.group_names,
+                conversation_rules=rules,
                 monitor_all_groups=saved.monitor_all_groups,conversation_targets=saved.conversation_targets,
                 calibration=saved.calibration,calibration_account=saved.calibration_account,idle_wake=saved.idle_wake,
                 paused_conversations=saved.paused_conversations,

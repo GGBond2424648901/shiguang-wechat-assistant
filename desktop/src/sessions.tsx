@@ -4,7 +4,8 @@ import {
 } from "lucide-react";
 import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
 import { errorMessage, frequencies, request, ruleLabels, type Status } from "./api";
-import { Button, Empty, IconButton, PanelTitle, Select, StatusPill, Switch, useDraftGuard } from "./components";
+import { Button, Confirm, Empty, IconButton, PanelTitle, Select, StatusPill, Switch, useDraftGuard } from "./components";
+import { reducesMotion } from "./motion";
 import { rebaseSessions, rulesOf, sameOrder, type Conversation, type DraftRule, type SavedSessions, type SessionDraft } from "./session-draft";
 
 interface Contact {
@@ -48,6 +49,8 @@ export function SessionsPage({ active, status, notify, calibrate, directory, set
   const [query, setQuery] = useState("");
   const [busy, setBusy] = useState("");
   const [error, setError] = useState("");
+  const [removeTarget, setRemoveTarget] = useState<{ item: Conversation; accountKey: string }>();
+  const sessionRows = useRef<HTMLDivElement>(null);
   const accountDrafts = useRef(new Map<string, { base: SavedSessions; draft: SessionDraft; selected: string }>());
   const mutable = !!status && !status.readOnly && !busy;
   const row = order.find(item => item.id === selected) ?? order[0];
@@ -88,8 +91,10 @@ export function SessionsPage({ active, status, notify, calibrate, directory, set
     setSelected(current => items.find(item => item.id === (stored?.selected ?? current)
       || item.contactId === (stored?.selected ?? current))?.id ?? items[0]?.id ?? "");
     setRules(draft?.rules ?? {});
-    if (switched) notify("微信账号已切换，会话草稿按账号分别保留");
-    else if (draft?.orderConflict) notify("监听列表在其他窗口发生变化，移除操作冲突，已载入最新列表供核对");
+    if (switched) {
+      setRemoveTarget(undefined);
+      notify("微信账号已切换，会话草稿按账号分别保留");
+    } else if (draft?.orderConflict) notify("监听列表在其他窗口发生变化，移除操作冲突，已载入最新列表供核对");
   }
 
   const updateFromWorker = useEffectEvent((next: SavedSessions) => {
@@ -145,7 +150,27 @@ export function SessionsPage({ active, status, notify, calibrate, directory, set
     notify(`“${row.name}”的独立回复规则已保存`);
   });
 
-  if (!base || !row || !rule) return <div className="glass phase-note"><Empty
+  const remove = (target: NonNullable<typeof removeTarget>) => base && run("remove", async () => {
+    const { item, accountKey } = target;
+    const saved = base.items.some(current => current.id === item.id);
+    const next = saved ? await request<SavedSessions>("sessions.remove", { session: item.id, accountKey }) : undefined;
+    const element = sessionRows.current?.querySelector<HTMLElement>(`[data-session-id="${CSS.escape(item.id)}"]`);
+    if (element?.offsetHeight && !reducesMotion()) {
+      const animation = element.animate([
+        { height: `${element.offsetHeight}px`, opacity: 1, transform: "translateX(0)" },
+        { height: "0", opacity: 0, transform: "translateX(8px)" },
+      ], { duration: 175, easing: "cubic-bezier(.22,.75,.25,1)", fill: "forwards" });
+      await animation.finished.catch(() => {});
+    }
+    if (next) accept(next, true);
+    else {
+      setOrder(current => current.filter(candidate => candidate.id !== item.id));
+      setSelected(current => current === item.id ? "" : current);
+    }
+    notify(`已移出“${item.name}”`);
+  });
+
+  if (!base) return <div className="glass phase-note"><Empty
     title={error ? "会话设置未载入" : "正在读取会话设置"} detail={error || undefined} /></div>;
   if (directory) return <DirectoryPage key={base.accountKey} accountKey={base.accountKey} notify={notify} existing={order.filter(item => !item.placeholder)} close={() => setDirectory(false)}
     capture={() => void run("calibrate", async () => { await calibrate(); setDirectory(false); })}
@@ -162,7 +187,8 @@ export function SessionsPage({ active, status, notify, calibrate, directory, set
       notify(additions.length ? `已加入 ${additions.length} 个会话，保存后应用` : "所选会话已经加入监听列表");
     }} />;
   const pending = !originalRow;
-  const paused = row.paused || (status?.mode !== "paused" && running?.mode === "paused");
+  const paused = Boolean(row?.paused || (status?.mode !== "paused" && running?.mode === "paused"));
+  const askToRemove = (item: Conversation) => setRemoveTarget({ item, accountKey: base.accountKey });
   const filtered = order.filter(item => !query || item.name.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
   return <div className="sessions-page">
     <section className="glass panel session-list">
@@ -170,22 +196,27 @@ export function SessionsPage({ active, status, notify, calibrate, directory, set
         disabled={!mutable || order.length >= 8} onClick={() => setDirectory(true)}>添加会话</Button>}>监听对象</PanelTitle>
       <label className="persona-search"><Search size={15} /><input aria-label="搜索已选会话" placeholder="搜索群聊或联系人"
         value={query} onChange={event => setQuery(event.target.value)} /></label>
-      <div className="session-rows">
+      <div className="session-rows" ref={sessionRows}>
         {filtered.map(item => {
           const current = status?.sessions.find(candidate => candidate.id === item.id);
-          return <button type="button" className={row.id === item.id ? "session-entry active" : "session-entry"} key={item.id}
-            aria-pressed={row.id === item.id} onClick={() => setSelected(item.id)}>
-            <Avatar kind={item.kind} /><span className="session-entry-label"><b>{item.name}</b>
-              <span><span className="tag">{kindLabels[item.kind]}</span>
-                <StatusPill compact mode={current?.mode ?? (item.paused ? "paused" : "observe")} /></span></span>
-            <ChevronRight size={15} />
-          </button>;
+          const chosen = row?.id === item.id;
+          return <div className={`session-row ${chosen ? "active" : ""}`} key={item.id} data-session-id={item.id}>
+            <button type="button" className="session-entry" aria-pressed={chosen}
+              title={item.name} onClick={() => setSelected(item.id)}>
+              <Avatar kind={item.kind} /><span className="session-entry-label"><b>{item.name}</b>
+                <span><span className="tag">{kindLabels[item.kind]}</span>
+                  <StatusPill compact mode={current?.mode ?? (item.paused ? "paused" : "observe")} /></span></span>
+              <ChevronRight size={15} />
+            </button>
+            <IconButton variant="ghost" className="session-remove" label={`移出监听列表 ${item.name}`}
+              icon={<Trash2 size={16} />} disabled={!mutable} onClick={() => askToRemove(item)} />
+          </div>;
         })}
-        {!filtered.length && <Empty title="没有匹配的会话" />}
+        {!filtered.length && <Empty title={order.length ? "没有匹配的会话" : "还没有监听会话"} />}
       </div>
       <div className="session-list-footer">
         <label className="session-monitor">
-          <input type="checkbox" checked={monitor} disabled={!mutable} onChange={event => setMonitor(event.target.checked)} />
+          <input type="checkbox" checked={monitor} disabled={!mutable || !order.length} onChange={event => setMonitor(event.target.checked)} />
           同时监听已选会话（{order.length} 个）
         </label>
         <Switch checked={stickers} disabled={!mutable} onChange={setStickers}>允许表情包回复</Switch>
@@ -195,19 +226,20 @@ export function SessionsPage({ active, status, notify, calibrate, directory, set
     </section>
     <section className="glass panel session-detail">
       <div className="session-detail-scroll">
+        {row && rule ? <>
         <div className="session-detail-title"><Avatar kind={row.kind} /><div>
           <h2>{row.name}</h2><div className="flex muted fine-print">
             <span>{kindLabels[row.kind]}</span>
-            {row.id === order[0].id && <span>· 主要会话</span>}
+            {row.id === order[0]?.id && <span>· 主要会话</span>}
             {base.accountLabel && <span>· {base.accountLabel}</span>}
           </div></div>
           <span className={row.bound ? "identity-label confirmed" : "identity-label"}><ShieldCheck size={15} />
             {row.bound ? "身份已核实" : "身份待核实"}</span>
           <div className="session-detail-icons flex">
-            <IconButton label="设为主要会话" icon={<Star size={16} />} disabled={!mutable || row.id === order[0].id}
+            <IconButton label="设为主要会话" icon={<Star size={16} />} disabled={!mutable || row.id === order[0]?.id}
               onClick={() => setOrder([row, ...order.filter(item => item.id !== row.id)])} />
-            <IconButton label="移出监听列表" icon={<Trash2 size={16} />} disabled={!mutable || order.length <= 1}
-              onClick={() => { setOrder(order.filter(item => item.id !== row.id)); setSelected(""); }} />
+            <IconButton label="移出当前会话" icon={<Trash2 size={16} />} disabled={!mutable}
+              onClick={() => askToRemove(row)} />
           </div>
         </div>
         <SessionBlock icon={<MessageCircle size={21} />} title="回复方式" hint="独立设置该会话如何回复"
@@ -239,6 +271,7 @@ export function SessionsPage({ active, status, notify, calibrate, directory, set
             : row.windowKind === "main" ? "微信主窗口" : "等待校准"}</dd>
             <dt>当前状态</dt><dd>{running?.reason || (pending ? "先保存会话再校准" : row.windowSize?.join(" × ") || "尚无绑定")}</dd></dl>
         </SessionBlock>
+        </> : <Empty icon={<MessageCircle size={24} />} title="没有已选会话" detail="添加一个群聊或联系人开始监听" />}
       </div>
       <footer className="session-detail-footer"><span><Info size={15} />{changed || Object.keys(rules).length
         ? "有未保存的修改" : `已选 ${order.length} 个会话`}</span>
@@ -246,10 +279,17 @@ export function SessionsPage({ active, status, notify, calibrate, directory, set
           onClick={() => accept(base)}>撤销</Button>
           {changed && <Button variant="primary" busy={busy === "save"} icon={<Save size={16} />} disabled={!mutable}
             onClick={() => void save()}>保存监听范围</Button>}
-          <Button variant={changed ? undefined : "primary"} busy={busy === "rules"} icon={<Save size={16} />}
-            disabled={!mutable || !ruleChanged || pending} onClick={() => void saveRules()}>保存当前会话</Button></div>
+          {row && <Button variant={changed ? undefined : "primary"} busy={busy === "rules"} icon={<Save size={16} />}
+            disabled={!mutable || !ruleChanged || pending} onClick={() => void saveRules()}>保存当前会话</Button>}</div>
       </footer>
     </section>
+    {active && removeTarget && <Confirm title="移出监听列表" destructive
+      detail={`移出“${removeTarget.item.name}”后会停止监听该会话。以后可以从通讯录重新添加。`}
+      cancel={() => setRemoveTarget(undefined)}
+      confirm={() => {
+        setRemoveTarget(undefined);
+        void remove(removeTarget);
+      }} />}
   </div>;
 }
 

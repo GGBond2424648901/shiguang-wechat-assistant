@@ -75,6 +75,7 @@ class DesktopService:
             'persona.importText': self.persona.import_text, 'persona.importFiles': self.persona.import_files,
             'persona.export': self.persona.export,
             'sessions.save': self.sessions.save, 'sessions.rules': self.sessions.rules,
+            'sessions.remove': self.sessions.remove,
             'calibration.discover': self.calibration.discover, 'calibration.openWechat': self.calibration.open_wechat,
             'calibration.capture': self.calibration.capture, 'calibration.identify': self.calibration.identify,
             'calibration.save': self.calibration.save,
@@ -121,7 +122,7 @@ class DesktopService:
             connected = False
         states = {row['name']: row for row in data.get('groups', ()) if isinstance(row.get('name'), str)}
         sessions = []
-        for name in cfg.allowed_groups:
+        for name in (() if self.sessions.is_placeholder(cfg) else cfg.allowed_groups):
             row = states.get(name, {})
             target = cfg.conversation_targets.get(name, {})
             mode = row.get('mode', 'paused' if cfg.is_conversation_paused(name) else data.get('mode', 'observe'))
@@ -143,7 +144,7 @@ class DesktopService:
             'mode': mode if mode in MODES else 'observe',
             'reason': clean_text(data.get('reason')),
             'accountLabel': clean_text(data.get('account_display_name', cfg.account_display_name), 80),
-            'primary': cfg.conversation_pause_key(cfg.group), 'sessions': sessions,
+            'primary': cfg.conversation_pause_key(cfg.group) if sessions else '', 'sessions': sessions,
             'tray': bool(data.get('tray', {}).get('running')),
             'stats': {'pending': int(data.get('pending_count') or 0),
                       **{key: int(counts.get(key) or 0) for key in ('verified', 'unknown', 'failed', 'skipped')}},
@@ -162,7 +163,10 @@ class DesktopService:
         if revision and revision != config_revision(cfg):
             raise ValueError('微信账号或监听范围已变化，请刷新队列')
         names = (self._session(cfg, session),) if session else cfg.allowed_groups
-        if (type(offset) is not int or not 0 <= offset <= 160 or type(limit) is not int or not 1 <= limit <= 80
+        if self.sessions.is_placeholder(cfg):
+            names = ()
+        if (type(offset) is not int or not 0 <= offset <= 160
+                or (limit is not None and (type(limit) is not int or not 1 <= limit <= 80))
                 or type(receipt_offset) is not int or not 0 <= receipt_offset <= len(names) * ConversationMemory.MAX_MESSAGES):
             raise ValueError('队列分页无效')
         try:
@@ -179,13 +183,17 @@ class DesktopService:
             display = safe_name(row.get('sender_name'))
             messages = row.get('messages')
             body = ' / '.join(clean_text(m, 600) for m in messages) if isinstance(messages, list) else row.get('text', '')
-            rows.append({
-                'id': clean_text(row.get('id'), 80) or str(len(rows)),
+            task = {
+                'id': clean_text(row.get('queue_id') or row.get('id'), 100) or str(len(rows)),
                 'group': group, 'sender': member_label(sender, {sender: display} if display else {}, '对方'),
                 'text': clean_text(body, 1800), 'reply': clean_text(row.get('reply'), 1800),
                 'state': row.get('state') if row.get('state') in STATES else 'candidate',
                 'progress': clean_text(row.get('progress')),
-            })
+            }
+            rows.append(task)
+            rows.extend({**task, 'id': clean_text(part['id'], 100), 'reply': clean_text(part['reply'], 1800),
+                         'state': 'generated', 'progress': '等待前一条确认'}
+                        for part in row.get('following', ()))
         with self._receipt_lock:
             recent, receipt_total, note, self._receipts = receipt_page(
                 cfg, names, self._receipts, offset=receipt_offset)
@@ -196,7 +204,8 @@ class DesktopService:
             raise ValueError('微信账号或监听范围已变化，请刷新队列')
         self._connected_status(fresh)
         return {
-            'tasks': rows[offset:offset + limit], 'total': len(rows), 'note': note,
+            'tasks': rows[offset:] if limit is None else rows[offset:offset + limit],
+            'total': len(rows), 'note': note,
             'receiptTotal': receipt_total,
             'receipts': [{
                 'id': row.id, 'at': row.at, 'group': row.group, 'kind': row.kind,

@@ -2,6 +2,11 @@
 const ease = "cubic-bezier(.22,.8,.25,1)";
 const entering = new WeakMap<HTMLElement, Animation>();
 
+export function reducesMotion() {
+  return document.documentElement.dataset.reduceMotion === "true"
+    || matchMedia("(prefers-reduced-motion: reduce)").matches;
+}
+
 export function enterRoute(element: HTMLElement, direction: number, reduceMotion: boolean) {
   entering.get(element)?.cancel();
   if (reduceMotion || matchMedia("(prefers-reduced-motion: reduce)").matches) return;

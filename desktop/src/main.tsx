@@ -5,7 +5,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { defaultAppearance, errorMessage, request, runLabels, stepZoom, type Appearance, type Info, type PageKey, type Status, type WindowAction } from "./api";
-import { Button, Empty, IconButton, StatusPill, useDraftGuard } from "./components";
+import { Button, Empty, IconButton, NoticeToast, StatusPill, useDraftGuard } from "./components";
 import { PersonaPage } from "./persona";
 import { SessionsPage } from "./sessions";
 import { Workbench } from "./workbench";
@@ -13,7 +13,7 @@ import { StickersPage } from "./stickers";
 import { SettingsPage } from "./settings";
 import { CalibrationWindow } from "./calibration";
 import { BackupWindow, CompanionPage } from "./companion";
-import { enterRoute } from "./motion";
+import { enterRoute, reducesMotion } from "./motion";
 import logo from "../../xiaomao/ui_assets/app.png";
 import "./styles.css";
 import "./fixed-actions.css";
@@ -44,8 +44,11 @@ function App() {
   };
   useDraftGuard("appearance", status?.readOnly === false && (appearance.transparency !== savedAppearance.transparency
     || appearance.reduceMotion !== savedAppearance.reduceMotion || appearance.zoomPercent !== savedAppearance.zoomPercent));
-  const [notice, setNotice] = useState<{ message: string; error: boolean }>();
-  const notify: Notify = useCallback((message, error = false) => setNotice({ message, error }), []);
+  const noticeId = useRef(0);
+  const [notice, setNotice] = useState<{ id: number; message: string; error: boolean; leaving: boolean }>();
+  const notify: Notify = useCallback((message, error = false) =>
+    setNotice({ id: ++noticeId.current, message, error, leaving: false }), []);
+  const closeNotice = () => setNotice(current => current && !current.leaving ? { ...current, leaving: true } : current);
   const scrollHost = useRef<HTMLDivElement>(null);
   const currentPage = useRef<PageKey>("workbench");
   const requestedPage = useRef<PageKey>("workbench");
@@ -120,17 +123,21 @@ function App() {
     return () => window.removeEventListener("keydown", keydown);
   }, [navigate]);
   useEffect(() => {
-    if (!notice || notice.error) return;
-    const timer = window.setTimeout(() => setNotice(undefined), 3500);
+    if (!notice || (notice.error && !notice.leaving)) return;
+    const timer = window.setTimeout(() => setNotice(current => current !== notice
+      ? current : notice.leaving ? undefined : { ...notice, leaving: true }),
+    notice.leaving ? reducesMotion() ? 0 : 180 : 3500);
     return () => window.clearTimeout(timer);
   }, [notice]);
 
   const current = navigation.find(item => item.key === page)!;
+  const calibrate = (session?: string) => window.shiguang.calibrate(session);
   function content(key: PageKey): ReactNode {
-    if (key === "workbench") return <Workbench active={key === page} status={status} notify={notify} navigate={navigate} />;
+    if (key === "workbench") return <Workbench active={key === page} status={status} notify={notify} navigate={navigate}
+      calibrate={calibrate} />;
     if (key === "stickers") return <StickersPage active={key === page} readOnly={status?.readOnly ?? true} notify={notify} />;
     if (key === "sessions") return <SessionsPage active={key === page} status={status} notify={notify}
-      directory={directory} setDirectory={setDirectory} calibrate={session => window.shiguang.calibrate(session)} />;
+      directory={directory} setDirectory={setDirectory} calibrate={calibrate} />;
     if (key === "persona") return <PersonaPage active={key === page} readOnly={status?.readOnly ?? true} notify={notify} />;
     if (key === "companion") return <CompanionPage active={key === page} status={status} notify={notify} />;
     if (key === "settings") return <SettingsPage active={key === page} status={status} appearance={appearance}
@@ -177,10 +184,9 @@ function App() {
         {status?.readOnly && " · 只读预览"}</span><span className="footer-refresh">
         {updated && `最后刷新  ${updated}`}{page === "workbench" && <IconButton label="刷新运行状态" icon={<RefreshCw size={20} />}
           onClick={() => void refresh()} />}</span></footer>
-      {notice && <div className={`toast ${notice.error ? "toast-error" : ""}`} role={notice.error ? "alert" : "status"}>
-        <span>{notice.message}</span><IconButton label="关闭提示" icon={<X size={14} />} onClick={() => setNotice(undefined)} />
-      </div>}
     </main>
+    {notice && <NoticeToast key={notice.id} message={notice.message} error={notice.error}
+      leaving={notice.leaving} close={closeNotice} />}
   </div>;
 }
 

@@ -145,6 +145,31 @@ def question(engine, text='月亮', mid='q1', member=ALICE):
     engine._record([Message(text, message_id=mid, speaker_id=member, created_at=engine.clock())])
 
 
+def test_pending_exposes_every_planned_bubble_before_first_receipt(delivery):
+    engine, feed, _, clock, store = delivery
+    feed.ack = False
+    question(engine)
+    question(engine, '另一位成员', 'q2', BOB)
+    engine.observe_once()
+
+    first, waiting = engine.pending()
+    assert feed.sent == PARTS[:1]
+    assert first['state'] == 'awaiting_receipt'
+    assert first['reply'] == PARTS[0]
+    assert [part['reply'] for part in first['following']] == PARTS[1:]
+    assert waiting['messages'] == ['另一位成员']
+    assert store.counts().get('verified', 0) == 0
+
+    feed.pending.append(Message(PARTS[0], direction='out', speaker_id='self',
+                                message_id='out-1', created_at=clock()))
+    engine.observe_once()
+    next_part, _ = engine.pending()
+    assert next_part['queue_id'] == first['following'][0]['id']
+    assert next_part['reply'] == PARTS[1]
+    assert next_part['following'] == first['following'][1:]
+    assert feed.sent == PARTS[:1]
+
+
 def test_each_verified_text_has_own_receipt_rate_slot_and_reply_link(delivery):
     from xiaomao.memory import ConversationMemory
     engine, feed, calls, clock, store = delivery

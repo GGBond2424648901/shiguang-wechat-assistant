@@ -278,6 +278,7 @@ class Engine:
         with self.lock:
             now = self.clock()
             rows=[]
+            names = self.memory.member_names() if self.memory else {}
             for task in self.tasks:
                 if not task.created<=now<=self._deadline(task):continue
                 progress={'staged':'正在核对输入内容','sending':'已开始发送','awaiting_receipt':'等待微信回执',
@@ -289,10 +290,20 @@ class Engine:
                     if task.media_attempts and task.retry_at>now:progress='等待微信图片加载'
                     elif task.model_attempts:progress='正在准备回复'
                     else:progress='已入队，等待处理'
-                rows.append({'id':task.id,'sender':task.sender,'sender_name':self.memory.member_names().get(task.sender,'') if self.memory else '',
+                # These are display rows, not independent send attempts. The next
+                # attempt is still created only after the current receipt verifies.
+                root = task.continuation_of or task.id
+                queue_id = f'{root}:{task.part_index}' if task.continuation_of else task.id
+                text = list(task.remaining_text)
+                stickers = [part.description for part in task.remaining_stickers]
+                parts = stickers + text if task.media_first else text + stickers
+                following = [{'id': f'{root}:{index}', 'reply': reply}
+                             for index, reply in enumerate(parts, task.part_index + 1)]
+                rows.append({'id':task.id,'queue_id':queue_id,'sender':task.sender,
+                             'sender_name':names.get(task.sender,''),
                              'messages':[m.text for m in task.messages],
-                             'reply':task.reply,'state':task.state,'progress':progress})
-            return rows[:20]
+                             'reply':task.reply,'state':task.state,'progress':progress,'following':following})
+            return rows
 
     def _frame(self,observation=False) -> Frame:
         binding = self.settings.binding
@@ -1598,7 +1609,8 @@ class Engine:
                         messages=source,reply=reply,state='generated',proactive=task.proactive,
                         continuation_of=task.continuation_of or task.id,remaining_text=rest_text,
                         sticker=sticker,sticker_requested=task.sticker_requested,sticker_source_id=task.sticker_source_id,
-                        remaining_stickers=stickers,operator_plan=task.operator_plan,media_first=task.media_first))
+                        remaining_stickers=stickers,operator_plan=task.operator_plan,media_first=task.media_first,
+                        part_index=task.part_index+1))
                 elif task.proactive:self._companion_call('finish',task.proactive,'partial')
                 return True
             return False

@@ -19,6 +19,10 @@ def _contact_key(row):
     return 'contact_' + hashlib.sha256((row.account + '/' + row.id).encode('utf-8')).hexdigest()[:32]
 
 
+def _account_key(cfg):
+    return hashlib.sha256(configured_account(cfg).encode()).hexdigest()
+
+
 class DesktopSessions:
     def __init__(self, root, client):
         self.root = root
@@ -28,16 +32,14 @@ class DesktopSessions:
 
     def read(self):
         cfg = Settings.load(self.root)
-        placeholder = self._placeholder(cfg)
         rows = []
-        for name in cfg.saved_groups:
+        for name in (() if self.is_placeholder(cfg) else cfg.saved_groups):
             target = cfg.conversation_targets.get(name, {})
             identity = cfg.conversation_pause_key(name)
             binding = cfg.binding_for(name)
             rules = cfg.conversation_rules.get(cfg.conversation_scope(name), {})
             rows.append({'id': identity, 'contactId': 'contact_' + identity[:32] if target else '',
                          'name': name, 'kind': target.get('kind', 'group'),
-                         'placeholder': placeholder,
                          'bound': bool(target), 'paused': cfg.is_conversation_paused(name),
                          'calibrated': bool(binding and binding.bottom_confirmed),
                          'windowKind': binding.window_kind if binding else None,
@@ -46,10 +48,10 @@ class DesktopSessions:
         return {'items': rows, 'monitorAll': cfg.monitor_all_groups, 'stickersEnabled': cfg.stickers_enabled,
                 'defaultReplyMode': cfg.reply_mode, 'defaultStickerFrequency': cfg.sticker_frequency,
                 'accountLabel': cfg.account_display_name,
-                'accountKey': hashlib.sha256(configured_account(cfg).encode()).hexdigest(), 'revision': config_revision(cfg)}
+                'accountKey': _account_key(cfg), 'revision': config_revision(cfg)}
 
     @staticmethod
-    def _placeholder(cfg):
+    def is_placeholder(cfg):
         return cfg.saved_groups == (TARGET_GROUP,) and not cfg.conversation_targets and cfg.binding is None
 
     def _directory(self, cfg, refresh=False):
@@ -69,7 +71,7 @@ class DesktopSessions:
                 or type(offset) is not int or not 0 <= offset <= 50000 or type(refresh) is not bool):
             raise ValueError('通讯录搜索条件无效')
         cfg = Settings.load(self.root)
-        if accountKey is not None and accountKey != hashlib.sha256(configured_account(cfg).encode()).hexdigest():
+        if accountKey is not None and accountKey != _account_key(cfg):
             raise ValueError('微信账号已切换，请刷新通讯录')
         rows = search_directory(self._directory(cfg, refresh), query.strip(), kind)
         saved = {t['account'] + '/' + t['id']: name for name, t in cfg.conversation_targets.items()}
@@ -102,13 +104,15 @@ class DesktopSessions:
         return self.read()
 
     def save(self, expected, order, monitorAll, stickersEnabled=None, defaultReplyMode=None):
-        if (not isinstance(order, list) or not 1 <= len(order) <= 8
+        if (not isinstance(order, list) or len(order) > 8
                 or not all(isinstance(key, str) for key in order) or len(set(order)) != len(order)
                 or type(monitorAll) is not bool or (stickersEnabled is not None and type(stickersEnabled) is not bool)):
             raise ValueError('请选择 1–8 个不同会话')
         cfg = self._current(expected)
+        if not order and not self.is_placeholder(cfg):
+            raise ValueError('请选择要保存的监听会话')
         old = {cfg.conversation_pause_key(name): name for name in cfg.saved_groups}
-        if self._placeholder(cfg) and any(key not in old for key in order):
+        if self.is_placeholder(cfg) and any(key not in old for key in order):
             order = [key for key in order if key not in old]
         if any(key not in old for key in order):
             rows = self._directory(cfg, refresh=True)
@@ -121,7 +125,7 @@ class DesktopSessions:
                 raise ValueError('存在同名会话，请刷新并重新选择')
             updated = selection.bind_saved_conversations(cfg, names, rows, contacts)
         else:
-            updated = cfg.with_saved_conversations([old[key] for key in order])
+            updated = cfg.with_saved_conversations([old[key] for key in order]) if order else cfg
         for name in updated.saved_groups:
             if (name not in cfg.saved_groups or
                     updated.conversation_targets.get(name) != cfg.conversation_targets.get(name)):
@@ -133,6 +137,17 @@ class DesktopSessions:
             validate_rule_changes({'reply_mode': defaultReplyMode}, allow_inherit=False)
             values['reply_mode'] = defaultReplyMode
         return self._apply(cfg, replace(updated, **values))
+
+    def remove(self, session, accountKey):
+        cfg = Settings.load(self.root)
+        if accountKey != _account_key(cfg):
+            raise ValueError('微信账号已切换，请重新选择会话')
+        if not isinstance(session, str) or not session:
+            raise ValueError('请选择要移除的会话')
+        names = [name for name in cfg.saved_groups if cfg.conversation_pause_key(name) != session]
+        if self.is_placeholder(cfg) or len(names) == len(cfg.saved_groups):
+            raise ValueError('监听会话已变化，请重新选择')
+        return self._apply(cfg, cfg.with_saved_conversations(names))
 
     def rules(self, expected, session, replyMode, stickerFrequency, before=None):
         values = validate_rule_changes({'reply_mode': replyMode, 'sticker_frequency': stickerFrequency})

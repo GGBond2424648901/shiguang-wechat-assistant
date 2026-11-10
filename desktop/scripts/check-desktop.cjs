@@ -269,7 +269,7 @@ async function main() {
 
     await page.getByRole("button", { name: "会话", exact: true }).click();
     await page.getByRole("heading", { name: "晨光摄影群", exact: true }).waitFor();
-    await page.getByRole("button", { name: /小禾/ }).click();
+    await page.locator(".session-entry").filter({ hasText: "小禾" }).click();
     await page.getByRole("heading", { name: "小禾", exact: true }).waitFor();
     await page.getByRole("button", { name: "逐条回复", exact: true }).click();
     await page.getByText("有未保存的修改", { exact: true }).waitFor();
@@ -282,7 +282,7 @@ async function main() {
       assert.equal(await choice.getAttribute("aria-pressed"), "true");
       await page.getByRole("button", { name: "关闭提示" }).click();
     }
-    await page.getByRole("button", { name: /晨光摄影群/ }).click();
+    await page.locator(".session-entry").filter({ hasText: "晨光摄影群" }).click();
     await page.screenshot({ path: path.join(output, "sessions.png"), animations: "disabled" });
     await page.evaluate(() => {
       const nav = document.querySelectorAll(".nav-item");
@@ -293,7 +293,7 @@ async function main() {
     await page.getByRole("button", { name: "人格", exact: true }).click();
     await page.getByRole("heading", { name: "人格模块", exact: true }).waitFor();
     const original = await page.getByRole("textbox", { name: "人格提示词" }).inputValue();
-    assert.equal(original.trim(), (await fs.readFile(path.join(project, 'xiaomao/default_persona.md'), 'utf8')).trim());
+    assert.equal(original.trim(), (await fs.readFile(path.join(project, 'xiaomao/default_persona.md'), 'utf8')).replace(/\r\n/g, '\n').trim());
     await page.screenshot({ path: path.join(output, "persona.png"), animations: "disabled" });
     await page.getByRole("button", { name: /聊天示例/ }).click();
     const editor = page.getByRole("textbox", { name: "人格提示词" });

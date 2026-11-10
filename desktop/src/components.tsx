@@ -1,7 +1,8 @@
-import { ChevronDown, Check, LoaderCircle, X } from "lucide-react";
+import { ChevronDown, Check, CircleAlert, CircleHelp, LoaderCircle, Trash2, X } from "lucide-react";
 import { useEffect, useId, useLayoutEffect, useRef, useState, type ButtonHTMLAttributes, type CSSProperties, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { runLabels, type RunMode } from "./api";
+import { reducesMotion } from "./motion";
 
 type ButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & {
   variant?: "primary" | "ghost" | "danger";
@@ -143,23 +144,49 @@ export function Switch({ checked, onChange, children, disabled = false }: {
   </label>;
 }
 
-export function Confirm({ title, detail, confirm, cancel }: {
-  title: string; detail: string; confirm: () => void; cancel: () => void;
+export function NoticeToast({ message, error, leaving, close }: {
+  message: string; error: boolean; leaving: boolean; close: () => void;
+}) {
+  return <div className="toast-layer">
+    <div className={`toast ${error ? "toast-error" : ""} ${leaving ? "leaving" : ""}`} role={error ? "alert" : "status"}>
+      <span className="toast-icon" aria-hidden="true">{error ? <CircleAlert size={19} /> : <Check size={19} />}</span>
+      <span className="toast-message">{message}</span>
+      <IconButton variant="ghost" label="关闭提示" icon={<X size={16} />} onClick={close} />
+    </div>
+  </div>;
+}
+
+export function Confirm({ title, detail, confirm, cancel, destructive = false }: {
+  title: string; detail: string; confirm: () => void; cancel: () => void; destructive?: boolean;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
+  const timer = useRef<number | undefined>(undefined);
+  const [leaving, setLeaving] = useState(false);
   const label = useId();
   useEffect(() => {
     const node = dialog.current;
     node?.showModal();
-    return () => node?.close();
+    return () => {
+      window.clearTimeout(timer.current);
+      node?.close();
+    };
   }, []);
-  return <dialog ref={dialog} className="confirm-dialog" aria-labelledby={label}
-    onCancel={event => { event.preventDefault(); cancel(); }}>
-    <div className="confirm-heading"><h2 id={label}>{title}</h2>
-      <IconButton label="关闭确认" icon={<X size={15} />} onClick={cancel} /></div>
+  const finish = (action: () => void) => {
+    if (timer.current !== undefined) return;
+    setLeaving(true);
+    timer.current = window.setTimeout(action, reducesMotion() ? 0 : 165);
+  };
+  return <dialog ref={dialog} className={`confirm-dialog ${leaving ? "leaving" : ""}`} aria-labelledby={label}
+    onCancel={event => { event.preventDefault(); finish(cancel); }}>
+    <div className="confirm-heading">
+      <span className={`confirm-icon ${destructive ? "destructive" : ""}`} aria-hidden="true">
+        {destructive ? <Trash2 size={20} /> : <CircleHelp size={21} />}
+      </span>
+      <h2 id={label}>{title}</h2>
+      <IconButton label="关闭确认" icon={<X size={16} />} onClick={() => finish(cancel)} /></div>
     <p>{detail}</p>
-    <div className="confirm-actions"><Button autoFocus onClick={cancel}>取消</Button>
-      <Button variant="primary" onClick={confirm}>确认</Button></div>
+    <div className="confirm-actions"><Button autoFocus onClick={() => finish(cancel)}>取消</Button>
+      <Button variant={destructive ? "danger" : "primary"} onClick={() => finish(confirm)}>{destructive ? "移除" : "确认"}</Button></div>
   </dialog>;
 }
 

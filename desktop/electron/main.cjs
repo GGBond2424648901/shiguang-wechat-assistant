@@ -39,7 +39,7 @@ const allowed = new Set([
   "appearance.read", "appearance.save", "settings.read", "settings.save", "settings.pacing",
   "settings.credentials", "settings.removeKey", "settings.testModel",
   "persona.read", "persona.effective", "persona.save", "persona.saveDocument", "persona.importText",
-  "sessions.read", "sessions.directory", "sessions.save", "sessions.rules",
+  "sessions.read", "sessions.directory", "sessions.save", "sessions.rules", "sessions.remove",
   "companion.read", "companion.state", "companion.memory", "companion.save", "companion.command", "companion.preset",
 ]);
 
@@ -165,7 +165,7 @@ function registerIpc() {
     }
     if (JSON.stringify(params).length > 1_500_000) throw new Error("请求内容过大");
     const long = method === "settings.testModel" || method.startsWith("sessions.") || method === "run.start";
-    const changing = /\.(?:start|mode|selected|recover|save|saveDocument|pacing|credentials|removeKey|preferences|saveDetail|frequency|importText|commit|rules|command)$/.test(method);
+    const changing = /\.(?:start|mode|selected|recover|save|saveDocument|pacing|credentials|remove|removeKey|preferences|saveDetail|frequency|importText|commit|rules|command)$/.test(method);
     if (changing) writes++;
     if (method === "run.start" && broker.closed) {
       clearTimeout(retryBridge);
@@ -175,7 +175,7 @@ function registerIpc() {
       const result = await broker.call(method, params, long ? 80_000 : undefined);
       if (method === "view.status") status = result;
       if (method === "appearance.read" || method === "appearance.save") reducedMotion = result.reduceMotion;
-      if (method.startsWith("run.")) void refreshStatus();
+      if (method.startsWith("run.") || method === "sessions.remove") void refreshStatus();
       return result;
     } finally {
       if (changing) writes--;

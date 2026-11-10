@@ -257,7 +257,14 @@ class Settings:
 
     def with_saved_conversations(self,names):
         names=tuple(names)
-        if not names:raise ValueError('请至少保留一个回复对象')
+        if not names:
+            from .account_switching import configured_account
+            # Keep the current account for directory lookup, but give the
+            # unconfigured placeholder no route, rule or remembered pause.
+            return replace(self, group=TARGET_GROUP, group_names=(), monitor_all_groups=False,
+                           conversation_targets={}, window_bindings={}, calibration=None,
+                           calibration_account=configured_account(self), conversation_rules={},
+                           paused_conversations=(), self_name_unique_confirmed=False)
         targets={n:t for n,t in self.conversation_targets.items() if n in names}
         current=names[0]
         keys = {target['account'] + '/' + target['id'] for target in targets.values()}
