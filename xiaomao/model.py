@@ -564,7 +564,9 @@ class ChatModel:
                 if keys and self._search_still_allowed(cfg, is_current):
                     key = _key_health(self.credentials.path).candidates(keys)[0]
                     search.evidence = {'status': 'unavailable', 'searched': True, 'sources': []}
-                    sources = search_public(self.client or _http_client(cfg.model_base_url), key, query)
+                    from .operations_usage import usage_context
+                    with usage_context(cfg.runtime):
+                        sources = search_public(self.client or _http_client(cfg.model_base_url), key, query)
                     if sources is not None:
                         search.evidence = {'status': 'ok' if sources else 'empty', 'searched': True, 'sources': sources}
         if not self._search_still_allowed(cfg, is_current):
@@ -644,6 +646,11 @@ class ChatModel:
             headers = {"Content-Type": "application/json"}
             if key:
                 headers["Authorization"] = "Bearer " + key
+            from .account_switching import configured_account
+            attempt_account = configured_account(self.settings)
+            attempt_started = monotonic()
+            response = None
+            attempt_data = None
             try:
                 response = _read_response(self.client or _http_client(self.settings.model_base_url),
                                           method,endpoint,headers,payload)
@@ -654,6 +661,13 @@ class ChatModel:
                 elif isinstance(error,httpx.WriteTimeout):code,reason='write_timeout','上传模型请求超时'
                 elif isinstance(error,httpx.PoolTimeout):code,reason='pool_timeout','模型请求繁忙'
                 raise ModelError(reason+'，稍后自动重试',retryable=True,code=code) from None
+            finally:
+                from .operations_usage import record_usage
+                if response is not None:
+                    try: attempt_data = response.json()
+                    except (ValueError, RecursionError): pass
+                record_usage(self.settings.runtime, account=attempt_account, kind='model', duration_ms=(monotonic()-attempt_started)*1000,
+                    data=attempt_data, error=response is None or response.status_code != 200 or not isinstance(attempt_data,dict))
             if health and response.status_code in (401,402,429):
                 delay = health.rejected(key,response)
                 if response.status_code == 429:

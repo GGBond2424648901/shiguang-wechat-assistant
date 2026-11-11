@@ -4,6 +4,7 @@ import {
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Confirm, Empty, IconButton, PanelTitle, Select, Switch, useDraftGuard } from "./components";
 import { errorMessage, request } from "./api";
+import { PersonaTrial } from "./studio";
 
 interface Module {
   id: string; title: string; text: string; enabled: boolean; origin: string;
@@ -18,8 +19,8 @@ interface EffectivePersona { text: string; details: { backend: string } }
 
 const modelModule = ({ id, title, text, enabled, origin }: Module) => ({ id, title, text, enabled, origin });
 
-export function PersonaPage({ active, readOnly, notify }: {
-  active: boolean; readOnly: boolean; notify: (text: string, error?: boolean) => void;
+export function PersonaPage({ active, readOnly, accountRevision = "", notify }: {
+  active: boolean; readOnly: boolean; accountRevision?: string; notify: (text: string, error?: boolean) => void;
 }) {
   const [base, setBase] = useState<Persona>();
   const [draft, setDraft] = useState<Module[]>([]);
@@ -31,6 +32,7 @@ export function PersonaPage({ active, readOnly, notify }: {
   const [failed, setFailed] = useState("");
   const [discard, setDiscard] = useState(false);
   const [paste, setPaste] = useState<{ title: string; text: string; category: string }>();
+  const [trial, setTrial] = useState(false);
   const positions = useRef(new Map<string, number>());
   const textarea = useRef<HTMLTextAreaElement>(null);
   const mirror = useRef<HTMLDivElement>(null);
@@ -182,9 +184,10 @@ export function PersonaPage({ active, readOnly, notify }: {
   const mutable = !readOnly && !busy && !preview;
   const enabledCount = draft.filter(item => item.enabled).length;
   const activeSupplement = base.modules.find(item => item.id !== "main" && item.enabled);
-  return <div className="persona-page">
+  return <div className={`persona-page${trial ? " studio-open" : ""}`}>
     <div className="glass persona-toolbar">
       <div className="flex">
+        <Button aria-pressed={trial} onClick={() => setTrial(value => !value)}>{trial ? "返回人格编辑" : "人格试聊"}</Button>
         <Button icon={<Download size={16} />} busy={busy === "import"} disabled={!mutable} onClick={() => void importFiles()}>
           {modules ? "导入模块" : "导入文档"}
         </Button>
@@ -226,7 +229,8 @@ export function PersonaPage({ active, readOnly, notify }: {
           <span className="muted fine-print">按列表顺序生效</span>
         </div>}
       </section>
-      <section className="glass panel persona-content">
+      {trial ? <PersonaTrial active={active && trial} readOnly={readOnly} accountRevision={accountRevision} expected={base.revision} title={base.title} modules={draft} />
+      : <section className="glass panel persona-content">
         {preview ? <PanelTitle icon={<BookOpen size={18} />} end={<span className="fine-print muted">
           {preview.details.backend === "deepseek-harness" ? "DeepSeek Harness" : "兼容编译"}
         </span>}>当前生效稿</PanelTitle>
@@ -253,7 +257,7 @@ export function PersonaPage({ active, readOnly, notify }: {
         <div className="persona-detail"><span className={dirty ? "draft-note" : ""}>
           {dirty ? <Pencil size={15} /> : <Check size={15} />}{dirty ? "有未保存的修改" : "当前版本已生效"}
         </span><span>{(preview?.text ?? row.text).length.toLocaleString()} 字 · {chapters.length} 个章节</span></div>
-      </section>
+      </section>}
     </div>
     {discard && <Confirm title="撤销未保存的修改" detail="重新载入当前生效的人格版本。" cancel={() => setDiscard(false)}
       confirm={() => { setDiscard(false); void perform("discard", async () => accept(await request("persona.read"))); }} />}

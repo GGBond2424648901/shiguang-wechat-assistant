@@ -1,6 +1,6 @@
 {
   "captured_date": "2026-11-08",
-  "editing": "Reviewed public screenshots of the current background UI; other screenshots are excluded because they contain personal information.",
+  "editing": "Original user-provided screenshots remain byte-for-byte unchanged. The new task-center screenshot is a native installed application capture with isolated synthetic sessions and tasks.",
   "screenshots": [
     {
       "file": "desktop-appearance.png",
@@ -39,6 +39,27 @@
       "redaction_rectangles": [],
       "unchanged_outside_redactions": true,
       "note": "Screenshot provided by user, copied byte-for-byte; any masking was already present in the supplied file."
+    },
+    {
+      "file": "desktop-tasks.png",
+      "captured_date": "2026-11-12",
+      "version": "0.3.18",
+      "origin": "actual installed Electron application screenshot with isolated synthetic resident/profile data",
+      "source_sha256": "3e4768f9dbf9982b3a2aa6c101606f0590c6d4912aa7be465cdb93229dd60f49",
+      "output_sha256": "3e4768f9dbf9982b3a2aa6c101606f0590c6d4912aa7be465cdb93229dd60f49",
+      "source_size": [
+        1860,
+        1200
+      ],
+      "crop": [
+        0,
+        0,
+        1860,
+        1200
+      ],
+      "redaction_rectangles": [],
+      "unchanged_outside_redactions": true,
+      "note": "Captured without personal sessions, chats, subscriptions, credentials or persona. Existing approved background and avatar are retained."
     }
   ]
 }

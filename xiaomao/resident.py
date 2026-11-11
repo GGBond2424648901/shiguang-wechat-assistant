@@ -47,6 +47,8 @@ class Resident:
         self.requested_mode='paused' if unknown else 'auto' if settings.auto_on_launch else 'observe'
         self.engines=[self._new_engine(settings,settings.for_group(name),unknown) for name in settings.allowed_groups]
         self._set_companion_budgets()
+        from .operations_rest import RestManager
+        self.rests=RestManager(self)
         from .news_runtime import NewsRuntime
         from .news_research import NewsResearch
         self.news = NewsRuntime(settings.runtime, context=self._news_context,
@@ -202,9 +204,12 @@ class Resident:
 
     def status(self):
         with self.lock:
+            self.rests.tick()
             states=[engine.status() for engine in self.engines]
             windows={}
             for engine,state in zip(self.engines,states):
+                state['rest']=self.rests.info(engine)
+                state['scope']=engine.settings.memory_scope
                 state['reply_mode']=engine.settings.reply_mode
                 state['sticker_frequency']=engine.settings.sticker_frequency
                 state['rules_pending']=engine.settings.memory_scope in self.rules_pending
@@ -236,7 +241,7 @@ class Resident:
                 'account_status':self.account_status,
                 'tray':{'running':bool(self.tray and self.tray.available),'error':self.tray_error},
                 'last_observed':max((s['last_observed'] for s in states if s['last_observed'] is not None),default=None),
-                'groups':[{'name':s['group'],'mode':s['mode'],'reason':s['reason'],'calibrated':s['calibrated'],
+                'groups':[{'name':s['group'],'scope':s['scope'],'rest':s['rest'],'mode':s['mode'],'reason':s['reason'],'calibrated':s['calibrated'],
                            'window_kind':s['window_kind'],'window_state':s['window_state'],'last_result':s.get('last_result'),
                            'receive_mode':s['receive_mode'],'receive_retrying':s['receive_retrying'],
                             'model_health':s.get('model_health',{}),'model_usage':s.get('model_usage',{}),
@@ -303,7 +308,7 @@ class Resident:
         with self.lock:
             # Each engine already bounds its own queue. A busy first group
             # must not hide a later group's work from its dashboard filter.
-            return [{**task,'group':engine.settings.group} for engine in self.engines for task in engine.pending()]
+            return [{**task,'group':engine.settings.group,'scope':engine.settings.memory_scope} for engine in self.engines for task in engine.pending()]
 
     def _control(self,operation,*args,**kwargs):
         for engine in self.engines:getattr(engine,operation)(*args,**kwargs)
@@ -311,6 +316,7 @@ class Resident:
 
     def observe(self):
         with self.lock:
+            self.rests.clear()
             self.requested_mode='observe'
             return self._control('observe')
 
@@ -319,6 +325,7 @@ class Resident:
             ready=[e for e in self.engines if e.settings.binding and e.settings.binding.bottom_confirmed]
             if not ready:raise ValueError('请先校准窗口并确认消息列表位于底部')
             if not self.settings.model_ready:raise ValueError('请先配置模型及有效的加密凭据')
+            self.rests.clear()
             self._save_pause_states([(e,False) for e in self.engines])
             self.requested_mode='auto'
             for engine in self.engines:
@@ -330,6 +337,7 @@ class Resident:
 
     def pause(self,reason='用户已暂停'):
         with self.lock:
+            self.rests.clear()
             self.requested_mode='paused'
             self._control('pause',reason)
             if reason=='用户已暂停':self._save_pause_states([(e,True) for e in self.engines])
@@ -340,7 +348,7 @@ class Resident:
         with self.lock:
             self.requested_mode='auto'
             for engine in self.engines:
-                if engine.settings.is_conversation_paused():continue
+                if engine.settings.is_conversation_paused() or self.rests.info(engine)['active']:continue
                 if engine.settings.binding and engine.settings.binding.bottom_confirmed and engine.settings.model_ready:
                     engine.enable()
             return self.status()
@@ -465,6 +473,7 @@ class Resident:
                         engine.enable()
             for removed in existing.values():removed.stop(preserve_companion=True)
             self.engines,self.settings=[route[0] for route in routes],fresh
+            self.rests.tick(boot=True)
             self._set_companion_budgets()
             self.index=self.turns=0
             self.reload_request=None
@@ -673,7 +682,7 @@ class Resident:
         from .domain import ReplyTask
         from .stickers import StickerUnavailable
         if (not isinstance(request_id,str) or not re.fullmatch(r'[A-Za-z0-9_-]{8,96}',request_id)
-                or not isinstance(text,str) or len(text)>400 or text and not text.isprintable()
+                or not isinstance(text,str) or len(text)>400 or any(not c.isprintable() and c not in '\n\t' for c in text)
                 or not isinstance(sticker_ids,list) or len(sticker_ids)>3
                 or any(not isinstance(s,str) or not 1<=len(s)<=100 for s in sticker_ids)
                 or len(set(sticker_ids))!=len(sticker_ids) or not (text.strip() or sticker_ids)):
@@ -708,14 +717,31 @@ class Resident:
                 self.store.update(task_id,'generated')
                 return {'queued':True,'id':task_id}
 
+    def rest_selected(self,group,scope,minutes):
+        with self.lock:
+            engine=self._selected_engine(group,scope)
+            saved=Settings.load(self.settings.root)
+            if group not in saved.allowed_groups or saved.conversation_scope(group)!=scope:
+                raise ValueError('该会话身份或监听范围已改变，请重新选择')
+            return self.rests.start(engine,minutes)
+
+    def cancel_rest_selected(self,group,scope):
+        with self.lock:
+            engine=self._selected_engine(group,scope)
+            saved=Settings.load(self.settings.root)
+            if group not in saved.allowed_groups or saved.conversation_scope(group)!=scope:
+                raise ValueError('该会话身份或监听范围已改变，请重新选择')
+            return self.rests.cancel(engine)
+
     def enable_selected(self,group,scope):
         with self.lock:
             selected=self._selected_engine(group,scope)
             if not selected.settings.binding or not selected.settings.binding.bottom_confirmed:
                 raise ValueError('请先校准当前会话窗口')
             if not selected.settings.model_ready:raise ValueError('请先配置模型及有效的加密凭据')
-            changes=[(e,True) for e in self.engines if e is not selected and e.mode=='paused']+[(selected,False)]
+            changes=[(e,True) for e in self.engines if e is not selected and e.mode=='paused' and not self.rests.info(e)['active']]+[(selected,False)]
             self._save_pause_states(changes)
+            self.rests.clear(selected)
             selected.enable()
             self.requested_mode='auto'
             return self.status()
@@ -723,6 +749,7 @@ class Resident:
     def pause_selected(self,group,scope):
         with self.lock:
             selected=self._selected_engine(group,scope)
+            self.rests.clear(selected)
             selected.pause('本会话已暂停')
             try:self._save_pause_states([(selected,True)])
             except (OSError,ValueError):
@@ -780,6 +807,7 @@ class Resident:
             self._apply_window_reload()
             if self._check_account_change():return
             self._apply_reply_rules()
+            with self.lock:self.rests.tick()
             self._check_reopened_windows()
             try: self.news.tick()
             except Exception as error:

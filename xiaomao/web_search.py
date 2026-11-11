@@ -198,14 +198,26 @@ def _indexed_time(value):
     return timestamp.astimezone().isoformat(timespec='minutes')
 
 
-def search_public(client, key, query):
+def search_public(client, key, query, *, runtime=None, timeout=None):
+    from .operations_usage import record_usage, _account
+    account = _account(runtime) if runtime is not None else None
+    started = monotonic()
+    result = None
+    try:
+        result = _search_public(client, key, query, timeout=timeout)
+        return result
+    finally:
+        record_usage(runtime,account=account,kind='search',duration_ms=(monotonic()-started)*1000,error=result is None)
+
+
+def _search_public(client, key, query, *, timeout=None):
     """Return bounded evidence, an empty list for no hits, or None on failure."""
     started = monotonic()
     try:
         with client.stream(
             'POST', SEARCH_URL, headers={'Authorization': 'Bearer ' + key},
             json={'query': query, 'count': 4, 'need_content': True},
-            follow_redirects=False, timeout=httpx.Timeout(6, connect=3),
+            follow_redirects=False, timeout=timeout or httpx.Timeout(6, connect=3),
         ) as response:
             if response.status_code != 200:
                 return None

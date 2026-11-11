@@ -2,6 +2,10 @@ import { request } from "./api";
 
 export interface NewsCategory { id: string; label: string; query?: string }
 export interface NewsTimeRange { start: string; end: string; intervalMinutes: number }
+export interface NewsTopicSettings { aliases: string[]; focusTerms: string[]; exclusions: string[] }
+export interface NewsFeed { id: string; url: string; label: string; enabled: boolean; priority: number; category: string; topic: string }
+export interface NewsFeedback { id: string; scope: 'article' | 'source' | 'topic'; value: 'like' | 'irrelevant' | 'duplicate';
+  target: string; url: string; title: string; source: string; category: string; topic: string; updatedAt: number }
 export interface NewsDraft {
   id?: string;
   name: string;
@@ -9,6 +13,10 @@ export interface NewsDraft {
   selectionMode: "single" | "multiple";
   categories: string[];
   categoryTopics?: Record<string, string[]>;
+  topicSettings?: Record<string, Record<string, NewsTopicSettings>>;
+  groupSameEvent?: boolean;
+  sourceMode?: 'search' | 'feed' | 'both';
+  feeds?: NewsFeed[];
   keywords: string;
   excludeKeywords: string;
   sourceDomains: string;
@@ -31,6 +39,11 @@ export interface NewsSubscription extends NewsDraft {
 export interface NewsArticle {
   id: string; title: string; summary: string; url: string; source: string; category: string;
   topic?: string;
+  sourceType?: 'search' | 'feed';
+  collectedVia?: ('search' | 'feed')[];
+  sources?: { url: string; source: string; title: string; sourceType?: string; collectedVia?: ('search' | 'feed')[]; publishedAt?: number; timeLabel?: string }[];
+  merge?: { confidence: string; reason: string; sourceCount?: number };
+  preferenceEffects?: { scope: string; value: string }[];
   publishedAt: number; timeLabel: string;
 }
 export interface NewsDelivery {
@@ -54,6 +67,7 @@ export interface NewsState {
   edition: NewsEdition | null;
   history: NewsEdition[];
   reason: string;
+  feedback?: NewsFeedback[];
 }
 
 // Keep private target identity snapshots and revisions out of renderer writes.
@@ -75,6 +89,13 @@ export function editableSubscription(value: NewsDraft, existing = true): NewsDra
     selectionMode: value.selectionMode,
     categories: [...value.categories],
     categoryTopics,
+    topicSettings: Object.fromEntries(Object.entries(value.topicSettings ?? {}).sort(([a], [b]) => a.localeCompare(b)).map(([category, topics]) => [category,
+      Object.fromEntries(Object.entries(topics).sort(([a], [b]) => a.localeCompare(b)).map(([topic, settings]) => [topic, {
+        aliases: [...settings.aliases], focusTerms: [...settings.focusTerms], exclusions: [...settings.exclusions],
+      }]))])),
+    groupSameEvent: value.groupSameEvent ?? false,
+    sourceMode: value.sourceMode ?? 'search',
+    feeds: (value.feeds ?? []).map(feed => ({ ...feed })),
     keywords: value.keywords,
     excludeKeywords: value.excludeKeywords,
     sourceDomains: value.sourceDomains,
@@ -112,3 +133,8 @@ export const deleteNews = (subscription: string, expected: number) =>
   request<{ deleted: true }>("news.delete", { subscription, expected });
 export const commandNews = (subscription: string, action: "preview" | "push" | "cancel", edition?: string) =>
   request<{ accepted: true; edition?: string }>("news.command", { subscription, action, ...(edition ? { edition } : {}) });
+export const feedbackNews = (subscription: string, article: Pick<NewsArticle, 'url'>, value: NewsFeedback['value'], scope: NewsFeedback['scope'] = 'article') =>
+  request<NewsFeedback>('news.feedback', { subscription, article: { url: article.url }, value, scope });
+export const clearNewsFeedback = (subscription: string, feedbackId: string) =>
+  request<{ cleared: true }>('news.clearFeedback', { subscription, feedbackId });
+export const listNewsFeedback = (subscription: string) => request<{ preferences: NewsFeedback[] }>('news.feedbackList', { subscription });

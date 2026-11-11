@@ -27,7 +27,7 @@ let main, prompt, broker, timer, status, signature, stopping = false, quitting =
 let statusBusy = false, writes = 0, painted = false, retryBridge;
 let failures = [];
 const drafts = new Set();
-const draftPages = new Set(["persona", "companion", "news", "sessions", "settings", "appearance", "sticker-preferences", "sticker-detail", "sticker-import"]);
+const draftPages = new Set(["persona", "companion", "news", "sessions", "settings", "appearance", "sticker-preferences", "sticker-detail", "sticker-import", "usage-pricing"]);
 let trayExitRequested = false, bridgeReady = !managed, residentStart = false;
 let calibration, calibrationTarget, calibrationSaving = false, backup;
 let reducedMotion = false;
@@ -43,6 +43,14 @@ const allowed = new Set([
   "sessions.read", "sessions.directory", "sessions.save", "sessions.rules", "sessions.remove",
   "companion.read", "companion.state", "companion.memory", "companion.save", "companion.command", "companion.preset",
   "news.read", "news.state", "news.save", "news.delete", "news.command",
+  "news.feedback", "news.feedbackList", "news.clearFeedback",
+  "tasks.overview", "tasks.history", "tasks.usage", "tasks.savePrices", "diagnostics.run",
+  "sessions.rest", "sessions.cancelRest",
+  "studio.chat", "studio.summary", "studio.state", "studio.cancel", "studio.sendSummary",
+]);
+const mutatingMethods = new Set([
+  "tasks.savePrices", "sessions.rest", "sessions.cancelRest", "news.feedback", "news.clearFeedback", "news.delete",
+  "studio.chat", "studio.summary", "studio.cancel", "studio.sendSummary",
 ]);
 
 function secureWindow(options) {
@@ -171,7 +179,7 @@ function registerIpc() {
     }
     if (JSON.stringify(params).length > 1_500_000) throw new Error("请求内容过大");
     const long = method === "settings.testModel" || method.startsWith("sessions.") || method === "run.start";
-    const changing = /\.(?:start|mode|selected|recover|save|saveDocument|pacing|credentials|remove|removeKey|preferences|saveDetail|frequency|importText|commit|rules|command)$/.test(method);
+    const changing = mutatingMethods.has(method) || /\.(?:start|mode|selected|recover|save|saveDocument|pacing|credentials|remove|removeKey|preferences|saveDetail|frequency|importText|commit|rules|command)$/.test(method);
     if (changing) writes++;
     if (method === "run.start" && broker.closed) {
       clearTimeout(retryBridge);

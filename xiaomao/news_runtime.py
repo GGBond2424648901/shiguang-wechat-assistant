@@ -7,6 +7,8 @@ import logging
 import threading
 import time
 
+from .news_quality import article_urls, same_event, substantive_update
+
 
 BEIJING = timezone(timedelta(hours=8))
 TERMINAL = {'verified', 'failed', 'unknown', 'empty', 'missed', 'cancelled'}
@@ -111,10 +113,13 @@ class NewsRuntime:
         histories = [self.store.seen_urls(account, target['scope']) | self.store.uncertain_urls(account, target['scope'])
                      | in_flight.get(target['scope'], set()) for target in row['snapshot'].get('targets', [])]
         exclude_urls = set.intersection(*histories) if histories else set()
+        event_histories = [getattr(self.store, 'seen_events', lambda *args: [])(account, target['scope'])
+                           for target in row['snapshot'].get('targets', [])]
         def collect():
             research = self.research_factory()
             try:
-                return research.collect(row['snapshot'], row['createdAt'],
+                feedback = getattr(self.store, 'list_feedback', lambda *args: [])(account, row['subscriptionId'])
+                return research.collect({**row['snapshot'], '_feedback': feedback, '_seenEventTargets': event_histories}, row['createdAt'],
                                         cancelled=lambda: cancelled.is_set() or self.closed.is_set(),
                                         exclude_urls=exclude_urls)
             finally:
@@ -220,13 +225,19 @@ class NewsRuntime:
         from .news_research import format_parts
         deliveries = []
         for target in row['snapshot'].get('targets', []):
-            seen = self.store.seen_urls(account, target['scope'])
-            articles = [a for a in row['articles'] if a['url'] not in seen]
+            articles = [a for a in row['articles'] if not self._already_seen(account, target['scope'], a,
+                        row['snapshot'].get('groupSameEvent', False))]
+            skipped = [a['url'] for a in row['articles'] if a not in articles]
             parts = format_parts(row['snapshot'], articles, row['createdAt'])
             if len(parts) != len(articles): raise ValueError('资讯分段与来源不匹配')
             deliveries.append({**target, 'state': 'waiting' if parts else 'verified',
                 'reason': '' if parts else '本轮来源均已向此目标确认，无新增内容',
-                'parts': [dict(text=text, url=article['url'], requestId='', taskId='', state='waiting', reason='', attempt=0)
+                'skippedSources': skipped,
+                'parts': [dict(text=text, url=article['url'], associatedUrls=article_urls(article),
+                               event={**{key: article.get(key, '') for key in ('url', 'title', 'summary', 'eventEvidence', 'publishedAt')},
+                                      'associatedUrls': article_urls(article)}
+                                     if row['snapshot'].get('groupSameEvent') else None,
+                               requestId='', taskId='', state='waiting', reason='', attempt=0)
                           for text, article in zip(parts, articles)]})
         return self.store.update_edition(account, row['id'], deliveries=deliveries)
 
@@ -246,16 +257,16 @@ class NewsRuntime:
                             part['state'] = 'waiting'
                     else:
                         part.update(state='unknown', reason='无法核对中断的发送计划，未自动重发')
-                        self.store.mark_uncertain(account, delivery['scope'], [part['url']], self.clock())
+                        self._record_part(account, delivery, part, uncertain=True)
                 if not part.get('taskId') or part['state'] in TERMINAL: continue
                 status = self.delivery_status(part['taskId'])
                 state = status.get('state')
                 if state == 'verified':
                     part['state'] = 'verified'; part['reason'] = '微信回执已核对'
-                    self.store.mark_seen(account, delivery['scope'], [part['url']], self.clock())
+                    self._record_part(account, delivery, part)
                 elif state == 'unknown' or state == 'skipped' and status.get('attempted'):
                     part['state'] = 'unknown'; part['reason'] = '发送回执未能确认，请到微信核对，未自动重发'
-                    self.store.mark_uncertain(account, delivery['scope'], [part['url']], self.clock())
+                    self._record_part(account, delivery, part, uncertain=True)
                 elif state == 'skipped':
                     if status.get('reason') in ('restart', 'paused') and part.get('attempt', 0) < 64:
                         part.update(state='waiting', taskId='', requestId='', attempt=part.get('attempt', 0) + 1,
@@ -265,7 +276,7 @@ class NewsRuntime:
                 elif not status:
                     # A missing journal cannot prove that a send never occurred.
                     part['state'] = 'unknown'; part['reason'] = '发送记录缺失，请到微信核对，未自动重发'
-                    self.store.mark_uncertain(account, delivery['scope'], [part['url']], self.clock())
+                    self._record_part(account, delivery, part, uncertain=True)
                 else: part['state'] = 'queued'
         if row.get('deliveries'):
             self.store.update_edition(account, row['id'], deliveries=row['deliveries'])
@@ -323,13 +334,18 @@ class NewsRuntime:
             if not part: continue
             # A different subscription can verify this URL while this one is
             # waiting behind ordinary chat. Recheck at the actual queue fence.
-            if part['url'] in self.store.seen_urls(account, delivery['scope']):
+            urls = part.get('associatedUrls') or [part['url']]
+            if self._already_seen(account, delivery['scope'], part.get('event') or {'url': part['url']}, bool(part.get('event')), urls):
                 part.update(state='verified', deduplicated=True, reason='同一来源已在其他推送确认，本次跳过')
                 continue
-            quarantined = part['url'] in self.store.uncertain_urls(account, delivery['scope'])
+            quarantined = bool(set(urls) & self.store.uncertain_urls(account, delivery['scope'])) or bool(
+                part.get('event') and self._event_known(account, delivery['scope'], part['event'], uncertain=True))
             if quarantined:
                 part.update(state='unknown', reason='该来源已有待核对的发送回执，未重复推送')
                 delivery.update(state='unknown', reason=part['reason'])
+                continue
+            if self._event_pending(account, delivery['scope'], part, row['id']):
+                delivery.update(state='waiting', reason='同一来源或事件正在核对其他推送回执，稍后重查')
                 continue
             scope_hash = hashlib.sha256(delivery['scope'].encode()).hexdigest()[:12]
             request_id = f"news_{row['id']}_{scope_hash}_{parts.index(part)}_{part.get('attempt', 0)}"
@@ -358,6 +374,41 @@ class NewsRuntime:
         pending = any(p['state'] == 'queued' for d in row['deliveries'] for p in d['parts'])
         self.store.update_edition(account, row['id'], deliveries=row['deliveries'], state=state,
                                  reason=reason, receiptPending=pending)
+
+    def _event_known(self, account, scope, article, uncertain=False):
+        method = getattr(self.store, 'uncertain_events' if uncertain else 'seen_events', lambda *args: [])
+        return any(same_event(article, previous) for previous in method(account, scope))
+
+    def _already_seen(self, account, scope, article, grouping, urls=None):
+        urls = set(urls or article.get('associatedUrls') or article_urls(article))
+        seen_url = bool(urls & self.store.seen_urls(account, scope))
+        if not grouping: return seen_url
+        events = getattr(self.store, 'seen_events', lambda *args: [])(account, scope)
+        if any(same_event(article, previous) for previous in events): return True
+        # Reusing a URL is allowed only when we retained its prior evidence
+        # and can see that this is a substantive update, not an unknown legacy receipt.
+        prior = [previous for previous in events if urls & set(previous.get('associatedUrls') or [previous.get('url')])]
+        return seen_url and not (prior and all(substantive_update(article, previous) for previous in prior))
+
+    def _event_pending(self, account, scope, part, current):
+        urls = set(part.get('associatedUrls') or [part['url']])
+        for pending in self.store.pending(account):
+            if pending['id'] == current: continue
+            for delivery in pending.get('deliveries', []):
+                if delivery['scope'] != scope: continue
+                for other in delivery.get('parts', []):
+                    if other.get('state') not in ('queued', 'dispatching') or not (other.get('requestId') or other.get('taskId')): continue
+                    if urls & set(other.get('associatedUrls') or [other.get('url')]): return True
+                    if part.get('event') and other.get('event') and same_event(part['event'], other['event']): return True
+        return False
+
+    def _record_part(self, account, delivery, part, uncertain=False):
+        urls = part.get('associatedUrls') or [part['url']]
+        method = self.store.mark_uncertain if uncertain else self.store.mark_seen
+        method(account, delivery['scope'], urls, self.clock())
+        if part.get('event'):
+            method = getattr(self.store, 'mark_event_uncertain' if uncertain else 'mark_event_seen', None)
+            if method: method(account, delivery['scope'], part['event'])
 
     def close(self):
         self.closed.set()

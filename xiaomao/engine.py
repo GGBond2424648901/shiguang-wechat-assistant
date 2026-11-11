@@ -32,7 +32,7 @@ def readback_key(text: str) -> str:
 def bubble_matches(task, text, *, visual=False):
     # Whitespace belongs to the generated text in a split or formatted
     # paste. Only the Windows line-ending representation may differ.
-    if (task.remaining_text or task.continuation_of or formatted_reply(task.reply)
+    if (task.operator_plan or task.remaining_text or task.continuation_of or formatted_reply(task.reply)
             or task.reply.strip()!=task.reply or re.search(r'[\t\n]|\s{2,}',task.reply)):
         return text.replace('\r\n','\n').replace('\r','\n')==task.reply
     key=readback_key if visual else normalized
@@ -300,7 +300,7 @@ class Engine:
                 following = [{'id': f'{root}:{index}', 'reply': reply}
                              for index, reply in enumerate(parts, task.part_index + 1)]
                 rows.append({'id':task.id,'queue_id':queue_id,'sender':task.sender,
-                             'sender_name':names.get(task.sender,''),
+                             'sender_name':names.get(task.sender,''),'createdAt':task.created,'ageSeconds':now-task.created,
                              'messages':[m.text for m in task.messages],
                              'reply':task.reply,'state':task.state,'progress':progress,'following':following})
             return rows
@@ -1245,7 +1245,7 @@ class Engine:
                 self._retire(task,'skipped','participation_declined')
                 self.reason='这条消息已理解，暂不插话；继续监听'
                 return
-            if task.state=='candidate' and not task.sticker:
+            if task.state=='candidate' and not task.sticker and not task.operator_plan:
                 # OCR receipts have no stable message IDs. Keep a single paste
                 # in screen mode; database deliveries can attest each bubble.
                 enabled=(self.settings.split_replies and self.message_source is not None
@@ -1261,7 +1261,7 @@ class Engine:
                     reply+=''.join(task.remaining_text)
                     task.remaining_text=()
             finalize=getattr(self.model,'finalize_wechat_bubble',None)
-            if finalize and not task.sticker:
+            if finalize and not task.sticker and not task.operator_plan:
                 history=self._context_snapshot()
                 while True:
                     task.raw_bubble=reply

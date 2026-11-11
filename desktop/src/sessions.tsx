@@ -4,6 +4,7 @@ import {
 } from "lucide-react";
 import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
 import { errorMessage, frequencies, request, ruleLabels, type Status } from "./api";
+import { SessionRestControl } from "./session-rest";
 import { Button, Confirm, Empty, IconButton, PanelTitle, Select, StatusPill, Switch, useDraftGuard } from "./components";
 import { reducesMotion } from "./motion";
 import { rebaseSessions, rulesOf, sameOrder, sameRules, type Conversation, type DraftRule, type SavedSessions, type SessionDraft } from "./session-draft";
@@ -271,6 +272,8 @@ export function SessionsPage({ active, status, notify, calibrate, directory, set
               accept(next, true);
               notify(value ? "会话已暂停" : "会话已开启");
             })}>暂停此会话</Switch>} />
+        {running && <SessionBlock icon={<PauseCircle size={21} />} title="临时休息" hint="选择时长，到期核对后恢复原模式"
+          controls={<SessionRestControl session={running} active={active} disabled={!mutable || pending || !row.bound} notify={notify} />} />}
         <SessionBlock icon={<Monitor size={21} />} title="窗口绑定" hint="逐个校准主窗口或独立聊天窗口"
           controls={<div className="flex"><span className={row.calibrated ? "identity-label confirmed" : "identity-label"}>
             {row.calibrated ? "已校准" : "待校准"}</span>

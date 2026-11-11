@@ -5,6 +5,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 import { errorMessage, request, type Status } from "./api";
 import { Button, Confirm, Empty, IconButton, PanelTitle, Select, Switch, useDraftGuard } from "./components";
+import { ConversationSummary } from "./studio";
 
 type Notify = (text: string, error?: boolean) => void;
 type Kind = "idle" | "followup" | "checkin" | "signoff";
@@ -27,7 +28,7 @@ interface Memory {
   messages: number; facts: number; diaries: number; summary: string;
   sources: { author: string; quote: string }[]; journal: { day: string; text: string }[];
 }
-const tabs = [["policy", "主动聊天"], ["routines", "定时任务"], ["memory", "会话记忆"]] as const;
+const tabs = [["policy", "主动聊天"], ["routines", "定时任务"], ["memory", "会话记忆"], ["summary", "会话总结"]] as const;
 const templates = [["morning", "早安"], ["noon", "午间"], ["afternoon", "午后"], ["evening", "晚安"]] as const;
 const weekdays = ["一", "二", "三", "四", "五", "六", "日"];
 const rangeLabels = { idle: "空闲话题", followup: "聊后续话", checkin: "无人回应追问", signoff: "开场后收尾" };
@@ -103,7 +104,7 @@ export function CompanionPage({ active, status, notify }: { active: boolean; sta
   }, [active, id, refresh, dirty, busy, base?.revision]);
 
   useEffect(() => {
-    if (!active || !id || tab === "memory") return;
+    if (!active || !id || tab === "memory" || tab === "summary") return;
     let alive = true;
     let timer: ReturnType<typeof setTimeout>;
     const tick = async () => {
@@ -177,6 +178,17 @@ export function CompanionPage({ active, status, notify }: { active: boolean; sta
     setTab(value);
     if (scroll.current) scroll.current.scrollTop = 0;
   };
+
+  useEffect(() => {
+    const editTask = (event: Event) => {
+      const detail = (event as CustomEvent<{ page: string; session: string }>).detail;
+      if (detail?.page === "companion" && status?.sessions.some(item => item.id === detail.session)) {
+        choose(detail.session); openTab("routines");
+      }
+    };
+    window.addEventListener("shiguang:task-edit", editTask);
+    return () => window.removeEventListener("shiguang:task-edit", editTask);
+  });
 
   function range(kind: Kind) {
     return <div className="companion-line" key={kind}>
@@ -330,8 +342,11 @@ export function CompanionPage({ active, status, notify }: { active: boolean; sta
           </section>
         </div>
       </>}
+      {tab === "summary" && <ConversationSummary active={active && tab === "summary"} session={id} name={selection.name}
+        revision={status?.revision ?? ""} readOnly={readOnly} bound={selection.bound}
+        canSend={!!status?.connected && selection.mode === "auto" && selection.calibrated} />}
     </div>
-    <footer className="companion-footer glass">
+    {tab !== "summary" && <footer className="companion-footer glass">
       <span className="fine-print muted"><Info size={15} />仅作用于 {selection.name}{dirty ? " · 有未保存的修改" : ""}</span>
       <div className="flex">
         {tab !== "memory" ? <>
@@ -345,7 +360,7 @@ export function CompanionPage({ active, status, notify }: { active: boolean; sta
           <Button className="peach-outline" icon={<ArrowDownToLine size={15} />} disabled={!mutable} onClick={() => void backup("import")}>导入备份</Button>
         </>}
       </div>
-    </footer>
+    </footer>}
     {confirm && <Confirm title={confirm === "once" ? "安排一次主动聊天" : "切换陪伴会话"}
       detail={confirm === "once" ? `为“${selection.name}”安排一次实际微信发送。后台会等待发送条件满足。`
         : "当前陪伴设置有草稿。确认后放弃草稿，打开另一个会话。"}

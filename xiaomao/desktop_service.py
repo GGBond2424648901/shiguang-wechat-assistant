@@ -12,6 +12,8 @@ from .desktop_calibration import DesktopCalibration
 from .desktop_catalog import DesktopCatalog
 from .desktop_companion import DesktopCompanion
 from .desktop_news import DesktopNews
+from .desktop_operations import DesktopOperations
+from .desktop_studio import DesktopStudio
 from .desktop_import import DesktopImportQueue
 from .desktop_persona import DesktopPersona
 from .desktop_settings import DesktopSettings, config_revision
@@ -44,6 +46,8 @@ class DesktopService:
         self.calibration = DesktopCalibration(self.root, self.client)
         self.companion = DesktopCompanion(self.root, self.client, read_only)
         self.news = DesktopNews(self.root, self.client, read_only)
+        self.operations = DesktopOperations(self.root, self.client, read_only)
+        self.studio = DesktopStudio(self.root, self.client, read_only)
         self._receipts = {}
         self._receipt_lock = RLock()
         self._mutations = RLock()
@@ -61,6 +65,10 @@ class DesktopService:
             'companion.read': self.companion.read, 'companion.state': self.companion.state,
             'companion.memory': self.companion.memory, 'companion.preset': self.companion.preset,
             'news.read': self.news.read, 'news.state': self.news.state,
+            'news.feedbackList': self.news.feedbackList,
+            'tasks.overview': self.operations.overview, 'tasks.history': self.operations.history,
+            'tasks.usage': self.operations.usage, 'diagnostics.run': self.operations.diagnostics,
+            'studio.state': self.studio.state,
         }
         self._writers = {
             'run.start': self.start, 'run.mode': self.mode, 'run.selected': self.selected,
@@ -87,6 +95,11 @@ class DesktopService:
             'companion.export': self.companion.export, 'companion.backupPreview': self.companion.backup_preview,
             'companion.restore': self.companion.restore,
             'news.save': self.news.save, 'news.delete': self.news.delete, 'news.command': self.news.command,
+            'news.feedback': self.news.feedback, 'news.clearFeedback': self.news.clearFeedback,
+            'tasks.savePrices': self.operations.save_prices,
+            'sessions.rest': self.operations.rest, 'sessions.cancelRest': self.operations.cancel_rest,
+            'studio.chat': self.studio.chat, 'studio.summary': self.studio.summary,
+            'studio.cancel': self.studio.cancel, 'studio.sendSummary': self.studio.send_summary,
         }
 
     def call(self, method, params):
@@ -149,6 +162,7 @@ class DesktopService:
                 'calibrated': bool(row.get('calibrated', cfg.binding_for(name))),
                 'windowState': clean_text(row.get('window_state')),
                 'pending': int(row.get('pending_count') or 0),
+                'rest': row.get('rest') if isinstance(row.get('rest'), dict) else None,
                 'lastResult': self._last_result(row.get('last_result')),
             })
         mode = data.get('mode')

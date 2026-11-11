@@ -38,7 +38,8 @@ class DesktopNews:
                 reason = '' if connected else '后台正在切换微信账号'
             except ControlUnavailable:
                 connected, reason = False, '助手后台尚未连接，定时推送将在启动后恢复'
-            return dict(connected=connected, edition=history[0] if history else None, history=history, reason=reason)
+            return dict(connected=connected, edition=history[0] if history else None, history=history, reason=reason,
+                        feedback=store.list_feedback(account, subscription))
         finally: store.close()
 
     def _invalidate(self, account, identity):
@@ -91,3 +92,37 @@ class DesktopNews:
         if status.get('account_scope') and status['account_scope'] != configured_account(settings):
             raise ValueError('后台正在切换微信账号，请稍后再试')
         return self.client.news_command(subscription, action, edition)
+
+    def feedback(self, subscription, article, value, scope='article'):
+        if self.read_only: raise ValueError('当前为只读预览')
+        _, account = self._settings()
+        if not isinstance(article, dict) or not isinstance(article.get('url'), str): raise ValueError('请选择真实预览文章')
+        store = self._store()
+        try:
+            # Renderer metadata is not filter authority. Resolve the article
+            # from the immutable, account-scoped edition journal.
+            trusted = next((row for edition in store.history(account, subscription, limit=200)
+                            for row in edition.get('articles', []) if row.get('url') == article['url']), None)
+            if trusted is None:
+                trusted = next((row for row in store.list_feedback(account, subscription) if row.get('url') == article['url']), None)
+            if trusted is None: raise ValueError('文章不属于此订阅的已保存预览，请重新生成')
+            result = store.save_feedback(account, subscription, trusted, value, scope)
+            self._invalidate(account, subscription)
+            return result
+        finally: store.close()
+
+    def feedbackList(self, subscription):
+        _, account = self._settings()
+        store = self._store()
+        try: return {'preferences': store.list_feedback(account, subscription)}
+        finally: store.close()
+
+    def clearFeedback(self, subscription, feedbackId):
+        if self.read_only: raise ValueError('当前为只读预览')
+        _, account = self._settings()
+        store = self._store()
+        try:
+            result = store.clear_feedback(account, subscription, feedbackId)
+            self._invalidate(account, subscription)
+            return result
+        finally: store.close()

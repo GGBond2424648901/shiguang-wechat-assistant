@@ -37,7 +37,7 @@ class ControlClient:
             raise ControlUnavailable("助手尚未运行，或本机控制信息无效") from None
 
     def request(self, operation: str, payload=None) -> dict:
-        if operation not in ("status", "pending", "observe", "enable", "pause", "stop", "reply_latest", "companion_preview", "companion_once","reload_windows","stop_if_idle","queue_text","queue_outbound","companion_configure","enable_selected","pause_selected","configure_reply_rules","configure_reply_defaults","news_command","news_invalidate"):
+        if operation not in ("status", "pending", "observe", "enable", "pause", "stop", "reply_latest", "companion_preview", "companion_once","reload_windows","stop_if_idle","queue_text","queue_outbound","companion_configure","enable_selected","pause_selected","configure_reply_rules","configure_reply_defaults","news_command","news_invalidate","rest_selected","cancel_rest_selected"):
             raise ControlUnavailable("不支持这个控制操作")
         url, token = self._endpoint()
         try:
@@ -86,6 +86,10 @@ class ControlClient:
         return self.request('configure_reply_rules',payload)
     def configure_reply_defaults(self,preferences):
         return self.request('configure_reply_defaults',dict(preferences=preferences))
+    def rest_selected(self,group,scope,minutes):
+        return self.request('rest_selected',dict(group=group,scope=scope,minutes=minutes))
+    def cancel_rest_selected(self,group,scope):
+        return self.request('cancel_rest_selected',dict(group=group,scope=scope))
     def queue_text(self, group, text, request_id):
         return self.request('queue_text',dict(group=group,text=text,request_id=request_id))
 

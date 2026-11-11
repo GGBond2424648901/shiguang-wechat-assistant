@@ -9,7 +9,9 @@ import { errorMessage, type Session, type Status } from "./api";
 import { Button, Empty, IconButton, PanelTitle, Select, Switch, useDraftGuard } from "./components";
 import {
   commandNews, deleteNews, editableSubscription, readNews, readNewsState, safeNewsUrl, saveNews, subscriptionSignature,
-  type NewsCategory, type NewsDelivery, type NewsDraft, type NewsEdition, type NewsRead, type NewsState, type NewsSubscription, type NewsTimeRange,
+  feedbackNews, clearNewsFeedback,
+  type NewsArticle, type NewsCategory, type NewsDelivery, type NewsDraft, type NewsEdition, type NewsRead, type NewsState, type NewsSubscription, type NewsTimeRange,
+  type NewsFeed, type NewsFeedback, type NewsTopicSettings,
 } from "./news-api";
 import "./news.css";
 
@@ -97,6 +99,16 @@ function validationError(draft: NewsDraft) {
   if (!draft.categories.length && !draft.keywords.trim()) return "请至少选择一个资讯方向，或填写公开关键词";
   const topicError = topicValidationError(draft);
   if (topicError) return topicError;
+  for (const topics of Object.values(draft.topicSettings ?? {})) for (const [topic, settings] of Object.entries(topics)) {
+    for (const [key, label] of [['aliases', '别名'], ['focusTerms', '关注词'], ['exclusions', '排除词']] as const) {
+      if (settings[key].length > 6 || settings[key].some(term => !validTopic(term))) return `${topic}的${label}最多 6 项，每项 1 至 60 字`;
+    }
+  }
+  for (const feed of draft.feeds ?? []) {
+    if (!safeNewsUrl(feed.url)) return '请填写公共 RSS/Atom 订阅源地址';
+    if (!Number.isInteger(feed.priority) || feed.priority < 0 || feed.priority > 10) return '订阅源优先级应为 0 至 10';
+  }
+  if (draft.sourceMode === 'feed' && !(draft.feeds ?? []).some(feed => feed.enabled)) return '仅订阅源模式至少需要启用一个 RSS/Atom 来源';
   const scheduleError = scheduleValidationError(draft);
   if (scheduleError) return scheduleError;
   if (!draft.weekdays.length) return "请至少选择一个推送星期";
@@ -127,6 +139,7 @@ export function NewsPage({ active, status, notify, manageSessions }: {
   const [busy, setBusy] = useState("");
   const [tab, setTab] = useState<"preview" | "history">("preview");
   const [advanced, setAdvanced] = useState(false);
+  const [feedbackScope, setFeedbackScope] = useState<NewsFeedback['scope']>('article');
   const [showTargets, setShowTargets] = useState(false);
   const [confirmation, setConfirmation] = useState<Confirmation>();
   const [stale, setStale] = useState(false);
@@ -141,6 +154,7 @@ export function NewsPage({ active, status, notify, manageSessions }: {
   const dataRef = useRef<NewsRead | undefined>(undefined);
   const lastStateError = useRef("");
   const forceRead = useRef(false);
+  const pendingTaskEdit = useRef('');
   const scroll = useRef<HTMLDivElement>(null);
   const confirmId = useId();
   const advancedId = useId();
@@ -175,6 +189,7 @@ export function NewsPage({ active, status, notify, manageSessions }: {
   const categoryTopics = draft.categoryTopics ?? {};
   const topicCount = Object.values(categoryTopics).reduce((count, topics) => count + topics.length, 0);
   const topicError = topicValidationError(draft);
+  const preferences = live?.feedback ?? [];
   useDraftGuard("news", dirty);
 
   function accept(value: NewsSubscription | NewsDraft, saved = true) {
@@ -340,6 +355,64 @@ export function NewsPage({ active, status, notify, manageSessions }: {
       if (scroll.current) scroll.current.scrollTop = 0;
     });
   }
+
+  useEffect(() => {
+    const edit = (event: Event) => {
+      const detail = (event as CustomEvent<{ page: string; subscription: string }>).detail;
+      if (!active || detail?.page !== 'news' || !detail.subscription) return;
+      if (!data || reading) { pendingTaskEdit.current = detail.subscription; return; }
+      if (!data?.subscriptions.some(row => row.id === detail.subscription)) {
+        notify('订阅尚未读取或已删除，请读取最新设置后选择', true);
+        return;
+      }
+      changeSubscription(detail.subscription);
+    };
+    window.addEventListener('shiguang:task-edit', edit);
+    return () => window.removeEventListener('shiguang:task-edit', edit);
+    // The listener tracks the current draft so external navigation honors its guard.
+  }, [active, data, dirty, draft.id]);
+
+  useEffect(() => {
+    if (!active || reading || !data || !pendingTaskEdit.current) return;
+    const id = pendingTaskEdit.current;
+    pendingTaskEdit.current = '';
+    if (data.subscriptions.some(row => row.id === id)) changeSubscription(id);
+    else notify('此订阅已删除或不属于当前账号', true);
+  }, [active, reading, data, draft.id]);
+
+  function topicCondition(category: string, topic: string, key: keyof NewsTopicSettings, value: string) {
+    const terms = value ? value.split(/[,，\n]/).map(term => term.trim()) : [];
+    setDraft(before => ({ ...before, topicSettings: { ...before.topicSettings,
+      [category]: { ...before.topicSettings?.[category], [topic]: {
+        aliases: [], focusTerms: [], exclusions: [], ...before.topicSettings?.[category]?.[topic], [key]: terms,
+      } } } }));
+  }
+
+  function updateFeed(id: string, changes: Partial<NewsFeed>) {
+    setDraft(before => ({ ...before, feeds: (before.feeds ?? []).map(feed => feed.id === id ? { ...feed, ...changes } : feed) }));
+  }
+
+  const markArticle = (article: Pick<NewsArticle, 'url'>, value: NewsFeedback['value'], scope = feedbackScope) => perform('feedback', async () => {
+    const id = draft.id;
+    if (!id || !base) return;
+    stateVersion.current++;
+    await feedbackNews(id, article, value, scope);
+    assertAccount();
+    if (selection.current !== id) return;
+    setRefresh(before => before + 1);
+    notify(scope === 'article' ? '文章反馈已保存；下次采集生效，可在偏好管理撤销' : '已保存此订阅的轻量排序偏好；不会隐藏整个来源或主题');
+  });
+
+  const clearPreference = (id: string) => perform('feedback', async () => {
+    const subscription = draft.id;
+    if (!subscription) return;
+    stateVersion.current++;
+    await clearNewsFeedback(subscription, id);
+    assertAccount();
+    if (selection.current !== subscription) return;
+    setRefresh(before => before + 1);
+    notify('反馈已撤销，下次采集恢复原有规则');
+  });
 
   function newSubscription() {
     guard(() => {
@@ -628,6 +701,63 @@ export function NewsPage({ active, status, notify, manageSessions }: {
               <div className="field"><span>资讯回看范围</span><Select label="资讯回看范围" value={String(draft.lookbackHours)} disabled={!mutable}
                 options={[24, 48, 72].map(hours => ({ value: String(hours), label: `最近 ${hours} 小时` }))}
                 onChange={value => field("lookbackHours", Number(value))} /></div>
+              <details className="news-advanced-block"><summary>每个主题的检索条件</summary>
+                <p className="muted">别名可替代主题名匹配；关注词至少命中一项，排除词命中即跳过。每项最多 60 字，每栏最多 6 项，用逗号分隔。只影响对应主题，未启用的方向和主题仍保留设置。</p>
+                {draft.categories.flatMap(category => (categoryTopics[category] ?? []).filter(topic => topic.trim()).map(topic => {
+                  const settings = draft.topicSettings?.[category]?.[topic];
+                  return <fieldset key={`${category}-${topic}`} className="news-topic-conditions" disabled={!mutable}>
+                    <legend>{categoryNames.get(category)} · {topic}</legend>
+                    {([['aliases', '主题别名'], ['focusTerms', '主题关注词'], ['exclusions', '主题排除词']] as const).map(([key, label]) =>
+                      <label className="field" key={key}><span>{label}</span><textarea rows={2} aria-label={`${topic}${label}`} maxLength={420}
+                        value={(settings?.[key] ?? []).join(', ')} placeholder="用逗号分隔，可留空"
+                        onChange={event => topicCondition(category, topic, key, event.target.value)} /></label>)}
+                  </fieldset>;
+                }))}
+                {!draft.categories.some(category => (categoryTopics[category] ?? []).length) && <p className="muted">先在“细化关注内容”添加主题。</p>}
+              </details>
+              <details className="news-advanced-block"><summary>来源与公共 RSS / Atom</summary>
+                <div className="field"><span>采集来源</span><Select label="采集来源模式" value={draft.sourceMode ?? 'search'} disabled={!mutable}
+                  options={[{ value: 'search', label: '仅公开检索' }, { value: 'feed', label: '仅 RSS / Atom 订阅源' }, { value: 'both', label: '公开检索 + 订阅源' }]}
+                  onChange={value => field('sourceMode', value as NewsDraft['sourceMode'])} /></div>
+                <p className="muted">仅抓取公共 XML 订阅源；不使用登录状态。来源绑定本订阅，可限制到方向或细分主题。高优先级先排序；关闭的来源保留配置。</p>
+                {(draft.feeds ?? []).map((feed, index) => <fieldset className="news-feed" key={feed.id} disabled={!mutable}>
+                  <legend>订阅源 {index + 1}</legend>
+                  <label className="field"><span>名称</span><input aria-label={`订阅源 ${index + 1} 名称`} maxLength={60} value={feed.label}
+                    onChange={event => updateFeed(feed.id, { label: event.target.value })} /></label>
+                  <label className="field"><span>公共地址</span><input type="url" aria-label={`订阅源 ${index + 1} 地址`} maxLength={800} value={feed.url}
+                    placeholder="https://公开网站/rss.xml" onChange={event => updateFeed(feed.id, { url: event.target.value })} /></label>
+                  <div className="news-feed-options">
+                    <div className="field"><span>绑定方向</span><Select label={`订阅源 ${index + 1} 绑定方向`} value={feed.category} disabled={!mutable}
+                      options={[{ value: '', label: '本订阅所有方向' }, ...categories.map(row => ({ value: row.id, label: row.label }))]}
+                      onChange={value => updateFeed(feed.id, { category: value, topic: '' })} /></div>
+                    <div className="field"><span>绑定主题</span><Select label={`订阅源 ${index + 1} 绑定主题`} value={feed.topic} disabled={!mutable || !feed.category}
+                      options={[{ value: '', label: '该方向所有主题' }, ...[...new Set([...(categoryTopics[feed.category] ?? []), ...(feed.topic ? [feed.topic] : [])])].filter(Boolean)
+                        .map(topic => ({ value: topic, label: topic }))]}
+                      onChange={value => updateFeed(feed.id, { topic: value })} /></div>
+                    <label className="field"><span>优先级 0–10</span><input type="number" min={0} max={10} aria-label={`订阅源 ${index + 1} 优先级`}
+                      value={Number.isNaN(feed.priority) ? '' : feed.priority} onChange={event => updateFeed(feed.id, { priority: event.target.valueAsNumber })} /></label>
+                  </div>
+                  <div className="news-feed-actions"><Switch checked={feed.enabled} disabled={!mutable} onChange={value => updateFeed(feed.id, { enabled: value })}>启用此来源</Switch>
+                    <Button variant="ghost" icon={<Trash2 size={14} />} disabled={!mutable} onClick={() => field('feeds', (draft.feeds ?? []).filter(row => row.id !== feed.id))}>移除来源 {index + 1}</Button></div>
+                </fieldset>)}
+                <Button icon={<Plus size={15} />} disabled={!mutable || (draft.feeds?.length ?? 0) >= 12} onClick={() => field('feeds', [...(draft.feeds ?? []),
+                  { id: crypto.randomUUID().replaceAll('-', ''), label: '', url: '', enabled: true, priority: 0, category: '', topic: '' }])}>添加公共订阅源</Button>
+              </details>
+              <details className="news-advanced-block"><summary>事件合并与偏好管理</summary>
+                <Switch checked={draft.groupSameEvent ?? false} disabled={!mutable} onChange={value => field('groupSameEvent', value)}>保守合并同事件来源</Switch>
+                <p className="muted">仅在标题、正文摘录及数字高度一致时关联来源；版本、比分、日期、实质更新与不同观点保留。不确定时保持独立。已核实回执会按目标记录关联来源，避免换链接重复推送。</p>
+                <h4>已保存偏好 · {preferences.length} 项</h4>
+                <p className="muted">只作用于当前账号的这个订阅。文章“不相关 / 重复”会隐藏该链接；喜欢会优先排序。明确选择来源或主题时只轻微调整排序，不会批量隐藏。可修改或撤销，不改写人格或历史发送内容。</p>
+                {preferences.map(preference => <div className="news-preference" key={preference.id}>
+                  <p><strong>{preference.scope === 'article' ? '文章' : preference.scope === 'source' ? '来源' : '主题'}</strong> · {preference.scope === 'article' ? preference.title : preference.scope === 'source' ? preference.source : preference.topic}</p>
+                  <div className="news-preference-actions"><Select label={`修改反馈 ${preference.title}`} value={preference.value} disabled={!mutable || !base}
+                    options={[{ value: 'like', label: '喜欢 / 优先' }, { value: 'irrelevant', label: preference.scope === 'article' ? '不相关 / 隐藏' : '减少推荐' },
+                      ...(preference.scope === 'article' ? [{ value: 'duplicate', label: '重复 / 隐藏' }] : [])]}
+                    onChange={value => void markArticle({ url: preference.url }, value as NewsFeedback['value'], preference.scope)} />
+                    <Button variant="ghost" disabled={!mutable || !base} onClick={() => void clearPreference(preference.id)}>撤销反馈</Button></div>
+                </div>)}
+                {!preferences.length && <p className="muted">暂无反馈。生成简报后，可在文章下方保存偏好。</p>}
+              </details>
               <p className="muted">检索只使用公开方向、关键词和日期；文章时间未核实时会明确标注。</p>
             </div>}
           </div>
@@ -657,6 +787,25 @@ export function NewsPage({ active, status, notify, manageSessions }: {
                     <div className="news-article-source">{url ? <a href={url} target="_blank" rel="noopener noreferrer"><ArrowUpRight size={16} />来源：{article.source || new URL(url).hostname}</a>
                       : <span>来源链接不可用</span>}
                       <time>{article.publishedAt > 0 ? article.timeLabel || dateTime(article.publishedAt) : "发布时间未核实"}</time></div>
+                    <span className="news-source-kind">{article.collectedVia?.includes('search') && article.collectedVia?.includes('feed')
+                      ? '公开检索 + RSS / Atom' : article.sourceType === 'feed' ? 'RSS / Atom 订阅源' : '公开检索'}</span>
+                    {article.sources && article.sources.length > 1 && <details className="news-associated-sources"><summary>关联来源 · {article.sources.length} 个</summary>
+                      <p className="muted">{article.merge?.reason}</p>{article.sources.map(source => {
+                        const link = safeNewsUrl(source.url);
+                        return link ? <a key={source.url} href={link} target="_blank" rel="noopener noreferrer">{source.source || new URL(link).hostname} · {source.title}</a> : null;
+                      })}</details>}
+                    {article.merge?.confidence === 'unmerged' && <small className="muted news-merge-note">{article.merge.reason}</small>}
+                    <div className="news-article-feedback" role="group" aria-label={`${article.title}反馈`}>
+                      <Select label={`${article.title}反馈范围`} value={feedbackScope} disabled={!mutable || !base}
+                        options={[{ value: 'article', label: '仅这篇文章' }, { value: 'source', label: '这个来源 · 轻量排序' },
+                          ...(article.topic ? [{ value: 'topic', label: '这个主题 · 轻量排序' }] : [])]}
+                        onChange={value => setFeedbackScope(value as NewsFeedback['scope'])} />
+                      {([['like', '喜欢'], ['irrelevant', feedbackScope === 'article' ? '不相关' : '减少推荐'], ['duplicate', '重复']] as const)
+                        .filter(([value]) => value !== 'duplicate' || feedbackScope === 'article').map(([value, label]) =>
+                          <Button key={value} variant="ghost" disabled={!mutable || !base} aria-pressed={preferences.some(preference => preference.scope === feedbackScope && preference.value === value
+                            && (feedbackScope === 'article' ? preference.url === article.url : feedbackScope === 'source' ? preference.source === article.source : preference.topic === article.topic && preference.category === article.category))}
+                            onClick={() => void markArticle(article, value)}>{label}</Button>)}
+                    </div>
                   </div>
                 </li>;
               })}</ol> : collecting ? <Empty icon={<LoaderCircle className="spinner" size={31} />} title="正在收集公开资讯"

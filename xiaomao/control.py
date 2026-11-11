@@ -74,6 +74,8 @@ class ControlServer:
                                    "/configure_reply_rules":lambda:engine.configure_reply_rules(**payload),
                                    "/configure_reply_defaults":lambda:engine.configure_reply_defaults(**payload),
                                    "/enable_selected":lambda:engine.enable_selected(**payload),
+                                   "/rest_selected":lambda:engine.rest_selected(**payload),
+                                   "/cancel_rest_selected":lambda:engine.cancel_rest_selected(**payload),
                                    "/pause_selected":lambda:engine.pause_selected(**payload),
                                    "/companion_configure":lambda:engine.companion_configure(**payload),
                                    "/companion_preview":lambda:engine.companion_preview(**payload),
@@ -120,6 +122,12 @@ class ControlServer:
                             if (not isinstance(payload,dict) or set(payload)!={'account','subscription'}
                                     or not all(isinstance(v,str) and 1<=len(v)<=128 for v in payload.values())):
                                 return self.answer(400, {'error':'资讯订阅身份无效'})
+                        elif self.path in ('/rest_selected','/cancel_rest_selected'):
+                            keys={'group','scope','minutes'} if self.path=='/rest_selected' else {'group','scope'}
+                            if (not isinstance(payload,dict) or set(payload)!=keys
+                                or not all(isinstance(payload[k],str) and payload[k] for k in ('group','scope'))
+                                or self.path=='/rest_selected' and (type(payload['minutes']) is not int or not 1<=payload['minutes']<=1440)):
+                                return self.answer(400, {'error':'休息会话或时长无效'})
                         elif self.path=='/configure_reply_defaults':
                             if not isinstance(payload,dict) or set(payload)!={'preferences'}:
                                 return self.answer(400, {"error": "需要回复偏好设置"})

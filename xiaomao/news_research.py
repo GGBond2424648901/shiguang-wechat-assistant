@@ -15,6 +15,8 @@ from urllib.parse import urlsplit
 
 from .model import _http_client, _key_health
 from .news import CATEGORIES, validate_subscription
+from .news_feeds import fetch_feed
+from .news_quality import apply_feedback, article_urls, comparison_facts, group_events, same_event, source_metadata, substantive_update
 from .web_search import _citation_identity, _public_url, has_unverified_link, public_query, search_public
 
 
@@ -102,14 +104,14 @@ def _title_key(title):
     # Publication-date wrappers do not turn the same headline into new news.
     value = re.sub(r'^\s*[\[(]?\d{4}[-/]\d{1,2}[-/]\d{1,2}[\])]?\s*[|｜·:：—-]+\s*', '', value)
     value = re.sub(r'\s*[\[(]\d{4}[-/]\d{1,2}[-/]\d{1,2}[\])]\s*$', '', value)
-    return ''.join(char for char in value if unicodedata.category(char)[0] in ('L', 'N'))
+    return ' '.join(value.split())
 
 
 def _same_title(one, two):
     if one == two:
         return True
     # Do not collapse different product versions, release dates or scores.
-    if re.findall(r'\d+', one) != re.findall(r'\d+', two):
+    if comparison_facts(one) != comparison_facts(two):
         return False
     return min(len(one), len(two)) >= 10 and SequenceMatcher(None, one, two, autojunk=False).ratio() >= .9
 
@@ -200,6 +202,14 @@ def _fallback(row):
     return ''
 
 
+def _event_evidence(row):
+    # Keep the longest bounded factual passage, not merely the first sentence
+    # chosen for the human-facing summary: later corrections must stay distinct.
+    passages = [_STAMP.sub('', _plain(row.get(key), 1200)).strip(' 。:：')
+                for key in ('snippet', 'summary', 'page_excerpt')]
+    return max(passages, key=len, default='')
+
+
 def format_parts(subscription, articles, now):
     """One article per part, preserving the receipt-to-source correspondence."""
     day = datetime.fromtimestamp(now, LOCAL).strftime('%Y-%m-%d')
@@ -239,6 +249,8 @@ def format_parts(subscription, articles, now):
 class NewsResearch:
     def __init__(self, model):
         self.model = model
+        from .account_switching import configured_account
+        self._usage_account = configured_account(model.settings) if hasattr(model.settings, 'model_base_url') else 'unbound'
         # One shared pool bounds all simultaneous collect() calls, not just
         # each subscription. Workers use the ChatModel's existing HTTP pool.
         self._pool = ThreadPoolExecutor(max_workers=3, thread_name_prefix='news-search')
@@ -297,6 +309,20 @@ class NewsResearch:
             query = public_query(text)
             if query:
                 queries.append((category, topic, query))
+        for category, topic, base in bases:
+            conditions = config.get('topicSettings', {}).get(category, {}).get(topic, {}) if topic else {}
+            for term in [*conditions.get('aliases', []), *conditions.get('focusTerms', [])]:
+                # Never slice a subject/alias to satisfy the transport limit.
+                # For two long names use the complete alias as the retrieval
+                # subject; the canonical topic remains the strict filter unit.
+                theme = base + ' ' + term
+                if len(theme) > 120:
+                    theme = _LABELS.get(category, '') + ' ' + term
+                allowance = max(0, 120 - len(theme) - len(end) - 2)
+                if pieces[0] and allowance:
+                    theme += ' ' + pieces[0][:allowance]
+                query = public_query(theme + (' ' + end if len(theme) + len(end) + 1 <= 120 else ''))
+                if query: queries.append((category, topic, query))
         # Validation bounds this to at most 24 topic units, the remaining
         # category units, two keyword continuations and four extra host queries.
         # Every selected topic keeps its own query; no tail slicing is needed.
@@ -312,7 +338,9 @@ class NewsResearch:
             if cancelled() or self._closed.is_set():
                 return None
             client = self.model.client or _http_client(self.model.settings.model_base_url)
-            return search_public(client, key, query)
+            from .operations_usage import usage_context
+            with usage_context(self.model.settings.runtime, account=self._usage_account or 'unbound'):
+                return search_public(client, key, query, runtime=self.model.settings.runtime)
         finally:
             _SEARCH_GATE.release()
 
@@ -332,16 +360,15 @@ class NewsResearch:
         except ValueError as error:
             return empty(str(error))
         excluded_urls = {_citation_identity(url) for url in exclude_urls if _public_url(url)}
-        try:
-            keys = self.model.credentials.get_keys()
-            if not keys:
-                return empty('公开检索失败：尚未配置可用密钥')
-            key = _key_health(self.model.credentials.path).candidates(keys)[0]
-        except Exception:
-            return empty('公开检索失败：当前模型凭据不可用')
-        queries = self._queries(config, now)
-        if not queries:
-            return empty('公开检索词无效，未发起查询')
+        key = None
+        if config['sourceMode'] != 'feed':
+            try:
+                keys = self.model.credentials.get_keys()
+                if keys: key = _key_health(self.model.credentials.path).candidates(keys)[0]
+                else: warnings.append('公开检索失败：尚未配置可用密钥')
+            except Exception:
+                warnings.append('公开检索失败：当前模型凭据不可用')
+        queries = self._queries(config, now) if key else []
         deadline = monotonic() + 75
         pending, results = {}, {}
         for index, (category, topic, query) in enumerate(queries):
@@ -352,6 +379,16 @@ class NewsResearch:
             except RuntimeError:
                 return empty('资讯采集已取消')
             pending[future] = (index, category, topic)
+        runtime = getattr(getattr(self.model, 'settings', None), 'runtime', None)
+        feeds = [feed for feed in config['feeds'] if feed['enabled'] and config['sourceMode'] != 'search']
+        for offset, feed in enumerate(sorted(feeds, key=lambda row: -row['priority'])):
+            if feed['category'] and feed['category'] not in config['categories']: continue
+            if feed['topic'] and feed['topic'] not in config['categoryTopics'].get(feed['category'], []): continue
+            category = feed['category'] or (config['categories'][0] if config['categories'] else 'custom')
+            future = self._pool.submit(self._feed, feed, stopped, runtime, self._usage_account or 'unbound')
+            pending[future] = (len(queries) + offset, category, feed['topic'])
+        if config['sourceMode'] == 'feed' and not feeds:
+            warnings.append('没有启用的公共订阅源，请添加或启用 RSS/Atom 来源')
         while pending:
             if stopped() or monotonic() >= deadline:
                 for future in pending:
@@ -373,7 +410,7 @@ class NewsResearch:
             return empty('资讯采集已取消')
         hosts = config['sourceDomains'].split(',') if config['sourceDomains'] else []
         exclusions = [word.strip().casefold() for word in re.split(r'[,，]', config['excludeKeywords']) if word.strip()]
-        sources, known_urls, known_titles = [], set(), []
+        sources, known_urls, known_titles = [], {}, []
         rejected, excluded = 0, set()
         failed_units, empty_units = [], []
         for index in sorted(results):
@@ -385,8 +422,13 @@ class NewsResearch:
             if not rows:
                 empty_units.append(name)
                 continue
-            for row in rows[:4]:
+            unit_category, unit_topic = category, topic
+            for row in rows[:48 if any(isinstance(item, dict) and item.get('sourceType') == 'feed' for item in rows) else 4]:
+                category, topic = unit_category, unit_topic
                 if not isinstance(row, dict):
+                    continue
+                if row.get('_feedError'):
+                    warnings.append(row['_feedError'])
                     continue
                 url = row.get('url')
                 title = _plain(row.get('title'), 150)
@@ -395,15 +437,40 @@ class NewsResearch:
                     rejected += 1
                     continue
                 url = _citation_identity(url)
-                if url in excluded_urls:
+                if url in excluded_urls and not config['groupSameEvent']:
                     excluded.add(url)
                     continue
                 host = urlsplit(url).hostname.lower().rstrip('.')
                 published, label, day_only = _publication(row)
+                if row.get('dateKind') == 'updated' and row.get('feedDate'):
+                    parsed = _date_value(row['feedDate'])
+                    if parsed:
+                        published, day_only = parsed[0], parsed[1]
+                        label = '源更新时间 ' + datetime.fromtimestamp(published, LOCAL).strftime('%Y-%m-%d %H:%M') + '（北京时间；发布时间未提供）'
+                conditions = config['topicSettings'].get(category, {}).get(topic, {}) if topic else {}
+                topic_names = [topic, *conditions.get('aliases', [])]
+                # Unbound feeds still use each canonical topic's own filter;
+                # no broad fallback can bypass topic conditions.
+                units = [(category, topic, conditions)]
+                if row.get('sourceType') == 'feed' and not topic:
+                    active_categories = [category] if row.get('feedCategory') else config['categories'] or ['custom']
+                    units = [(cat, name, config['topicSettings'].get(cat, {}).get(name, {}))
+                             for cat in active_categories for name in (config['categoryTopics'].get(cat) or [''])]
+                    matches = [(cat, name, settings) for cat, name, settings in units
+                        if (not name or any(_matches_topic(term, evidence) for term in [name, *settings.get('aliases', [])]))
+                        and (not settings.get('focusTerms') or any(_matches_topic(term, evidence) for term in settings['focusTerms']))
+                        and not any(_matches_topic(term, evidence) for term in settings.get('exclusions', []))]
+                    if not matches:
+                        rejected += 1
+                        continue
+                    category, topic, conditions = matches[0]
+                    topic_names = [topic, *conditions.get('aliases', [])]
                 invalid = (hosts and not any(host == h or host.endswith('.' + h) for h in hosts))
                 invalid = (invalid or any(word in evidence.casefold() for word in exclusions)
                            or _INJECTION.search(evidence) or has_unverified_link(title, [url])
-                           or (topic and not _matches_topic(topic, evidence))
+                           or (topic and not any(_matches_topic(term, evidence) for term in topic_names))
+                           or (conditions.get('focusTerms') and not any(_matches_topic(term, evidence) for term in conditions['focusTerms']))
+                           or any(_matches_topic(term, evidence) for term in conditions.get('exclusions', []))
                            or _title_is_old(title, now, config['lookbackHours']))
                 if published:
                     invalid = invalid or published + (86400 if day_only else 0) < now - config['lookbackHours'] * 3600
@@ -412,14 +479,49 @@ class NewsResearch:
                     rejected += 1
                     continue
                 title_key = _title_key(title)
-                if url in known_urls or any(_same_title(title_key, previous) for previous in known_titles):
+                existing = known_urls.get(url)
+                if existing is not None:
+                    # Reconcile actual collection provenance and applicable
+                    # feed priority BEFORE URL dedup/ranking/itemCount. Keep
+                    # the first validated evidence/category/topic so another
+                    # source cannot move an article into a different unit.
+                    existing['collectedVia'] = list(dict.fromkeys([*existing['collectedVia'], row.get('sourceType', 'search')]))
+                    if row.get('sourcePriority', 0) > existing['sourcePriority']:
+                        existing['sourcePriority'] = row['sourcePriority']
+                        existing['feedId'] = row.get('feedId', '')
+                    elif row.get('feedId') and not existing.get('feedId'):
+                        existing['feedId'] = row['feedId']
                     continue
-                known_urls.add(url)
+                if not config['groupSameEvent'] and any(_same_title(title_key, previous) for previous in known_titles):
+                    continue
                 known_titles.append(title_key)
-                sources.append({'id': hashlib.sha256(url.encode()).hexdigest()[:24], 'title': title,
+                candidate = {'id': hashlib.sha256(url.encode()).hexdigest()[:24], 'title': title,
                                 'summary': _fallback(row), 'url': url, 'source': host,
+                                'eventEvidence': _event_evidence(row),
                                 'category': category, 'topic': topic,
-                                'publishedAt': published, 'timeLabel': label, '_evidence': row})
+                                'publishedAt': published, 'timeLabel': label, '_evidence': row,
+                                'sourceType': row.get('sourceType', 'search'), 'feedId': row.get('feedId', ''),
+                                'sourcePriority': row.get('sourcePriority', 0), 'collectedVia': [row.get('sourceType', 'search')]}
+                known_urls[url] = candidate
+                sources.append(candidate)
+        if config['groupSameEvent']:
+            sources = group_events(sources)
+            event_targets = subscription.get('_seenEventTargets', [])
+            fresh = []
+            for source in sources:
+                urls = set(article_urls(source))
+                known_event = bool(event_targets) and all(any(same_event(source, old) for old in history) for history in event_targets)
+                prior = [[old for old in history if urls & set(old.get('associatedUrls') or [old.get('url')])]
+                         for history in event_targets]
+                can_update = bool(prior) and all(records and all(substantive_update(source, old) for old in records) for records in prior)
+                if known_event or urls & excluded_urls and not can_update:
+                    excluded.add(source['url'])
+                else:
+                    fresh.append(source)
+            sources = fresh
+        else:
+            for source in sources: source['sources'] = [source_metadata(source)]
+        sources = apply_feedback(sources, subscription.get('_feedback', []))
         if failed_units:
             warnings.append('公开检索失败，服务暂不可用：' + '、'.join(dict.fromkeys(failed_units)))
         if empty_units:
@@ -454,17 +556,29 @@ class NewsResearch:
             return {'articles': [], 'parts': [], 'warnings': list(dict.fromkeys(warnings))[:24]}
         if stopped():
             return empty('资讯采集已取消')
-        try:
-            self._summarize(sources, config, stopped)
-        except Exception:
-            warnings.append('摘要整理暂未成功，已保留真实来源摘录')
+        if key:
+            try:
+                self._summarize(sources, config, stopped)
+            except Exception:
+                warnings.append('摘要整理暂未成功，已保留真实来源摘录')
         if stopped():
             return empty('资讯采集已取消')
-        articles = [{key: value for key, value in row.items() if key != '_evidence'} for row in sources]
+        articles = [{key: value for key, value in row.items() if not key.startswith('_')} for row in sources]
         if any(not article['publishedAt'] for article in articles):
             warnings.append('部分来源发布时间未核实，未将检索索引时间当作发布时间')
         return {'articles': articles, 'parts': format_parts(config, articles, now),
                 'warnings': list(dict.fromkeys(warnings))[:24]}
+
+    @staticmethod
+    def _feed(feed, stopped, runtime, account):
+        try:
+            from .operations_usage import usage_context
+            with usage_context(runtime, account=account):
+                rows = fetch_feed(feed['url'], stopped, runtime)
+            return [{**row, 'feedId': feed['id'], 'feedCategory': feed['category'], 'sourcePriority': feed['priority']} for row in rows]
+        except Exception as error:
+            detail = str(error) if isinstance(error, ValueError) else '网络请求失败'
+            return [{'_feedError': '公共订阅源失败：' + (feed['label'] or feed['id']) + ' · ' + detail}]
 
     def _summarize(self, sources, config, cancelled):
         instructions = (

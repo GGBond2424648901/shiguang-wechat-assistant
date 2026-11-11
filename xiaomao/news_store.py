@@ -91,6 +91,12 @@ class NewsStore:
                 CREATE TABLE IF NOT EXISTS news_uncertain (
                     account TEXT NOT NULL, scope TEXT NOT NULL, url TEXT NOT NULL,
                     at REAL NOT NULL, PRIMARY KEY(account,scope,url));
+                CREATE TABLE IF NOT EXISTS news_feedback (
+                    account TEXT NOT NULL, subscription TEXT NOT NULL, id TEXT NOT NULL,
+                    data TEXT NOT NULL, PRIMARY KEY(account,subscription,id));
+                CREATE TABLE IF NOT EXISTS news_event_seen (
+                    account TEXT NOT NULL, scope TEXT NOT NULL, url TEXT NOT NULL,
+                    data TEXT NOT NULL, PRIMARY KEY(account,scope,url));
             ''')
         for journal in (Path(str(self.path) + '-wal'), Path(str(self.path) + '-shm')):
             if journal.exists():
@@ -137,6 +143,7 @@ class NewsStore:
             if not row or type(expected_revision) is not int or expected_revision != row[0]:
                 raise ValueError('订阅版本冲突或已删除，请刷新后重试')
             self._connection.execute('DELETE FROM news_subscriptions WHERE account=? AND id=?', (account, id))
+            self._connection.execute('DELETE FROM news_feedback WHERE account=? AND subscription=?', (account, id))
             rows = self._connection.execute(
                 'SELECT id,data,state FROM news_editions WHERE account=? AND subscription=?', (account, id)).fetchall()
             for identity, data, state in rows:
@@ -270,6 +277,75 @@ class NewsStore:
                     (SELECT 1 FROM news_seen WHERE account=? AND scope=? AND url=?)
                 ON CONFLICT(account,scope,url) DO UPDATE SET at=excluded.at''',
                 [(account, recipient_scope, url, now, account, recipient_scope, url) for url in urls])
+
+    def save_feedback(self, account, subscription, article, value, scope='article'):
+        account = _account(account)
+        if value not in ('like', 'irrelevant', 'duplicate') or scope not in ('article', 'source', 'topic'):
+            raise ValueError('反馈类型或作用范围无效')
+        if scope != 'article' and value == 'duplicate': raise ValueError('重复标记仅适用于当前文章')
+        if not self.get_subscription(account, subscription): raise ValueError('订阅不存在或不属于当前账号')
+        if not isinstance(article, dict) or not _public_url(article.get('url')): raise ValueError('反馈文章来源无效')
+        from urllib.parse import urlsplit
+        url = _citation_identity(article['url'])
+        source = urlsplit(url).hostname.lower().rstrip('.')
+        category, topic = article.get('category', ''), article.get('topic', '')
+        if scope == 'topic' and not topic: raise ValueError('该文章没有细分主题，请选择文章或来源范围')
+        target = url if scope == 'article' else source if scope == 'source' else category + '\n' + topic
+        import hashlib
+        identity = hashlib.sha256((scope + '\n' + target).encode()).hexdigest()[:32]
+        clean = dict(id=identity, scope=scope, value=value, target=target, url=url,
+                     title=str(article.get('title', ''))[:150], source=source,
+                     category=category, topic=topic, updatedAt=time.time())
+        with self._lock, self._connection:
+            self._connection.execute('''INSERT INTO news_feedback(account,subscription,id,data) VALUES(?,?,?,?)
+                ON CONFLICT(account,subscription,id) DO UPDATE SET data=excluded.data''',
+                (account, subscription, identity, _json(clean)))
+        return deepcopy(clean)
+
+    def list_feedback(self, account, subscription):
+        account = _account(account)
+        with self._lock:
+            rows = self._connection.execute('SELECT data FROM news_feedback WHERE account=? AND subscription=? ORDER BY rowid DESC',
+                                            (account, subscription)).fetchall()
+        return [json.loads(row[0]) for row in rows]
+
+    def clear_feedback(self, account, subscription, feedback_id):
+        account = _account(account)
+        if not isinstance(feedback_id, str) or len(feedback_id) > 64: raise ValueError('反馈编号无效')
+        with self._lock, self._connection:
+            self._connection.execute('DELETE FROM news_feedback WHERE account=? AND subscription=? AND id=?',
+                                     (account, subscription, feedback_id))
+        return {'cleared': True}
+
+    def seen_events(self, account, scope):
+        return [row for row in self._events(account, scope) if row.get('receiptState', 'verified') == 'verified']
+
+    def uncertain_events(self, account, scope):
+        return [row for row in self._events(account, scope) if row.get('receiptState') == 'unknown']
+
+    def _events(self, account, scope):
+        account, scope = _account(account), _account(scope)
+        with self._lock:
+            rows = self._connection.execute('SELECT data FROM news_event_seen WHERE account=? AND scope=?', (account, scope)).fetchall()
+        return [json.loads(row[0]) for row in rows]
+
+    def mark_event_seen(self, account, scope, article):
+        self._mark_event(account, scope, article, 'verified')
+
+    def mark_event_uncertain(self, account, scope, article):
+        self._mark_event(account, scope, article, 'unknown')
+
+    def _mark_event(self, account, scope, article, state):
+        account, scope = _account(account), _account(scope)
+        if not _public_url(article.get('url')): raise ValueError('事件来源无效')
+        clean = {key: article.get(key, '') for key in ('url', 'title', 'summary', 'eventEvidence', 'publishedAt', 'associatedUrls')}
+        if not clean['eventEvidence']: clean['eventEvidence'] = clean['summary']
+        clean['receiptState'] = state
+        import hashlib
+        identity = article['url'] + '#event-' + hashlib.sha256((clean['title'] + '\n' + clean['eventEvidence']).encode()).hexdigest()[:24]
+        with self._lock, self._connection:
+            self._connection.execute('''INSERT INTO news_event_seen(account,scope,url,data) VALUES(?,?,?,?)
+                ON CONFLICT(account,scope,url) DO UPDATE SET data=excluded.data''', (account, scope, identity, _json(clean)))
 
     def close(self):
         with self._lock:

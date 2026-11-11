@@ -428,7 +428,7 @@ async function main() {
         `fixed action clipped or scrolled away at ${scale} ${title}: ${JSON.stringify(result)}`);
       pinned.push({ title, scale, action, ...result });
     };
-    const cssPages = ["工作台", "会话", "人格", "记忆与陪伴", "表情包", "运行设置"];
+    const cssPages = ["工作台", "会话", "人格", "记忆与陪伴", "每日资讯", "任务中心", "表情包", "运行设置"];
     for (const scale of [1, 1.25, 1.5, 2]) {
       await electron.evaluate(({ BrowserWindow }, factor) => {
         BrowserWindow.getAllWindows()[0].webContents.setZoomFactor(factor);

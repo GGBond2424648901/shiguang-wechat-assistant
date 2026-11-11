@@ -2,6 +2,7 @@ import { Check, CircleCheck, Crosshair, Eye, Headphones, Image, MessageCircle, P
 import { useEffect, useMemo, useState } from "react";
 import { errorMessage, request, ruleLabels, type PageKey, type Queue, type Session, type Status } from "./api";
 import { Button, Confirm, Empty, IconButton, PanelTitle, Select, StatusPill } from "./components";
+import { SessionRestControl } from "./session-rest";
 
 const queueState: Record<string, string> = {
   candidate: "正在生成", generated: "待发送", staged: "核对输入",
@@ -246,6 +247,7 @@ export function Workbench({ active, status, notify, navigate, calibrate }: {
             <SessionIcon session={session} /><span><b>{session.name}</b><small>{sessionRule(session)}</small></span>
           </button>
           <StatusPill mode={session.mode} compact />
+          <SessionRestControl session={session} active={active} disabled={controlsDisabled || !session.bound} notify={notify} compact />
           <IconButton className="watch-calibrate" label={`${session.calibrated ? "重新校准" : "校准"} ${session.name}`}
             icon={<Crosshair size={17} />} disabled={status?.readOnly !== false || Boolean(working)}
             busy={working === `calibrate:${session.id}`} onClick={() => void calibrateSession(session)} />

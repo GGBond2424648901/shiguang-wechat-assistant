@@ -27,7 +27,8 @@ _IDS = {row['id'] for row in CATEGORIES}
 
 def default_subscription():
     return dict(id=uuid.uuid4().hex, name='每日资讯', enabled=False, selectionMode='multiple',
-                categories=['technology'], categoryTopics={}, keywords='', excludeKeywords='', sourceDomains='',
+                categories=['technology'], categoryTopics={}, topicSettings={}, groupSameEvent=False,
+                sourceMode='search', feeds=[], keywords='', excludeKeywords='', sourceDomains='',
                 time='09:00', times=['09:00'], timeRanges=[],
                 weekdays=list(range(7)), itemCount=5, lookbackHours=24,
                 style='brief', includeLinks=True, recipients=[])
@@ -61,7 +62,7 @@ def validate_subscription(value):
     if not isinstance(identity, str) or not re.fullmatch(r'[0-9a-f]{32}', identity):
         raise ValueError('订阅编号无效')
     clean['name'] = _text(clean['name'], '订阅名称', 40, required=True)
-    for key in ('enabled', 'includeLinks'):
+    for key in ('enabled', 'includeLinks', 'groupSameEvent'):
         if type(clean[key]) is not bool:
             raise ValueError('订阅开关必须是布尔值')
     if clean['selectionMode'] not in ('single', 'multiple'):
@@ -93,6 +94,53 @@ def validate_subscription(value):
     if sum(len(items) for items in clean_topics.values()) > 24:
         raise ValueError('细分主题总计最多二十四个')
     clean['categoryTopics'] = clean_topics
+    settings = clean['topicSettings']
+    if not isinstance(settings, dict) or len(settings) > len(_IDS):
+        raise ValueError('主题条件必须按资讯方向设置')
+    normalized_settings = {}
+    for category, entries in settings.items():
+        if category not in _IDS or not isinstance(entries, dict) or len(entries) > 24:
+            raise ValueError('主题条件的方向无效或主题超过二十四个')
+        normalized_settings[category] = {}
+        for topic, fields in entries.items():
+            topic = _public_terms(topic, '主题条件名称', 60)
+            if not topic or not isinstance(fields, dict) or set(fields) - {'aliases', 'focusTerms', 'exclusions'}:
+                raise ValueError('主题条件字段无效')
+            result = {}
+            for key, label in (('aliases', '主题别名'), ('focusTerms', '主题关注词'), ('exclusions', '主题排除词')):
+                items = fields.get(key, [])
+                if not isinstance(items, list) or len(items) > 6:
+                    raise ValueError(label + '最多六项')
+                result[key] = list(dict.fromkeys(_public_terms(item, label, 60) for item in items))
+                if any(not item for item in result[key]):
+                    raise ValueError(label + '不能为空')
+            normalized_settings[category][topic] = result
+    if sum(len(entries) for entries in normalized_settings.values()) > 48:
+        raise ValueError('主题条件总计最多四十八项（含保留的未启用主题）')
+    clean['topicSettings'] = normalized_settings
+    if clean['sourceMode'] not in ('search', 'feed', 'both'):
+        raise ValueError('来源模式应为公开检索、订阅源或两者')
+    from .news_feeds import validate_feed_url
+    feeds = clean['feeds']
+    if not isinstance(feeds, list) or len(feeds) > 12:
+        raise ValueError('公共订阅源最多十二个')
+    clean_feeds, feed_ids = [], set()
+    for feed in feeds:
+        if not isinstance(feed, dict): raise ValueError('公共订阅源格式无效')
+        identity = feed.get('id')
+        if not isinstance(identity, str) or not re.fullmatch(r'[a-zA-Z0-9_-]{1,64}', identity) or identity in feed_ids:
+            raise ValueError('公共订阅源编号无效或重复')
+        feed_ids.add(identity)
+        category, topic = feed.get('category', ''), feed.get('topic', '')
+        if category and category not in _IDS: raise ValueError('订阅源绑定方向无效')
+        topic = _public_terms(topic, '订阅源绑定主题', 60)
+        if topic and not category: raise ValueError('绑定主题前请选择方向')
+        priority, enabled = feed.get('priority', 0), feed.get('enabled', True)
+        if type(priority) is not int or not 0 <= priority <= 10: raise ValueError('订阅源优先级应为零至十')
+        if type(enabled) is not bool: raise ValueError('订阅源启用状态无效')
+        clean_feeds.append(dict(id=identity, url=validate_feed_url(feed.get('url')), label=_text(feed.get('label', ''), '订阅源名称', 60),
+                                enabled=enabled, priority=priority, category=category, topic=topic))
+    clean['feeds'] = clean_feeds
     clean['keywords'] = _public_terms(clean['keywords'], '关键词', 180)
     clean['excludeKeywords'] = _public_terms(clean['excludeKeywords'], '排除词', 120)
     if not clean['categories'] and not clean['keywords']:
