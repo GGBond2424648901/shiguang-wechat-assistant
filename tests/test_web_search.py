@@ -11,7 +11,7 @@ from test_engine import system
 from xiaomao.config import Settings
 from xiaomao.domain import Message, ReplyTask
 from xiaomao.model import ChatModel, ModelError
-from xiaomao.web_search import QUERY_GUIDANCE, has_unverified_link
+from xiaomao.web_search import QUERY_GUIDANCE, has_unverified_link, search_public
 
 
 QUERY = 'Python 3.13.15 发布日期 site:python.org'
@@ -36,6 +36,42 @@ def test_citations_accept_the_same_retrieved_page_without_tracking_or_fragment(s
 ])
 def test_citations_still_reject_a_different_page_or_meaningful_query(cited):
     assert has_unverified_link('官方来源：' + cited, [URL + '?version=3.13.15&spm=tracking#1'])
+
+
+@pytest.mark.parametrize('suffix', ['?spm_id_from=333.788.recommend_more_video.15#1', '?vd_source=share-token#1'])
+@pytest.mark.parametrize('formatting', ['来源：{}', '来源（{}）', '参考【{}】'])
+def test_bilibili_citations_tolerate_analytics_and_chinese_punctuation(suffix, formatting):
+    video = 'https://www.bilibili.com/video/BV1976MB5EvV/'
+    assert not has_unverified_link(formatting.format(video), [video + suffix])
+    assert has_unverified_link(formatting.format(video + '?p=2'), [video + suffix])
+
+
+def test_bilibili_video_identity_ignores_share_metadata_but_preserves_parts_and_other_sites():
+    video = 'https://www.bilibili.com/video/BV1976MB5EvV/'
+    shared = ('https://www.bilibili.com/tr/video/BV1976MB5EvV/?buvid=public-share&from_spmid=feed'
+              '&mid=share-marker&plat_id=116&share_from=ugc&share_medium=android&share_plat=android'
+              '&share_session_id=public-session&share_source=QQ&share_tag=s_i&spmid=player'
+              '&timestamp=1234567890&unique_k=public-key&up_id=123&is_story_h5=false#1')
+    assert not has_unverified_link(video, [shared])
+    assert not has_unverified_link(video+'?p=2', [shared.replace('#1','&p=2#1')])
+    for other in (video+'?p=2', video.replace('BV1976MB5EvV','BV1Wr5pz9EuT'),
+                  video.replace('www.bilibili.com','unverified.example'),
+                  video.replace('www.bilibili.com','public-user@www.bilibili.com'),
+                  video.replace('www.bilibili.com','www.bilibili.com:8443')):
+        assert has_unverified_link(other, [shared])
+    assert has_unverified_link('https://example.org/item?mid=2', ['https://example.org/item?mid=1'])
+
+
+def test_raw_search_urls_preserve_legal_parentheses_and_markdown_citations():
+    url = 'https://en.wikipedia.org/wiki/Python_(programming_language)'
+    def transport(_):
+        return httpx.Response(200,json={'results':[{'url':url,'title':'公开资料'}]})
+    with httpx.Client(transport=httpx.MockTransport(transport)) as client:
+        rows = search_public(client,'sk-fixture-key-only','Python')
+    assert rows[0]['url'] == url
+    for text in (url, '来源（'+url+'）', '[来源]('+url+')'):
+        assert not has_unverified_link(text,[url])
+    assert has_unverified_link(url.replace('Python_', 'Different_'),[url])
 
 
 def configured(root):
@@ -209,6 +245,99 @@ def test_empty_or_failed_search_rejects_invented_links_before_sending(tmp_path, 
             assert model.reply([Message('帮我查这个版本的发布日期')]) == safe
     assert len(final) == 2
     assert paths.count('/v1/tools/search') == 1
+
+
+@pytest.mark.parametrize('finish', ['stop', 'length'])
+def test_blank_search_answer_retries_without_json_transport_and_keeps_receipt_contract(tmp_path, finish):
+    cfg = replace(configured(tmp_path), web_search_enabled=True)
+    cfg.save()
+    paths, final = [], []
+    text = '找到一条相关教程\n' + URL
+
+    def transport(request):
+        payload = json.loads(request.content)
+        paths.append(request.url.path)
+        if planner(payload):
+            return httpx.Response(200, json=completion(json.dumps({'query': QUERY})))
+        if request.url.path == '/v1/tools/search':
+            return httpx.Response(200, json={'results':[{'url':URL,'title':'相关教程'}]})
+        if 'tools' in payload:
+            return httpx.Response(200, json=call({'query': QUERY}))
+        final.append(payload)
+        if len(final) == 1:
+            data = completion(' \n\t  ')
+            data['choices'][0]['finish_reason'] = finish
+            return httpx.Response(200, json=data)
+        assert 'response_format' not in payload
+        assert 'tools' not in payload
+        assert payload['messages'] == final[0]['messages']
+        return httpx.Response(200, json=completion(json.dumps({'send':True,'text':text,'sticker':''})))
+
+    with httpx.Client(transport=httpx.MockTransport(transport), trust_env=False) as client:
+        answer = model_for(cfg.for_group('示例甲'),client).reply_plan([Message('帮我查相关教程')],choices=[])
+    assert answer.text == text and not answer.sticker
+    assert len(final) == 2
+    assert paths.count('/v1/tools/search') == 1
+
+
+@pytest.mark.parametrize('reference', ['verified', 'other-member', 'unconfirmed', 'not-sent', 'other-scope', 'unknown', 'empty-id'])
+def test_followup_query_uses_only_public_sources_from_a_delivered_reply_to_this_member(tmp_path, reference):
+    cfg = replace(configured(tmp_path), web_search_enabled=True)
+    cfg.save()
+    a, b = 'p_'+'a'*16, 'p_'+'b'*16
+    if reference in ('unknown', 'empty-id'):
+        a = 'unknown' if reference == 'unknown' else ''
+    first = '在B站找两条公开的引擎教程'
+    followup = '再查第二条教程有没有配套源码仓库'
+    video1 = 'https://www.bilibili.com/video/BV1976MB5EvV/'
+    video2 = 'https://www.bilibili.com/video/BV1Wr5pz9EuT/'
+    repository = 'https://github.com/godotengine/godot-demo-projects'
+    first_answer = '第一条：公开教程甲\n'+video1+'\n第二条：公开教程乙\n'+video2
+    searches, querying_followup = [], False
+    expected_reference = reference == 'verified'
+
+    def transport(request):
+        payload = json.loads(request.content)
+        if planner(payload):
+            content = payload['messages'][-1]['content']
+            if not querying_followup:
+                return httpx.Response(200, json=completion(json.dumps({'query':'site:bilibili.com Godot 教程'})))
+            assert '仅留在私聊中的内容' not in content
+            if expected_reference:
+                data = json.loads(content)
+                assert data['current_question'] == followup
+                assert [row['url'] for row in data['previous_public_sources']] == [video1, video2]
+                assert data['previous_public_sources'][1]['title'] == '公开教程乙'
+            else:
+                assert content == followup
+            query = '公开教程乙 配套源码仓库' if expected_reference else ''
+            return httpx.Response(200, json=completion(json.dumps({'query':query})))
+        if request.url.path == '/v1/tools/search':
+            searches.append(payload['query'])
+            rows = ([{'url':video2,'title':'公开教程乙'}, {'url':video1,'title':'公开教程甲'}]
+                    if len(searches)==1 else [{'url':repository,'title':'公开源码仓库'}])
+            return httpx.Response(200,json={'results':rows})
+        if 'tools' in payload:
+            return httpx.Response(200,json=call({'query':QUERY}))
+        text = first_answer if not querying_followup else repository if expected_reference else '请补充教程标题'
+        return httpx.Response(200,json=completion(text))
+
+    with httpx.Client(transport=httpx.MockTransport(transport),trust_env=False) as client:
+        model = model_for(cfg.for_group('示例甲'),client)
+        incoming = Message(first,speaker_id=a)
+        assert model.reply([incoming]) == first_answer
+        querying_followup = True
+        if reference == 'other-scope':
+            cfg = replace(cfg,conversation_targets={**cfg.conversation_targets,
+                          '示例甲':{'account':'demo','id':'changed','kind':'private'}})
+            cfg.save()
+            model.settings = cfg.for_group('示例甲')
+        delivery = 'unconfirmed' if reference=='unconfirmed' else 'not_sent' if reference=='not-sent' else 'verified'
+        history = [Message('仅留在私聊中的内容',speaker_id=a),incoming,
+                   Message(first_answer,direction='out',reply_to_speaker=a,delivery_status=delivery),
+                   Message(followup,speaker_id=b if reference=='other-member' else a)]
+        assert model.reply(history) == (repository if expected_reference else '请补充教程标题')
+    assert len(searches) == (2 if expected_reference else 1)
 
 
 def test_settings_and_per_chat_rules_round_trip_from_desktop(tmp_path, monkeypatch):
