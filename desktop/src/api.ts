@@ -1,4 +1,4 @@
-export type PageKey = "workbench" | "sessions" | "persona" | "companion" | "stickers" | "settings";
+export type PageKey = "workbench" | "sessions" | "persona" | "companion" | "news" | "stickers" | "settings";
 export type RunMode = "auto" | "observe" | "paused" | "starting" | "stopped" | "disconnected";
 
 export interface Session {
@@ -23,6 +23,7 @@ export interface Status {
   reason: string;
   primary: string;
   accountLabel: string;
+  accountScope?: string;
   sessions: Session[];
   tray: boolean;
   revision: string;

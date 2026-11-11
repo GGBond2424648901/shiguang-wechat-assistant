@@ -47,6 +47,103 @@ class Resident:
         self.requested_mode='paused' if unknown else 'auto' if settings.auto_on_launch else 'observe'
         self.engines=[self._new_engine(settings,settings.for_group(name),unknown) for name in settings.allowed_groups]
         self._set_companion_budgets()
+        from .news_runtime import NewsRuntime
+        from .news_research import NewsResearch
+        self.news = NewsRuntime(settings.runtime, context=self._news_context,
+            deliver=self._queue_news_part, delivery_status=self._news_delivery_status,
+            delivery_lookup=self._lookup_news_part,
+            cancel_delivery=self._cancel_news_parts,
+            research_factory=lambda: NewsResearch(self.model_factory(self.settings)), clock=clock)
+
+    def _news_context(self):
+        from .account_switching import configured_account
+        with self.lock:
+            return {'account': configured_account(self.settings) or 'unbound', 'targets': [
+                {'session': self.settings.conversation_pause_key(e.settings.group),
+                 'name': e.settings.group, 'scope': e.settings.memory_scope, 'mode': e.mode,
+                 'ready': bool(e.settings.binding and e.settings.binding.bottom_confirmed and e.message_source),
+                 'busy': bool(e.tasks), 'reason': e.reason}
+                for e in self.engines if self.settings.conversation_targets.get(e.settings.group)]}
+
+    def _news_delivery_status(self, identity):
+        with self.store.lock:
+            row = self.store.db.execute('SELECT t.state,t.reason,a.at FROM tasks t LEFT JOIN attempts a ON t.id=a.task_id WHERE t.id=?', (identity,)).fetchone()
+        return {'state': row[0], 'reason': row[1], 'attempted': row[2] is not None} if row else {}
+
+    def _lookup_news_part(self, target, request_id):
+        digest = self.store.fingerprint(f'news-plan:{target["scope"]}:{request_id}')
+        with self.store.lock:
+            row = self.store.db.execute('SELECT id FROM tasks WHERE digest=?', (digest,)).fetchone()
+        return {'id': row[0]} if row else {}
+
+    def _cancel_news_parts(self, identities):
+        with self.lock:
+            for engine in self.engines:
+                with engine.lock:
+                    for task in list(engine.tasks):
+                        if task.id not in identities or not task.send_guard: continue
+                        if task.state in ('candidate', 'generated'):
+                            engine._retire(task, 'skipped', 'news_cancelled')
+                        elif task.state == 'staged':
+                            engine.pause('资讯推送已取消，已保留输入草稿且不会发送')
+
+    def _queue_news_part(self, target, text, request_id):
+        import re
+        import unicodedata
+        from .domain import ReplyTask
+        from .account_switching import configured_account
+        if (not isinstance(text, str) or not 1 <= len(text) <= 1000 or not text.strip()
+                or any(unicodedata.category(c).startswith('C') and c not in '\n\t' for c in text)
+                or not isinstance(request_id, str) or not re.fullmatch(r'news_[A-Za-z0-9_-]{8,90}', request_id)):
+            raise ValueError('资讯内容或推送编号无效')
+        edition_id = request_id.split('_')[1]
+        with self.lock:
+            engine = self._selected_engine(target['name'], target['scope'])
+            with engine.lock:
+                digest = self.store.fingerprint(f'news-plan:{target["scope"]}:{request_id}')
+                with self.store.lock:
+                    existing = self.store.db.execute('SELECT id FROM tasks WHERE digest=?', (digest,)).fetchone()
+                if existing: return {'queued': False, 'duplicate': True, 'id': existing[0]}
+                if (engine.mode != 'auto' or engine.tasks or not engine.settings.binding
+                        or not engine.settings.binding.bottom_confirmed or not engine.message_source):
+                    raise ValueError('会话暂不能发送，资讯等待目标就绪')
+                account = configured_account(self.settings)
+                row = self.news.store.get_edition(account, edition_id)
+                if not row or not row.get('publishRequested') or row['state'] in ('cancelled','failed','missed'):
+                    raise ValueError('资讯推送已取消或过期')
+                snapshot_revision = row['snapshot']['revision']
+                subscription_id = row['subscriptionId']
+                deadline = row.get('deadline', row['createdAt'] + 7200)
+                def guard():
+                    current = self.news.store.get_subscription(account, subscription_id)
+                    edition = self.news.store.get_edition(account, edition_id)
+                    # No Resident/NewsRuntime locks here: the native sender owns
+                    # its engine lock and only reads the independent journal.
+                    return bool(current and current['revision'] == snapshot_revision and edition
+                        and edition['state'] not in ('cancelled','failed','missed')
+                        and self.clock() <= deadline and engine.settings.memory_scope == target['scope']
+                        and configured_account(self.settings) == account)
+                if not guard(): raise ValueError('资讯设置或目标已变化')
+                now = self.clock()
+                identity = self.store.create_unique(digest, now)
+                if identity is None:
+                    with self.store.lock:
+                        identity = self.store.db.execute('SELECT id FROM tasks WHERE digest=?', (digest,)).fetchone()[0]
+                    return {'queued': False, 'duplicate': True, 'id': identity}
+                task = ReplyTask(identity, now, now, '', reply=text, state='generated', operator_plan=True,
+                                 send_guard=guard, deadline_at=deadline)
+                engine.tasks.append(task); self.store.update(identity, 'generated')
+                return {'queued': True, 'id': identity}
+
+    def news_command(self, subscription, action, edition=None):
+        return self.news.command(subscription, action, edition)
+
+    def news_invalidate(self, account, subscription):
+        from .account_switching import configured_account
+        if account != (configured_account(self.settings) or 'unbound'):
+            raise ValueError('微信账号已变化')
+        self.news.invalidate(account, subscription)
+        return {'cancelled': True}
 
     def _set_companion_budgets(self):
         accounts={}
@@ -684,6 +781,9 @@ class Resident:
             if self._check_account_change():return
             self._apply_reply_rules()
             self._check_reopened_windows()
+            try: self.news.tick()
+            except Exception as error:
+                logging.getLogger(__name__).error('News coordinator fault: %s', type(error).__name__)
             start=self.index
             ordered=self.engines[start:]+self.engines[:start]
             shared=None
@@ -722,8 +822,9 @@ class Resident:
                 with self.lock:
                     delay = min((engine.next_poll_delay() for engine in self.engines),
                                 default=self.settings.poll_seconds)
-                self.stop_event.wait(delay)
+                self.stop_event.wait(min(delay, 2))
         finally:
+            self.news.close()
             if self.account_detector:self.account_detector.close()
             for engine in self.engines:
                 if engine.companion:engine.companion.close()

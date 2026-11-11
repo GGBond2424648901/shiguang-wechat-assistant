@@ -1,7 +1,7 @@
 import { createRoot } from "react-dom/client";
 import {
   ArrowDownToLine, CircleHelp, Grid2X2, Heart, MessageCircle, Minus, Power, RefreshCw,
-  Settings2, Smile, Square, UserRound, X,
+  Settings2, Smile, Square, UserRound, X, Newspaper,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
 import { defaultAppearance, errorMessage, request, runLabels, stepZoom, type Appearance, type Info, type PageKey, type Status, type WindowAction } from "./api";
@@ -13,6 +13,7 @@ import { StickersPage } from "./stickers";
 import { SettingsPage } from "./settings";
 import { CalibrationWindow } from "./calibration";
 import { BackupWindow, CompanionPage } from "./companion";
+import { NewsPage } from "./news";
 import { enterRoute, reducesMotion } from "./motion";
 import logo from "../../xiaomao/ui_assets/app.png";
 import "./styles.css";
@@ -23,6 +24,7 @@ const navigation = [
   { key: "sessions", title: "会话", icon: MessageCircle },
   { key: "persona", title: "人格", icon: UserRound },
   { key: "companion", title: "记忆与陪伴", icon: Heart },
+  { key: "news", title: "每日资讯", icon: Newspaper },
   { key: "stickers", title: "表情包", icon: Smile },
   { key: "settings", title: "运行设置", icon: Settings2 },
 ] as const;
@@ -140,6 +142,7 @@ function App() {
       directory={directory} setDirectory={setDirectory} calibrate={calibrate} />;
     if (key === "persona") return <PersonaPage active={key === page} readOnly={status?.readOnly ?? true} notify={notify} />;
     if (key === "companion") return <CompanionPage active={key === page} status={status} notify={notify} />;
+    if (key === "news") return <NewsPage active={key === page} status={status} notify={notify} manageSessions={() => navigate("sessions")} />;
     if (key === "settings") return <SettingsPage active={key === page} status={status} appearance={appearance}
       setAppearance={updateAppearance} notify={notify} navigate={navigate} />;
     return <div className="glass phase-note"><Empty icon={<CircleHelp size={28} />} title="正在迁移此页面"
@@ -160,7 +163,7 @@ function App() {
           aria-current={page === key ? "page" : undefined} aria-label={title} title={title} onClick={() => navigate(key)}>
           <Icon size={29} strokeWidth={1.75} /><span>{title}</span>
         </button>)}</nav>
-      <div className="rail-footer"><span>{status?.readOnly ? "只读预览" : "拾光桌面版"}</span><small>Alt + 1–6 切换页面</small></div>
+      <div className="rail-footer"><span>{status?.readOnly ? "只读预览" : "拾光桌面版"}</span><small>Alt + 1–7 切换页面</small></div>
     </aside>
     <main className="main-pane" data-page={page} data-subpage={page === "sessions" && directory ? "directory" : undefined}>
       <header className="chrome drag-region">

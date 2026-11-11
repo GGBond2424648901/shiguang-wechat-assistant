@@ -1,4 +1,5 @@
-const { app, BrowserWindow, dialog, ipcMain, Menu, protocol, screen } = require("electron");
+const { app, BrowserWindow, dialog, ipcMain, Menu, protocol, screen, shell } = require("electron");
+const { publicWebUrl } = require("./public-url.cjs");
 const { createHash } = require("node:crypto");
 const fs = require("node:fs/promises");
 const path = require("node:path");
@@ -26,7 +27,7 @@ let main, prompt, broker, timer, status, signature, stopping = false, quitting =
 let statusBusy = false, writes = 0, painted = false, retryBridge;
 let failures = [];
 const drafts = new Set();
-const draftPages = new Set(["persona", "companion", "sessions", "settings", "appearance", "sticker-preferences", "sticker-detail", "sticker-import"]);
+const draftPages = new Set(["persona", "companion", "news", "sessions", "settings", "appearance", "sticker-preferences", "sticker-detail", "sticker-import"]);
 let trayExitRequested = false, bridgeReady = !managed, residentStart = false;
 let calibration, calibrationTarget, calibrationSaving = false, backup;
 let reducedMotion = false;
@@ -41,6 +42,7 @@ const allowed = new Set([
   "persona.read", "persona.effective", "persona.save", "persona.saveDocument", "persona.importText",
   "sessions.read", "sessions.directory", "sessions.save", "sessions.rules", "sessions.remove",
   "companion.read", "companion.state", "companion.memory", "companion.save", "companion.command", "companion.preset",
+  "news.read", "news.state", "news.save", "news.delete", "news.command",
 ]);
 
 function secureWindow(options) {
@@ -54,7 +56,11 @@ function secureWindow(options) {
     },
     ...options,
   });
-  window.webContents.setWindowOpenHandler(() => ({ action: "deny" }));
+  window.webContents.setWindowOpenHandler(({ url }) => {
+    const safeUrl = publicWebUrl(url);
+    if (safeUrl) shell.openExternal(safeUrl).catch(() => {});
+    return { action: "deny" };
+  });
   window.on("page-title-updated", (event) => event.preventDefault());
   window.webContents.on("will-navigate", (event) => event.preventDefault());
   window.webContents.on("will-attach-webview", (event) => event.preventDefault());

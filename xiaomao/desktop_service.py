@@ -1,6 +1,7 @@
 """Typed command boundary for the local desktop panel."""
 
 from pathlib import Path
+import hashlib
 import re
 from threading import RLock
 
@@ -10,6 +11,7 @@ from .config import Settings
 from .desktop_calibration import DesktopCalibration
 from .desktop_catalog import DesktopCatalog
 from .desktop_companion import DesktopCompanion
+from .desktop_news import DesktopNews
 from .desktop_import import DesktopImportQueue
 from .desktop_persona import DesktopPersona
 from .desktop_settings import DesktopSettings, config_revision
@@ -41,6 +43,7 @@ class DesktopService:
         self.sessions = DesktopSessions(self.root, self.client)
         self.calibration = DesktopCalibration(self.root, self.client)
         self.companion = DesktopCompanion(self.root, self.client, read_only)
+        self.news = DesktopNews(self.root, self.client, read_only)
         self._receipts = {}
         self._receipt_lock = RLock()
         self._mutations = RLock()
@@ -57,6 +60,7 @@ class DesktopService:
             'sessions.read': self.sessions.read, 'sessions.directory': self.sessions.directory,
             'companion.read': self.companion.read, 'companion.state': self.companion.state,
             'companion.memory': self.companion.memory, 'companion.preset': self.companion.preset,
+            'news.read': self.news.read, 'news.state': self.news.state,
         }
         self._writers = {
             'run.start': self.start, 'run.mode': self.mode, 'run.selected': self.selected,
@@ -82,6 +86,7 @@ class DesktopService:
             'companion.save': self.companion.save, 'companion.command': self.companion.command,
             'companion.export': self.companion.export, 'companion.backupPreview': self.companion.backup_preview,
             'companion.restore': self.companion.restore,
+            'news.save': self.news.save, 'news.delete': self.news.delete, 'news.command': self.news.command,
         }
 
     def call(self, method, params):
@@ -153,6 +158,7 @@ class DesktopService:
             'mode': mode if mode in MODES else 'observe',
             'reason': clean_text(data.get('reason')),
             'accountLabel': clean_text(data.get('account_display_name', cfg.account_display_name), 80),
+            'accountScope': hashlib.sha256(configured_account(cfg).encode()).hexdigest() if configured_account(cfg) else '',
             'primary': cfg.conversation_pause_key(cfg.group) if sessions else '', 'sessions': sessions,
             'tray': bool(data.get('tray', {}).get('running')),
             'stats': {'pending': int(data.get('pending_count') or 0),

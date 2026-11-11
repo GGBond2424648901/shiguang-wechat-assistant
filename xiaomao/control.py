@@ -77,7 +77,9 @@ class ControlServer:
                                    "/pause_selected":lambda:engine.pause_selected(**payload),
                                    "/companion_configure":lambda:engine.companion_configure(**payload),
                                    "/companion_preview":lambda:engine.companion_preview(**payload),
-                                   "/companion_once":lambda:engine.companion_once(**payload)}}
+                                   "/companion_once":lambda:engine.companion_once(**payload),
+                                   "/news_command":lambda:engine.news_command(**payload),
+                                   "/news_invalidate":lambda:engine.news_invalidate(**payload)}}
                 action = routes[method].get(self.path)
                 if action is None:
                     return self.answer(404, {"error": "没有这个控制操作"})
@@ -108,6 +110,16 @@ class ControlServer:
                                     or not isinstance(payload['sticker_ids'],list)
                                     or not all(isinstance(s,str) for s in payload['sticker_ids'])):
                                 return self.answer(400,{'error':'需要指定会话身份、文字、素材编号和请求编号'})
+                        elif self.path=='/news_command':
+                            if (not isinstance(payload,dict) or set(payload)!={'subscription','action','edition'}
+                                    or not isinstance(payload['subscription'],str) or not 1<=len(payload['subscription'])<=64
+                                    or payload['action'] not in ('preview','push','cancel')
+                                    or payload['edition'] is not None and (not isinstance(payload['edition'],str) or len(payload['edition'])>64)):
+                                return self.answer(400, {'error':'资讯推送参数无效'})
+                        elif self.path=='/news_invalidate':
+                            if (not isinstance(payload,dict) or set(payload)!={'account','subscription'}
+                                    or not all(isinstance(v,str) and 1<=len(v)<=128 for v in payload.values())):
+                                return self.answer(400, {'error':'资讯订阅身份无效'})
                         elif self.path=='/configure_reply_defaults':
                             if not isinstance(payload,dict) or set(payload)!={'preferences'}:
                                 return self.answer(400, {"error": "需要回复偏好设置"})

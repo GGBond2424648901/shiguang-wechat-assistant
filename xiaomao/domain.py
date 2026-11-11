@@ -82,6 +82,8 @@ class ReplyTask:
     wait_detail: str = ''
     idle_deadline: float = 0
     operator_plan: bool = False
+    send_guard: object = field(default=None, repr=False, compare=False)
+    deadline_at: float = 0
     media_first: bool = False
     draft_waiting: bool = False
     part_index: int = 0

@@ -37,7 +37,7 @@ class ControlClient:
             raise ControlUnavailable("助手尚未运行，或本机控制信息无效") from None
 
     def request(self, operation: str, payload=None) -> dict:
-        if operation not in ("status", "pending", "observe", "enable", "pause", "stop", "reply_latest", "companion_preview", "companion_once","reload_windows","stop_if_idle","queue_text","queue_outbound","companion_configure","enable_selected","pause_selected","configure_reply_rules","configure_reply_defaults"):
+        if operation not in ("status", "pending", "observe", "enable", "pause", "stop", "reply_latest", "companion_preview", "companion_once","reload_windows","stop_if_idle","queue_text","queue_outbound","companion_configure","enable_selected","pause_selected","configure_reply_rules","configure_reply_defaults","news_command","news_invalidate"):
             raise ControlUnavailable("不支持这个控制操作")
         url, token = self._endpoint()
         try:
@@ -76,6 +76,10 @@ class ControlClient:
     def pause_selected(self,group,scope):
         return self.request('pause_selected',dict(group=group,scope=scope))
     def reload_windows(self):return self.request('reload_windows')
+    def news_command(self, subscription, action, edition=None):
+        return self.request('news_command', dict(subscription=subscription, action=action, edition=edition))
+    def news_invalidate(self, account, subscription):
+        return self.request('news_invalidate', dict(account=account, subscription=subscription))
     def configure_reply_rules(self,group,scope,preferences,*,expected=None):
         payload=dict(group=group,scope=scope,preferences=preferences)
         if expected is not None:payload['expected']=expected

@@ -381,6 +381,13 @@ class Engine:
     def _active(self, task: ReplyTask) -> bool:
         with self.lock:
             if self.mode!='auto' or self.cancelled.is_set() or task not in self.tasks:return False
+            if task.send_guard and task.state not in ('sending','awaiting_receipt'):
+                try: valid = bool(task.send_guard())
+                except Exception: valid = False
+                if not valid:
+                    if task.state == 'staged': self.pause('资讯推送已取消或设置已变化，已保留输入草稿且不会发送')
+                    else: self._retire(task, 'skipped', 'news_cancelled')
+                    return False
             if task.proactive and task.state not in ('sending','awaiting_receipt') and (not self.companion or
                     not self.companion.valid(task.proactive,continuing=bool(task.continuation_of))):
                 if task.draft_waiting:self._retire(task,'skipped','draft_expired')
@@ -440,6 +447,8 @@ class Engine:
 
     def _deadline(self,task):
         base=task.created+self.settings.expiry_seconds
+        if task.send_guard and task.created < task.deadline_at <= task.created + 7200:
+            return task.deadline_at
         if task.proactive:
             # A routine owns its due window. Other proactive drafts can expire
             # sooner than a regular reply if generation used part of their time.
@@ -506,6 +515,8 @@ class Engine:
             return self._prioritized_task(candidates)
 
     def _prioritized_task(self, candidates):
+        ordinary = [task for task in candidates if not task.send_guard]
+        if ordinary: candidates = ordinary
         if self.settings.reply_mode != 'natural':
             return candidates[0]
         addressed = next((task for task in candidates if any(self.policy.addressed(m) for m in task.messages)), None)

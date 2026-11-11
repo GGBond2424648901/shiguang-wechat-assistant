@@ -70,7 +70,7 @@ async function soak(electron, page, seconds, errors) {
       const status = await window.shiguang.request("view.status");
       const latency = performance.now() - start;
       const at = nav.findIndex(button => button.getAttribute("aria-current") === "page");
-      const next = at === 5 ? 0 : (at + 1) % nav.length;
+      const next = (at + 1) % nav.length;
       nav[next].click();
       await new Promise(resolve => setTimeout(resolve, 50));
       return { connected: status.connected, latency, switched: nav[next].getAttribute("aria-current") === "page" };
@@ -334,7 +334,7 @@ async function main() {
     await page.getByRole("button", { name: "定时任务", exact: true }).click();
     await page.getByRole("button", { name: "新建", exact: true }).click();
     await page.getByRole("textbox", { name: "关怀意图" }).waitFor();
-    assert.equal(await page.locator('input[type="time"]').inputValue(), "09:00");
+    assert.equal(await page.locator('.companion-page input[type="time"]').inputValue(), "09:00");
     await page.screenshot({ path: path.join(output, "routines.png"), animations: "disabled" });
     const [dirtyPrompt] = await Promise.all([
       electron.waitForEvent("window"),
