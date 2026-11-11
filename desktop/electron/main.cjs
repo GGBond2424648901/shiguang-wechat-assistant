@@ -411,7 +411,7 @@ async function startResident() {
   residentStart = true;
   try {
     const existing = await broker.call("view.status");
-    if (!existing.connected) await broker.call("run.start", {}, 40_000);
+    if (!existing.connected && existing.mode !== "starting") await broker.call("run.start", {}, 40_000);
   } catch {}
   finally { void refreshStatus(); }
 }

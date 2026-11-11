@@ -1,12 +1,12 @@
 import {
-  ArrowLeft, ChevronRight, CircleHelp, Crosshair, Info, Layers2, MessageCircle, Monitor, PauseCircle,
+  ArrowLeft, ChevronRight, CircleHelp, Crosshair, Globe, Info, Layers2, MessageCircle, Monitor, PauseCircle,
   Plus, RefreshCcw, Save, Search, ShieldCheck, Smile, Star, Trash2, UserRound, UsersRound, X,
 } from "lucide-react";
 import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
 import { errorMessage, frequencies, request, ruleLabels, type Status } from "./api";
 import { Button, Confirm, Empty, IconButton, PanelTitle, Select, StatusPill, Switch, useDraftGuard } from "./components";
 import { reducesMotion } from "./motion";
-import { rebaseSessions, rulesOf, sameOrder, type Conversation, type DraftRule, type SavedSessions, type SessionDraft } from "./session-draft";
+import { rebaseSessions, rulesOf, sameOrder, sameRules, type Conversation, type DraftRule, type SavedSessions, type SessionDraft } from "./session-draft";
 
 interface Contact {
   id: string; name: string; kind: Conversation["kind"];
@@ -19,6 +19,11 @@ type Notify = (text: string, error?: boolean) => void;
 
 const kindLabels = { group: "群聊", private: "私聊", service: "服务" };
 const replyOptions = Object.entries(ruleLabels).map(([value, label]) => ({ value, label }));
+const webSearchOptions = [
+  { value: "", label: "继承默认" },
+  { value: "true", label: "允许联网" },
+  { value: "false", label: "关闭联网" },
+];
 
 function Avatar({ kind }: { kind: Conversation["kind"] }) {
   const Icon = kind === "group" ? UsersRound : kind === "private" ? UserRound : MessageCircle;
@@ -60,8 +65,7 @@ export function SessionsPage({ active, status, notify, calibrate, directory, set
   const changed = !!base && (!sameOrder(order, base.items) || monitor !== base.monitorAll || stickers !== base.stickersEnabled ||
     defaultMode !== base.defaultReplyMode);
   useDraftGuard("sessions", changed || !!Object.keys(rules).length || !!accountDrafts.current.size);
-  const ruleChanged = !!row && !!rule && (rule.replyMode !== row.replyMode || rule.stickerFrequency !== row.stickerFrequency)
-    && Object.hasOwn(rules, row.id);
+  const ruleChanged = !!row && !!rule && Object.hasOwn(rules, row.id) && !sameRules(rule, rulesOf(row));
 
   function accept(next: SavedSessions, preserveRules = false, committed: { range?: boolean; rule?: string } = {}) {
     const remainingRules = { ...rules };
@@ -123,7 +127,7 @@ export function SessionsPage({ active, status, notify, calibrate, directory, set
     const next = { ...rule, ...fields };
     setRules(previous => {
       const updated = { ...previous };
-      if (next.replyMode === (row.replyMode ?? null) && next.stickerFrequency === (row.stickerFrequency ?? null)) delete updated[row.id];
+      if (sameRules(next, rulesOf(row))) delete updated[row.id];
       else updated[row.id] = next;
       return updated;
     });
@@ -144,7 +148,7 @@ export function SessionsPage({ active, status, notify, calibrate, directory, set
     const savedRule = rulesOf(originalRow);
     const next = await request<SavedSessions>("sessions.rules", {
       expected: base.revision, session: row.id, ...rule,
-      before: { reply_mode: savedRule.replyMode, sticker_frequency: savedRule.stickerFrequency },
+      before: { reply_mode: savedRule.replyMode, sticker_frequency: savedRule.stickerFrequency, web_search: savedRule.webSearch },
     });
     accept(next, true, { rule: row.id });
     notify(`“${row.name}”的独立回复规则已保存`);
@@ -179,7 +183,7 @@ export function SessionsPage({ active, status, notify, calibrate, directory, set
       const additions = contacts.filter(item => !retained.some(row => row.id === item.id || row.contactId === item.id || row.name === item.name));
       if (retained.length + additions.length > 8) { notify("监听列表已更新，最多选择 8 个会话，请重新核对", true); return; }
       setOrder([...retained, ...additions.map(item => ({ ...item, paused: true, bound: true,
-        replyMode: null, stickerFrequency: null }))]);
+        replyMode: null, stickerFrequency: null, webSearch: null }))]);
       if (additions.length + retained.length > 1) setMonitor(true);
       setSelected(additions.at(-1)?.id ?? selected);
       setQuery("");
@@ -253,6 +257,11 @@ export function SessionsPage({ active, status, notify, calibrate, directory, set
           controls={<Select label="会话表情偏好" value={rule.stickerFrequency ?? ""}
             options={[{ value: "", label: `继承默认 · ${frequencies.find(option => option.value === base.defaultStickerFrequency)?.label ?? ""}` }, ...frequencies]}
             onChange={stickerFrequency => editRule({ stickerFrequency: stickerFrequency || null })}
+            disabled={!mutable || pending || !row.bound} />} />
+        <SessionBlock icon={<Globe size={21} />} title="联网回复" hint={base.webSearchEnabled
+          ? "继承默认时允许联网" : "全局开关已关闭，开启后应用此设置"}
+          controls={<Select label="联网回复" value={rule.webSearch === null ? "" : String(rule.webSearch)}
+            options={webSearchOptions} onChange={value => editRule({ webSearch: value === "" ? null : value === "true" })}
             disabled={!mutable || pending || !row.bound} />} />
         <SessionBlock icon={<PauseCircle size={21} />} title="独立暂停" hint="只暂停这个会话，其他会话继续运行"
           controls={<Switch checked={paused} disabled={!mutable || !status?.connected || !running || !row.bound}

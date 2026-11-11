@@ -20,7 +20,7 @@ _FORMATTED = re.compile(
 )
 _END = re.compile('[' + re.escape(chat_layout.SENTENCE_END) + ']+'
                   + r'''["'”’）)】」》〉]*\s*|\n\s*''')
-_HESITATION = re.compile(r'\s*(?:唔|呃|嗯|那个|不过嘛|这个嘛|怎么说呢)?[….]+\s*')
+_HESITATION = re.compile(r'\s*(?:唔|呃|嗯|呜呜|呜哇|[诶欸]嘿?|哼哼|那个|不过嘛|这个嘛|怎么说呢)?[….]+\s*')
 
 
 def formatted_reply(text):

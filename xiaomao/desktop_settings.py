@@ -12,7 +12,7 @@ from .settings_service import apply_saved_settings
 
 DEFAULT_APPEARANCE = {'transparency': 21, 'reduceMotion': False, 'zoomPercent': 100}
 GENERAL = ('model_name', 'auto_on_launch', 'split_replies', 'idle_wake',
-           'self_display_name', 'self_name_unique_confirmed')
+           'self_display_name', 'self_name_unique_confirmed', 'web_search_enabled')
 
 
 def config_revision(cfg):
@@ -107,9 +107,10 @@ class DesktopSettings:
         return self.read()
 
     def save(self, expected, fields):
-        if not isinstance(fields, dict) or set(fields) != {*GENERAL, 'owner_confirmed'}:
+        if not isinstance(fields, dict) or (set(fields) | {'web_search_enabled'}) != {*GENERAL, 'owner_confirmed'}:
             raise ValueError('运行设置字段无效')
         original = self._current(expected)
+        fields = {'web_search_enabled': original.web_search_enabled, **fields}
         if (fields['model_name'] not in (original.model_name, 'deepseek-flash', 'deepseek-v4-pro')
                 or not isinstance(fields['self_display_name'], str)
                 or len(fields['self_display_name']) > 80

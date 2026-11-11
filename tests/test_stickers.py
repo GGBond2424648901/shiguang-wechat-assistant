@@ -31,6 +31,27 @@ def test_candidates_prefer_phoebe_bounded_and_exclude_unapproved(tmp_path):
     assert all(s.character=='菲比' and s.animated for s in StickerLibrary(tmp_path).candidates([Message('来张菲比动图')]))
 
 
+def test_auto_candidates_keep_reactions_for_implicit_emotion(tmp_path):
+    from xiaomao.stickers import StickerLibrary
+    from xiaomao.domain import Message
+    entries = library(tmp_path,30)
+    for index,entry in enumerate(entries):
+        entry.update(meaning='新功能的聊天截图',tags=['新功能',f'截图{index}'])
+    entries[-4].update(meaning='举起双手开心欢呼',tags=['开心','庆祝'])
+    entries[-3].update(meaning='好困啊，躺在被窝里说再睡五分钟',tags=['困','赖床','睡觉'])
+    entries[-2].update(meaning='躲到尾巴后面脸红',tags=['害羞','脸红'])
+    entries[-1].update(meaning='托着脸撒娇',tags=['撒娇'])
+    entries[0].update(meaning='早上好小肥鱼',tags=['新功能','明天','早安','赖床','睡觉'])
+    (tmp_path/'assets/sticker_library/catalog.json').write_text(json.dumps({'items':entries}),encoding='utf-8')
+    shelf = StickerLibrary(tmp_path)
+    message = Message('明天给你加新功能。')
+    choices = shelf.candidates([message])
+    assert len(choices) == 24 and '新功能' in choices[0].tags
+    assert {'s_26','s_27','s_28','s_29'} <= {s.id for s in choices}
+    assert 's_28' not in {s.id for s in shelf.candidates([message],excluded={'s_28'})}
+    assert not {'s_26','s_27','s_28','s_29'} & {s.id for s in shelf.candidates([Message('发一张新功能表情包')])}
+
+
 @pytest.mark.parametrize('data',[[],None,{'items':None},{'items':{}},'bad'])
 def test_invalid_optional_catalog_does_not_prevent_startup(tmp_path,data):
     from xiaomao.stickers import StickerLibrary

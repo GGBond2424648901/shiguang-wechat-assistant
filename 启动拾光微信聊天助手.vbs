@@ -5,7 +5,8 @@ Set shell = CreateObject("WScript.Shell")
 folder = fs.GetParentFolderName(WScript.ScriptFullName)
 pythonw = fs.BuildPath(folder, ".venv\Scripts\pythonw.exe")
 installed = fs.BuildPath(shell.ExpandEnvironmentStrings("%LOCALAPPDATA%"), "Programs\XiaomaoAssistant")
-requiredVersion = "0.3.13"
+requiredVersion = "0.3.14"
+If Not BundleReady(installed) Then installed = RegisteredInstall(installed)
 launchLegacy = WScript.Arguments.Named.Exists("legacy")
 shell.CurrentDirectory = folder
 If BundleReady(installed) Then
@@ -34,6 +35,18 @@ If WScript.Arguments.Named.Exists("check") Then
 Else
   shell.Run Quote(executable) & args, 0, False
 End If
+
+Function RegisteredInstall(fallback)
+  Dim location
+  RegisteredInstall = fallback
+  On Error Resume Next
+  location = shell.RegRead("HKCU\Software\Microsoft\Windows\CurrentVersion\Uninstall\{86BF0513-B482-4378-972A-5CEE40CE9353}_is1\InstallLocation")
+  On Error GoTo 0
+  If VarType(location) <> vbString Then Exit Function
+  If Len(location) > 0 Then
+    If BundleReady(location) Then RegisteredInstall = location
+  End If
+End Function
 
 Function VersionAtLeast(actual, minimum)
   Dim a, b, i, av, bv

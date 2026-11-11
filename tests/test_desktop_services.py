@@ -581,3 +581,52 @@ def test_desktop_companion_checks_scope_and_only_requests_preview(tmp_path):
         service.call('companion.command', {'session': 'other', 'action': 'preview'})
     service.call('companion.command', {'session': target, 'action': 'preview'})
     assert calls == [{'group': private, 'scope': 'example/demo'}]
+
+
+def test_dashboard_reconnects_to_live_worker_without_restarting_or_enabling_it(tmp_path, monkeypatch):
+    from types import SimpleNamespace
+
+    from xiaomao import client, launch, windows
+    from xiaomao.desktop_service import DesktopService
+
+    configured(tmp_path)
+    worker = client.ControlClient(tmp_path)
+    ui = DesktopService(tmp_path, client=worker)
+    now = 0.0
+    ready = False
+
+    def sleep(seconds):
+        nonlocal now
+        now += seconds
+
+    def request(operation):
+        assert operation == 'status'
+        if not ready:
+            raise client.ControlUnavailable('无法连接本机助手')
+        return FixtureClient().status()
+
+    monkeypatch.setattr(client, 'time', SimpleNamespace(monotonic=lambda: now, sleep=sleep))
+    monkeypatch.setattr(windows, 'worker_scope', lambda _: 'current')
+    monkeypatch.setattr(worker, 'request', request)
+    monkeypatch.setattr(launch, 'spawn_worker', lambda *a, **kw: pytest.fail('started a duplicate worker'))
+    (tmp_path / 'runtime').mkdir(exist_ok=True)
+
+    for method in ('view.status', 'run.start'):
+        state = ui.call(method, {})
+        assert not state['connected']
+        assert state['mode'] == 'starting' and '自动重连' in state['reason']
+    ready = True
+    state = ui.call('view.status', {})
+    assert state['connected'] and state['mode'] == 'auto'
+    assert [session['mode'] for session in state['sessions']] == ['auto', 'paused']
+
+
+def test_dashboard_start_uses_the_confirmed_status_without_a_second_request(tmp_path):
+    from xiaomao.desktop_service import DesktopService
+
+    configured(tmp_path)
+    worker = FixtureClient()
+    worker.start = worker.status
+    worker.status = lambda: pytest.fail('discarded the startup status and requested it again')
+    state = DesktopService(tmp_path, client=worker).call('run.start', {})
+    assert state['connected'] and state['mode'] == 'auto'

@@ -61,6 +61,13 @@ def test_vbs_rejects_an_unversioned_installed_copy_and_uses_built_source(tmp_pat
     project.mkdir()
     script = project / 'start.vbs'
     shutil.copyfile(Path(__file__).resolve().parents[1] / '启动拾光微信聊天助手.vbs', script)
+    # Keep the fallback test independent of a real per-user registered install.
+    # No real bundle satisfies this fixture's future minimum version.
+    actual = json.loads((Path(__file__).resolve().parents[1] / 'desktop/package.json').read_text('utf-8'))['version']
+    version = '999.0.0'
+    source = script.read_text('utf-8')
+    assert f'requiredVersion = "{actual}"' in source
+    script.write_text(source.replace(f'requiredVersion = "{actual}"', f'requiredVersion = "{version}"', 1), 'utf-8')
     local = tmp_path / 'local'
     old = local / 'Programs/XiaomaoAssistant'
     for rel in ['Xiaomao.exe', 'desktop/ShiguangDesktop.exe', 'desktop/resources/app/dist/index.html']:
@@ -69,17 +76,16 @@ def test_vbs_rejects_an_unversioned_installed_copy_and_uses_built_source(tmp_pat
         target.write_bytes(b'not-a-current-binary')
     env = {**os.environ, 'LOCALAPPDATA': str(local), 'SHIGUANG_ELECTRON': ''}
     result = subprocess.run(['cscript.exe', '//Nologo', str(script), '/check'], env=env,
-                            capture_output=True, text=True, timeout=10)
+                            capture_output=True, text=True, encoding='mbcs', timeout=10)
     assert result.returncode == 1 and 'ERROR' in result.stdout
     for rel in ['.venv/Scripts/pythonw.exe', 'desktop/dist/index.html',
                 'desktop/node_modules/electron/dist/electron.exe']:
         target = project / rel
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(b'source-check-only')
-    version = json.loads((Path(__file__).resolve().parents[1] / 'desktop/package.json').read_text('utf-8'))['version']
     (project / 'desktop/dist/build-version.txt').write_text(version, encoding='ascii')
     result = subprocess.run(['cscript.exe', '//Nologo', str(script), '/check'], env=env,
-                            capture_output=True, text=True, timeout=10)
+                            capture_output=True, text=True, encoding='mbcs', timeout=10)
     assert result.returncode == 0
     assert str(project / '.venv/Scripts/pythonw.exe') in result.stdout
     assert '--root' in result.stdout and '--legacy-ui' not in result.stdout

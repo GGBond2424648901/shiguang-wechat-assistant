@@ -299,3 +299,19 @@ def test_malformed_model_result_is_always_a_safe_model_error(tmp_path, result):
         model.reply([Message('测试')])
     with pytest.raises(ModelError):
         model.compact('', [Message('测试')])
+
+
+def test_text_only_request_does_not_blame_sticker_inventory(tmp_path):
+    from xiaomao.domain import Message
+
+    def endpoint(request):
+        instructions = '\n'.join(row['content'] for row in json.loads(request.content)['messages']
+                                  if row['role'] == 'system')
+        assert '要求本轮不发表情' in instructions
+        assert '本轮匹配的素材或发送通道暂不可用' not in instructions
+        return httpx.Response(200, json={'choices': [{'finish_reason': 'stop', 'message': {
+            'content': '{"send":true,"text":"那就只用文字说声晚安","sticker":""}'}}]})
+
+    model = local_model(tmp_path, endpoint)
+    reply = model.reply_plan([Message('只回文字，别发表情包')], choices=[], sticker_state='unavailable')
+    assert reply.text == '那就只用文字说声晚安' and not reply.sticker

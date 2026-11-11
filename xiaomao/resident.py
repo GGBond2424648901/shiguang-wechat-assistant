@@ -155,8 +155,8 @@ class Resident:
         return self._configure_rules(preferences)
 
     def _configure_rules(self,preferences,group=None,scope=None,*,expected=None):
-        from .reply_preferences import validate_rule_changes
-        preferences=validate_rule_changes(preferences,allow_inherit=group is not None)
+        from .reply_preferences import DEFAULT_RULE_FIELDS, validate_rule_changes
+        preferences = validate_rule_changes(preferences, allow_inherit=group is not None, defaults=group is None)
         with self.lock:
             saved=Settings.load(self.settings.root)
             if group is not None:
@@ -168,7 +168,7 @@ class Resident:
             else:fresh=replace(saved,**preferences)
             # Persist first. Failed writes must not claim success or affect the worker.
             fresh.save(expected=saved)
-            changes={k:getattr(fresh,k) for k in ('reply_mode','sticker_frequency','conversation_rules')}
+            changes={k:getattr(fresh,k) for k in (*DEFAULT_RULE_FIELDS, 'conversation_rules')}
             self.settings=replace(self.settings,**changes)
             if self.reload_request:self.reload_request=replace(self.reload_request,**changes)
             self.rules_pending.update(e.settings.memory_scope for e in self.engines)
@@ -186,6 +186,7 @@ class Resident:
                     if any(t.continuation_of or t.state in ('staged','sending','awaiting_receipt','unknown') for t in e.tasks):continue
                     desired=self.settings.for_group(e.settings.group)
                     cfg=replace(e.settings,reply_mode=desired.reply_mode,sticker_frequency=desired.sticker_frequency,
+                                web_search_enabled=desired.web_search_enabled,
                                 conversation_rules=self.settings.conversation_rules)
                     policy=TriggerPolicy(cfg.assistant_name,cfg.at_display_name,cfg.wake_aliases,cfg.reply_mode)
                     # Tightening to mentions must not send an unstarted ordinary reply.

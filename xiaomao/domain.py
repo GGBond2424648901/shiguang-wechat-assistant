@@ -1,6 +1,10 @@
 """观察结果与内存任务，不包含电脑控制权限。"""
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
 import unicodedata
+
+if TYPE_CHECKING:
+    from .web_search import SearchTurn
 
 
 def normalized(text: str) -> str:
@@ -82,3 +86,4 @@ class ReplyTask:
     draft_waiting: bool = False
     part_index: int = 0
     previous_part_id: str = ''
+    web_search: 'SearchTurn | None' = field(default=None, repr=False)

@@ -40,7 +40,11 @@ class StickerRequest:
 _ANIMATED = re.compile(r'动图|动态图|动态|gif|会动的',re.I)
 _STATIC = re.compile(r'静态|静图|静止|不动的')
 _QUANTITY = re.compile(r'([0-9]{1,6}|[一二两三四五六七八九十])\s*[个张只幅]')
+_MEDIA_REQUEST_VERB = re.compile(r'发|来|给\s*(?:我|点|些|[个张只幅]|'+_QUANTITY.pattern+r')|换|要|求|改|看看')
 _CANCEL = re.compile(r'(?:别|不用|不要|不必|不想|停止|取消).{0,5}(?:发|要|表情|动图|gif|静态)|^(?:算了|不用了|不要了|取消|停止)[吧啊啦。！!\s]*$',re.I)
+_NO_TEXT = re.compile(r'(?:别|不用|不要|不必|不想|不)(?:再|实际)?(?:发(?:送)?|回(?:复)?|要)\s*(?:任何)?(?:文字|文本)[了吧呀啊啦\s]*$')
+_TEXT_ONLY = re.compile(r'(?:只|仅)(?:用|回(?:复)?|发(?:送)?|说|要)\s*(?:文字|文本)(?:就(?:好|行|够|可以)|即可)?[吧呀啊啦\s]*$')
+_NO_MEDIA = re.compile(r'(?:^|就|也|请|这次|本轮)不(?:再)?(?:发(?:送)?|回(?:复)?)\s*(?:任何)?(?:表情包?|图片|动图|gif)',re.I)
 _NOVELTY = re.compile(
     r'(?:不要|别|不用)(?:再)?(?:重复(?:(?:之前|以前|刚才|已经|昨天))?(?:发过的|发过|发送|发)?(?:表情包?|图片|的)?'
     r'|(?:发|发送)(?:相同|一样|同样|之前|以前|刚才)(?:的|那[张个]|这张)?(?:表情包?|图片)?)'
@@ -87,14 +91,16 @@ def _sticker_cue(message,prior):
         if _NOVELTY.fullmatch(clause):
             state=replace(state,avoid_repeats=True)
             continue
-        if _CANCEL.search(clause):
+        # Omitting prose is compatible with sending media on its own.
+        if _NO_TEXT.search(clause):continue
+        if _TEXT_ONLY.search(clause) or _NO_MEDIA.search(clause) or _CANCEL.search(clause):
             state=replace(state,explicit=False,suppressed=True,source_id=message.message_id)
             continue
         number=_QUANTITY.search(clause)
         character=next((name for name,aliases in (
             ('菲比',('菲比',)),('呆猫八条',('呆猫八条','八条')),('鲸鱼娘',('鲸鱼娘','鲸鱼','大肥鱼')))
             if any(alias in clause for alias in aliases)),'')
-        directive=catalog_order(clause) or bool(re.search(r'发|来|给|换|要|求|改|看看',clause))
+        directive=catalog_order(clause) or bool(_MEDIA_REQUEST_VERB.search(clause))
         short_format=bool(_SHORT_FORMAT.fullmatch(clause))
         more_count=_more_quantity(clause) if state.explicit else 0
         quantity_only=number and re.fullmatch(r'(?:只要|只发|改成|改为|换成|还是|要|发|就)?\s*'+_QUANTITY.pattern+r'(?:就够了|即可|就行|吧)?[？?]?',clause)
@@ -229,6 +235,10 @@ EMOTIONS=(('开心','好耶','哈哈','成功','搞定','庆祝','击掌'),('困
           ('疑惑','思考','为什么','不懂'),('你好','早安','来了','招手','在吗'),
           ('喜欢','可爱','害羞','脸红','夸奖'),('谢谢','感谢','感动'),('再见','拜拜','挥手'),
           ('生气','愤怒','气死','不满'),('吃','饿','饭','馋'),('围观','吃瓜','观察'))
+
+# These are catalog tags, not rules that infer a turn's mood from its words.
+_AUTO_REACTIONS=(('期待','庆祝','兴奋','好耶','开心','惊喜'),('害羞','脸红'),
+                 ('困','赖床','睡觉','犯困','困困'),('撒娇','委屈'),('调皮','得意','搞怪'),('抱抱','安慰'))
 
 
 class StickerLibrary:
@@ -368,7 +378,18 @@ class StickerLibrary:
             result.append(item);tags[key]=tags.get(key,0)+1
             if len(result)==24:break
         if len(result)<24:result.extend(s for s in ranked if s not in result)
-        return result[:24]
+        if request.explicit:return result[:24]
+        # Matching the inbound words alone can miss the emotion expressed in
+        # the eventual reply. Keep most of the contextual ranking and give the
+        # model a few annotated alternatives without asking it to use them.
+        choices=result[:24-len(_AUTO_REACTIONS)]
+        for tags in _AUTO_REACTIONS:
+            reaction=max((item for item in ranked if any(tag in item.tags for tag in tags)),
+                         key=lambda item:(tags[0] in item.tags,sum(2*(tag in item.tags)+(tag in item.meaning) for tag in tags)),
+                         default=None)
+            if reaction is not None and reaction not in choices:choices.append(reaction)
+        choices.extend(item for item in result if item not in choices)
+        return choices[:24]
 
     def prepare_order(self,choices,request):
         prepared=[];hashes=set()

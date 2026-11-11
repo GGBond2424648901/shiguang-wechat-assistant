@@ -1,6 +1,8 @@
 from pathlib import Path
 from dataclasses import replace
 
+import pytest
+
 from xiaomao.domain import Message
 
 
@@ -119,6 +121,27 @@ def test_activity_guard_keeps_quotes_and_imagination():
     assert not unsupported_activity('我没有童年，所以不能说我小时候做过什么', turn)
 
 
+def test_grounded_search_does_not_exempt_unrelated_real_world_claims():
+    from xiaomao.persona_voice import unsupported_activity
+    turn = [Message('查一下这条公告')]
+    assert unsupported_activity('我刚才一查，公告已经发布',turn)
+    assert not unsupported_activity('我刚才一查，公告已经发布',turn,searched=True)
+    assert unsupported_activity('我刚才一查，公告已经发布。我小时候也参加过这个活动',turn,searched=True)
+
+
+def test_presence_reminder_tracks_the_enabled_module(tmp_path):
+    from xiaomao.persona_modules import PersonaModule, save_modules
+    from xiaomao.persona_voice import voice_focus
+    state = modules(tmp_path)
+    messages = [Message('明天有个惊喜')]
+    original = voice_focus(tmp_path,messages)
+    extra = PersonaModule('v6_1_presence','角色临场感','先表达情绪，再看要不要配图')
+    active = save_modules(tmp_path,[*state.modules,extra],title=state.title,expected_revision=state.revision)
+    assert voice_focus(tmp_path,messages) != original
+    save_modules(tmp_path,[*state.modules,replace(extra,enabled=False)],title=state.title,expected_revision=active.revision)
+    assert voice_focus(tmp_path,messages) == original
+
+
 def test_media_plain_fallback_does_not_bypass_activity_guard(tmp_path):
     import httpx
     from xiaomao.config import Settings
@@ -147,6 +170,13 @@ def test_adaptive_expression_does_not_remove_faces_or_force_new_opening_by_quota
     assert render_bubble('嗯，接着聊嘛',[],[],adaptive=True) == '嗯，接着聊嘛'
     path='C:/data/a.json'
     assert render_bubble(path,history,[Message('原样输出路径')],adaptive=True) == path
+
+
+@pytest.mark.parametrize('lead', ['呜呜……','诶嘿……','哼哼……','诶……'])
+def test_casual_hesitation_stays_with_the_following_thought(lead):
+    from xiaomao.dafeiyu import split_reply
+    text = lead+'刚睡着诶\n尾巴再盖一下嘛'
+    assert split_reply(text) == [lead+'刚睡着诶\n','尾巴再盖一下嘛']
 
 
 def test_modular_prompt_uses_contextual_expressiveness_instead_of_global_restrictions(tmp_path):

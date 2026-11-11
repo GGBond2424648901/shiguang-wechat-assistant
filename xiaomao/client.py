@@ -1,4 +1,5 @@
 """GUI 与 MCP 共用的受限本机控制客户端。"""
+from datetime import datetime
 import json
 import os
 from pathlib import Path
@@ -11,6 +12,13 @@ from .privacy import private_dir
 
 class ControlUnavailable(RuntimeError):
     pass
+
+
+class ControlConnecting(ControlUnavailable):
+    """The current worker is present but its state cannot be confirmed yet."""
+
+    def __init__(self, message="后台仍在运行，正在自动重连"):
+        super().__init__(message)
 
 
 class ControlClient:
@@ -43,7 +51,15 @@ class ControlClient:
             raise ControlUnavailable(data.get("error", "控制请求失败"))
         return {"running": True, **data}
 
-    def status(self): return self.request("status")
+    def status(self):
+        try:
+            return self.request("status")
+        except ControlUnavailable:
+            from .windows import worker_scope
+            if worker_scope(self.root) == "current":
+                raise ControlConnecting() from None
+            raise
+
     def pause(self): return self.request("pause")
     def observe(self): return self.request("observe")
     def enable(self): return self.request("enable")
@@ -95,7 +111,18 @@ class ControlClient:
                 started = True
                 deadline = time.monotonic()+15
             time.sleep(.2)
-        if worker_scope(self.root) == "unidentified":
+        scope = worker_scope(self.root)
+        if scope == "other":
+            raise ControlUnavailable(conflict)
+        try:
+            with (self.root / "runtime" / "worker.log").open("a", encoding="utf-8") as output:
+                timestamp = datetime.now().astimezone().isoformat(timespec="seconds")
+                print(f"{timestamp} [control] status deadline, worker scope: {scope or 'none'}", file=output)
+        except OSError:
+            pass
+        if scope == "current":
+            raise ControlConnecting()
+        if scope == "unidentified":
             raise ControlUnavailable("桌面已有小猫后台，当前数据目录未连接。请在原面板「完全退出」后再试。")
         raise ControlUnavailable("助手启动失败，请查看本机 runtime/worker.log")
 

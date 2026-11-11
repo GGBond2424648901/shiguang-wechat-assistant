@@ -125,6 +125,7 @@ class Settings:
     monitor_all_groups: bool = True
     reply_mode: str = 'natural'
     conversation_rules: dict = field(default_factory=dict)
+    web_search_enabled: bool = False
     paused_conversations: tuple[str,...] = ()
     sticker_frequency: str = 'natural'
     stickers_enabled: bool = True
@@ -170,6 +171,7 @@ class Settings:
         if not isinstance(self.auto_on_launch,bool):raise ValueError('启动自动回复偏好必须为布尔值')
         if type(self.split_replies) is not bool:raise ValueError('多气泡设置必须为布尔值')
         if type(self.idle_wake) is not bool:raise ValueError('空闲唤起设置必须为布尔值')
+        if type(self.web_search_enabled) is not bool:raise ValueError('联网回复设置必须为布尔值')
         if not isinstance(self.owner_private_token,str) or (self.owner_private_token and not re.fullmatch('[a-f0-9]{64}',self.owner_private_token)):
             raise ValueError('私聊称呼绑定无效')
         if not isinstance(self.natural_pacing,bool):raise ValueError('自然回复节奏必须为布尔值')
@@ -377,10 +379,18 @@ class Settings:
         if name not in self.allowed_groups:raise ValueError('该群未被选定')
         target=self.conversation_targets.get(name,{})
         scope=target.get('account','')+'/'+target.get('id','')
-        overrides=self.conversation_rules.get(scope,{})
+        from .reply_preferences import RULE_VALUES
+        overrides = {key: value for key, value in self.conversation_rules.get(scope, {}).items()
+                     if key in RULE_VALUES}
         return replace(self,group=name,group_names=(),
                        **overrides,
                        self_name_unique_confirmed=self.self_name_unique_confirmed if name==self.group else False)
+
+    def allows_web_search(self, name):
+        if not self.web_search_enabled or name not in self.allowed_groups or name not in self.conversation_targets:
+            return False
+        rules = self.conversation_rules.get(self.conversation_scope(name), {})
+        return rules.get('web_search', True)
 
     def with_conversation_rules(self,name,changes,*,expected=None):
         from .reply_preferences import validate_rule_changes
@@ -449,6 +459,8 @@ class Settings:
         private_dir(self.runtime)
         data = asdict(self)
         data.pop("root")
+        if not self.web_search_enabled:
+            data.pop("web_search_enabled")
         with configuration_lock(self.runtime):
             if expected is not None and Settings.load(self.root)!=expected:
                 raise ValueError('设置已在其他窗口更新，未覆盖新配置，请重新保存')

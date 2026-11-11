@@ -54,6 +54,8 @@ def test_more_stickers_followup_checks_intervening_topic_inside_current_batch():
     ('@小玲 来两张鲸鱼GIF吧','鲸鱼娘',True,2),
     ('来张八条动图','呆猫八条',True,1),
     ('发100个表情包','',False,3),
+    ('给张 GIF','',True,1),
+    ('给我两张鲸鱼 GIF','鲸鱼娘',True,2),
 ])
 def test_explicit_request_filters_character_animation_and_bounded_quantity(tmp_path,text,character,animated,count):
     from xiaomao.stickers import StickerLibrary,sticker_request
@@ -63,6 +65,12 @@ def test_explicit_request_filters_character_animation_and_bounded_quantity(tmp_p
     assert request.explicit and request.character==character and request.animated==animated and request.count==count
     choices=StickerLibrary(tmp_path).candidates(messages)
     assert all((not character or s.character==character) and (not animated or s.animated) for s in choices)
+
+
+def test_revealing_a_gif_feature_is_not_an_explicit_sticker_request():
+    from xiaomao.stickers import sticker_request
+    message = Message('就是给你加个一键给相册里所有 GIF 补标签的功能，蓝信封现在可以打开啦！')
+    assert not sticker_request([message]).explicit
 
 
 def test_gif_correction_carries_only_same_members_requested_character():
@@ -81,6 +89,23 @@ def test_gif_correction_carries_only_same_members_requested_character():
     again=sticker_request([history[0],Message('GIF吧',speaker_id=a),Message('再来个GIF吧',speaker_id=a)])
     assert again.character=='鲸鱼娘' and again.animated
     assert not sticker_request([Message('别再发鲸鱼表情了',speaker_id=a),Message('GIF吧',speaker_id=a)]).explicit
+
+
+@pytest.mark.parametrize('text', ['发一张开心庆祝的表情包，别发文字。', '不要回复文字，来两张鲸鱼动图。'])
+def test_omitting_text_does_not_cancel_an_explicit_sticker_request(text):
+    from xiaomao.stickers import sticker_request
+    request = sticker_request([Message(text)])
+    assert request.explicit and not request.suppressed
+
+
+@pytest.mark.parametrize('text', ['这次只回文字吧。', '不发表情包。', '我觉得你真可爱，只回文字，不发表情包。'])
+def test_text_only_instruction_disables_automatic_stickers(tmp_path,text):
+    from xiaomao.stickers import StickerLibrary,sticker_request
+    library(tmp_path)
+    messages = [Message(text)]
+    request = sticker_request(messages)
+    assert request.suppressed and not request.explicit
+    assert not StickerLibrary(tmp_path).candidates(messages,request=request)
 
 
 @pytest.mark.parametrize('text',[

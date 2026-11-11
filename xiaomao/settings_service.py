@@ -3,6 +3,7 @@ from dataclasses import replace
 from .client import ControlUnavailable
 from .config import Settings
 from .credentials import CredentialStore
+from .reply_preferences import CONVERSATION_RULE_FIELDS, DEFAULT_RULE_FIELDS
 
 
 def apply_saved_settings(client,original,updated,key=''):
@@ -11,10 +12,9 @@ def apply_saved_settings(client,original,updated,key=''):
     except ControlUnavailable:status={}
     mode=status.get('mode')
     if Settings.load(original.root)!=original:raise ValueError('设置已在其他窗口修改，请重新打开设置')
-    rule_fields=('reply_mode','sticker_frequency')
-    rule_only=replace(original,**{k:getattr(updated,k) for k in rule_fields})==updated
+    rule_only=replace(original,**{k:getattr(updated,k) for k in DEFAULT_RULE_FIELDS})==updated
     if not key.strip() and rule_only and status.get('can_configure_reply_rules'):
-        return client.configure_reply_defaults({k:getattr(updated,k) for k in rule_fields
+        return client.configure_reply_defaults({k:getattr(updated,k) for k in DEFAULT_RULE_FIELDS
                                                if getattr(updated,k)!=getattr(original,k)})
     if (not key.strip() and status.get('can_configure_reply_rules') and
             replace(original,conversation_rules=updated.conversation_rules)==updated):
@@ -27,7 +27,7 @@ def apply_saved_settings(client,original,updated,key=''):
             if name:
                 before=original.conversation_rules.get(scope,{})
                 after=updated.conversation_rules.get(scope,{})
-                return client.configure_reply_rules(name,scope,{field:after.get(field) for field in rule_fields
+                return client.configure_reply_rules(name,scope,{field:after.get(field) for field in CONVERSATION_RULE_FIELDS
                                                                if before.get(field)!=after.get(field)})
     route_fields=('group','group_names','monitor_all_groups','conversation_targets','calibration',
                   'calibration_account','window_bindings','paused_conversations')

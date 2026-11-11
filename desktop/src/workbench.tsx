@@ -127,9 +127,11 @@ export function Workbench({ active, status, notify, navigate, calibrate }: {
     if (working) return;
     setWorking(key);
     try {
-      await request(method, params);
+      const result = await request<Status>(method, params);
       setRefresh(value => value + 1);
-      notify(key === "start" ? "后台已连接" : "操作已应用");
+      if (key !== "start" || result.connected) {
+        notify(key === "start" ? "后台已连接" : "操作已应用");
+      }
     } catch (error) {
       notify(errorMessage(error), true);
     } finally {
@@ -180,7 +182,8 @@ export function Workbench({ active, status, notify, navigate, calibrate }: {
         : <div className="reply-empty">
           <Empty title="暂无回复详情" detail={status?.connected ? "从发送队列选择一条消息" : status?.reason} icon={<MessageCircle size={25} />} />
           {status && !status.connected && <Button variant="primary" disabled={status.readOnly || Boolean(working)}
-            busy={working === "start"} onClick={() => void act("start", "run.start")}>连接后台</Button>}
+            busy={working === "start" || status.mode === "starting"}
+            onClick={() => void act("start", "run.start")}>{status.mode === "starting" ? "连接中" : "连接后台"}</Button>}
         </div>}
     </section>
     <section className="glass panel queue-panel">

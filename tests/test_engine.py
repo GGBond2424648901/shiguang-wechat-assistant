@@ -1184,3 +1184,41 @@ def test_editor_corroboration_preflight_and_after_focus_keeps_visible_chat(syste
     frame=engine._frame(observation=observation)
     assert frame.draft_empty and frame.messages==visible.messages and checked==[visible]
     assert not screen.events
+
+
+def test_slow_contact_lookup_leaves_status_and_pause_available(system):
+    from threading import Event, Thread
+
+    from xiaomao.database import MessageBatch
+    from xiaomao.domain import Message
+
+    engine, screen, _, _, _ = system
+    entered, release = Event(), Event()
+
+    class Feed:
+        def poll(self):
+            return MessageBatch([], [Message('小猫你好', message_id='incoming', created_at=100)])
+
+        def member_profiles(self, _):
+            entered.set()
+            release.wait(5)
+            return {}
+
+    engine.message_source = Feed()
+    engine.enable()
+    observer = Thread(target=engine.observe_once, daemon=True)
+    observer.start()
+    try:
+        assert entered.wait(2)
+        assert engine.lock.acquire(timeout=.5), 'contact lookup blocked status and pause'
+        try:
+            assert engine.status()['mode'] == 'auto'
+            engine.pause()
+        finally:
+            engine.lock.release()
+    finally:
+        release.set()
+        observer.join(2)
+    assert not observer.is_alive()
+    assert engine.mode == 'paused' and engine.last_observed is None
+    assert not engine.tasks and not screen.events

@@ -15,6 +15,9 @@ from .reply_preferences import persist_preferences, validate_rule_changes
 from .settings_service import apply_saved_settings
 
 
+_UNSET = object()
+
+
 def _contact_key(row):
     return 'contact_' + hashlib.sha256((row.account + '/' + row.id).encode('utf-8')).hexdigest()[:32]
 
@@ -44,9 +47,11 @@ class DesktopSessions:
                          'calibrated': bool(binding and binding.bottom_confirmed),
                          'windowKind': binding.window_kind if binding else None,
                          'windowSize': [binding.width, binding.height] if binding else None,
-                         'replyMode': rules.get('reply_mode'), 'stickerFrequency': rules.get('sticker_frequency')})
+                         'replyMode': rules.get('reply_mode'), 'stickerFrequency': rules.get('sticker_frequency'),
+                         'webSearch': rules.get('web_search')})
         return {'items': rows, 'monitorAll': cfg.monitor_all_groups, 'stickersEnabled': cfg.stickers_enabled,
                 'defaultReplyMode': cfg.reply_mode, 'defaultStickerFrequency': cfg.sticker_frequency,
+                'webSearchEnabled': cfg.web_search_enabled,
                 'accountLabel': cfg.account_display_name,
                 'accountKey': _account_key(cfg), 'revision': config_revision(cfg)}
 
@@ -149,8 +154,11 @@ class DesktopSessions:
             raise ValueError('监听会话已变化，请重新选择')
         return self._apply(cfg, cfg.with_saved_conversations(names))
 
-    def rules(self, expected, session, replyMode, stickerFrequency, before=None):
-        values = validate_rule_changes({'reply_mode': replyMode, 'sticker_frequency': stickerFrequency})
+    def rules(self, expected, session, replyMode, stickerFrequency, before=None, *, webSearch=_UNSET):
+        values = {'reply_mode': replyMode, 'sticker_frequency': stickerFrequency}
+        if webSearch is not _UNSET:
+            values['web_search'] = webSearch
+        validate_rule_changes(values)
         cfg = self._current(expected) if before is None else Settings.load(self.root)
         name = next((name for name in cfg.saved_groups if cfg.conversation_pause_key(name) == session), None)
         if not name or not cfg.conversation_targets.get(name):

@@ -52,6 +52,7 @@ tests/test_mcp.py
 tests/test_media.py
 tests/test_memory.py
 tests/test_model.py
+tests/test_web_search.py
 tests/test_pacing.py
 tests/test_panel.py
 tests/test_participation_model.py
@@ -124,6 +125,7 @@ xiaomao/mcp_server.py
 xiaomao/media.py
 xiaomao/memory.py
 xiaomao/model.py
+xiaomao/web_search.py
 xiaomao/paths.py
 xiaomao/persona.py
 xiaomao/persona_ui.py

@@ -14,7 +14,7 @@ from .domain import Frame, Message, ReplyTask, normalized
 from .policy import TriggerPolicy, clean_reply
 from .tracker import SequenceTracker, AmbiguousFrame
 from .store import StateStore
-from .model import ModelError
+from .model import ChatModel, ModelError
 from .windows import DesktopUnavailable, DesktopTemporarilyHidden, DesktopInputNotStarted, StickerClipboardBlocked
 
 
@@ -933,8 +933,9 @@ class Engine:
 
     def _observe_database(self,epoch):
         if self._expire_receipt():return
+        source = self.message_source
         try:
-            batch=self.message_source.poll()
+            batch = source.poll()
         except Exception as error:
             with self.lock:
                 if epoch==self.epoch and not self.cancelled.is_set():
@@ -948,8 +949,21 @@ class Engine:
                     self.ready_at=self.clock()+min(15,self.source_failures)
                     self._companion_tick(source_wait='等待消息监听恢复')
             return
+        memory = self.memory
+        profiles = None
+        if memory and hasattr(source, 'member_profiles'):
+            with self.lock:
+                if epoch != self.epoch or self.cancelled.is_set() or self._expire_receipt():
+                    return
+            # This lookup may reopen a live WeChat snapshot. Keep status and
+            # pause responsive while it waits, and recheck the epoch below.
+            try:
+                profiles = source.member_profiles(memory.known_member_ids())
+            except Exception:
+                logging.getLogger(__name__).warning('成员名册暂未更新，聊天继续')
         with self.lock:
-            if epoch!=self.epoch or self.cancelled.is_set():return
+            if epoch != self.epoch or self.cancelled.is_set() or source is not self.message_source:
+                return
             if self._expire_receipt():return
             now=self.clock()
             if (batch.initial or self.source_rebaseline or self.last_observed is None or
@@ -960,8 +974,8 @@ class Engine:
             self.reason='数据库后台监听中' if self.mode=='auto' else '数据库观察中'
             baseline=batch.initial or self.source_rebaseline
             self.source_rebaseline=False
-            if self.memory and hasattr(self.message_source,'member_profiles'):
-                try:self.memory.refresh_member_profiles(self.message_source.member_profiles(self.memory.known_member_ids()))
+            if profiles is not None:
+                try:memory.refresh_member_profiles(profiles)
                 except Exception:logging.getLogger(__name__).warning('成员名册暂未更新，聊天继续')
             if baseline:
                 self._seed_context(batch.history)
@@ -1132,6 +1146,8 @@ class Engine:
                 sticker_mode=(self.settings.stickers_enabled and self.message_source
                         and hasattr(self.desktop,'type_sticker') and hasattr(self.desktop,'verify_sticker_input')
                         and hasattr(self.model,'reply_plan'))
+                if isinstance(self.model, ChatModel) and not (sticker_mode and local_order):
+                    self.model.bind_reply_task(task, lambda: self._active(task))
                 ready=request.explicit or self.store.sticker_ready(self.settings.memory_scope,self.clock(),self.settings.sticker_frequency)
                 if sticker_mode and not task.sticker_failed and ready:
                     choices=self.stickers.candidates(context,request=request,excluded=self.store.recent_stickers(self.settings.memory_scope,self.clock(),all_history=request.avoid_repeats))

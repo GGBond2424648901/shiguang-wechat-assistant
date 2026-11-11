@@ -5,7 +5,7 @@ import re
 from threading import RLock
 
 from .account_switching import configured_account
-from .client import ControlClient, ControlUnavailable
+from .client import ControlClient, ControlConnecting, ControlUnavailable
 from .config import Settings
 from .desktop_calibration import DesktopCalibration
 from .desktop_catalog import DesktopCatalog
@@ -105,20 +105,29 @@ class DesktopService:
                 return name
         raise ValueError('监听会话已变化，请重新选择')
 
-    def _connected_status(self, cfg):
-        status = self.client.status()
+    def _connected_status(self, cfg, *, status=None):
+        if status is None:
+            status = self.client.status()
         account = status.get('account_scope')
         if account and account != configured_account(cfg):
-            raise ControlUnavailable('正在核对已切换的微信账号')
+            raise ControlConnecting('正在核对已切换的微信账号')
         return status
 
     def status(self):
-        cfg = Settings.load(self.root)
+        return self._read_status(self.client.status)
+
+    def _read_status(self, read, *, raise_on_failure=False):
         try:
-            data = self._connected_status(cfg)
+            data = read()
+            cfg = Settings.load(self.root)
+            self._connected_status(cfg, status=data)
             connected = True
         except ControlUnavailable as error:
-            data = {'mode': 'disconnected', 'reason': str(error)}
+            connecting = isinstance(error, ControlConnecting)
+            if raise_on_failure and not connecting:
+                raise
+            cfg = Settings.load(self.root)
+            data = {'mode': 'starting' if connecting else 'disconnected', 'reason': str(error)}
             connected = False
         states = {row['name']: row for row in data.get('groups', ()) if isinstance(row.get('name'), str)}
         sessions = []
@@ -215,8 +224,7 @@ class DesktopService:
         }
 
     def start(self):
-        self.client.start()
-        return self.status()
+        return self._read_status(self.client.start, raise_on_failure=True)
 
     def mode(self, action):
         if action not in ('enable', 'observe', 'pause'):

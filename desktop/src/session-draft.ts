@@ -2,21 +2,23 @@ export interface Conversation {
   id: string; contactId?: string; name: string; kind: "group" | "private" | "service";
   bound: boolean; paused: boolean; calibrated: boolean; placeholder?: boolean;
   windowKind?: string | null; windowSize?: [number, number] | null;
-  replyMode?: string | null; stickerFrequency?: string | null;
+  replyMode?: string | null; stickerFrequency?: string | null; webSearch?: boolean | null;
 }
 export interface SavedSessions {
-  items: Conversation[]; monitorAll: boolean; stickersEnabled: boolean;
+  items: Conversation[]; monitorAll: boolean; stickersEnabled: boolean; webSearchEnabled: boolean;
   defaultReplyMode: string; defaultStickerFrequency: string; accountLabel: string; accountKey: string; revision: string;
 }
-export type DraftRule = { replyMode: string | null; stickerFrequency: string | null };
+export type DraftRule = { replyMode: string | null; stickerFrequency: string | null; webSearch: boolean | null };
 export interface SessionDraft {
   order: Conversation[]; monitor: boolean; stickers: boolean; defaultMode: string;
   rules: Record<string, DraftRule>;
   orderConflict?: boolean;
 }
 export const rulesOf = (row: Conversation): DraftRule => ({
-  replyMode: row.replyMode ?? null, stickerFrequency: row.stickerFrequency ?? null,
+  replyMode: row.replyMode ?? null, stickerFrequency: row.stickerFrequency ?? null, webSearch: row.webSearch ?? null,
 });
+const ruleFields = ["replyMode", "stickerFrequency", "webSearch"] as const;
+export const sameRules = (a: DraftRule, b: DraftRule) => ruleFields.every(key => a[key] === b[key]);
 export const sameOrder = (a: Conversation[], b: Conversation[]) =>
   a.length === b.length && a.every((row, index) => row.id === b[index].id);
 
@@ -51,13 +53,13 @@ export function rebaseSessions(base: SavedSessions, draft: SessionDraft, next: S
     const current = resolve(id);
     if (!current || !unique.some(row => row.id === current.id)) continue;
     const before = previous.get(id);
-    const merged = rulesOf(current);
-    for (const key of ["replyMode", "stickerFrequency"] as const) {
+    const saved = rulesOf(current);
+    const merged = { ...saved };
+    const preserveEdit = <K extends keyof DraftRule>(key: K) => {
       if (!before || edited[key] !== (before[key] ?? null)) merged[key] = edited[key];
-    }
-    if (merged.replyMode !== (current.replyMode ?? null) || merged.stickerFrequency !== (current.stickerFrequency ?? null)) {
-      rules[current.id] = merged;
-    }
+    };
+    ruleFields.forEach(preserveEdit);
+    if (!sameRules(merged, saved)) rules[current.id] = merged;
   }
   return {
     order: unique, rules, orderConflict,

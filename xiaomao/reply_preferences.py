@@ -12,6 +12,8 @@ STICKER_FREQUENCIES = {
     'expressive': '爱用表情',
 }
 RULE_VALUES = {'reply_mode': REPLY_MODES, 'sticker_frequency': STICKER_FREQUENCIES}
+CONVERSATION_RULE_FIELDS = (*RULE_VALUES, 'web_search')
+DEFAULT_RULE_FIELDS = (*RULE_VALUES, 'web_search_enabled')
 
 STICKER_PACING = {'requested': (0, 0), 'occasional': (120, 3), 'natural': (60, 2), 'expressive': (20, 0)}
 
@@ -28,14 +30,18 @@ def sticker_instruction(frequency):
             '频率是表达偏好，不是每轮必须发图。严肃求助和技术细节优先文字。明确索图仍按当前请求处理。')
 
 
-def validate_rule_changes(changes, *, allow_inherit=True):
-    if not isinstance(changes, dict) or set(changes)-set(RULE_VALUES):
+def validate_rule_changes(changes, *, allow_inherit=True, defaults=False):
+    fields = DEFAULT_RULE_FIELDS if defaults else CONVERSATION_RULE_FIELDS
+    if not isinstance(changes, dict) or set(changes) - set(fields):
         raise ValueError('回复规则字段无效')
     for key, value in changes.items():
         if allow_inherit and value is None:
             continue
-        if not isinstance(value, str) or value not in RULE_VALUES[key]:
-            raise ValueError('回复方式或表情频率无效')
+        if key in RULE_VALUES:
+            if not isinstance(value, str) or value not in RULE_VALUES[key]:
+                raise ValueError('回复方式或表情频率无效')
+        elif type(value) is not bool:
+            raise ValueError('联网回复设置必须为布尔值')
     return dict(changes)
 
 
@@ -54,7 +60,7 @@ def persist_preferences(root,preferences,group=None,scope=None,*,client=None,exp
     from .client import ControlClient, ControlUnavailable
     from .config import Settings
 
-    validate_rule_changes(preferences,allow_inherit=group is not None)
+    validate_rule_changes(preferences, allow_inherit=group is not None, defaults=group is None)
     if client is None:client=ControlClient(root)
     try:client.status()
     except ControlUnavailable:

@@ -6,6 +6,7 @@ import { Button, Confirm, Empty, IconButton, PanelTitle, Select, Switch, useDraf
 type Notify = (message: string, error?: boolean) => void;
 type General = {
   model_name: string; auto_on_launch: boolean; split_replies: boolean; idle_wake: boolean;
+  web_search_enabled: boolean;
   self_display_name: string; self_name_unique_confirmed: boolean; owner_confirmed: boolean;
 };
 type Settings = General & {
@@ -27,7 +28,7 @@ function updateDraft<T>(previous: Draft<T> | undefined, value: T, next: Settings
   return previous;
 }
 const fieldsOf = (state: Settings): General => ({
-  model_name: state.model_name, auto_on_launch: state.auto_on_launch,
+  model_name: state.model_name, auto_on_launch: state.auto_on_launch, web_search_enabled: state.web_search_enabled === true,
   split_replies: state.split_replies, idle_wake: state.idle_wake, self_display_name: state.self_display_name,
   self_name_unique_confirmed: state.self_name_unique_confirmed, owner_confirmed: state.owner_confirmed,
 });
@@ -198,6 +199,7 @@ export function SettingsPage({ active, status, appearance, setAppearance, notify
                 </div>
                 {selected?.windowState && <p className="muted">{selected.windowState}</p>}
                 <Switch checked={draft.auto_on_launch} onChange={value => set("auto_on_launch", value)} disabled={editingDisabled}>启动时自动回复</Switch>
+                <Switch checked={draft.web_search_enabled} onChange={value => set("web_search_enabled", value)} disabled={editingDisabled}>启用联网回复</Switch>
                 <Switch checked={draft.split_replies} onChange={value => set("split_replies", value)} disabled={editingDisabled}>分气泡发送</Switch>
                 <Switch checked={draft.idle_wake} onChange={value => set("idle_wake", value)} disabled={editingDisabled}>空闲时唤起微信发送</Switch>
                 <label className="field">群内昵称<input value={draft.self_display_name} disabled={editingDisabled} maxLength={80}
