@@ -101,11 +101,22 @@ class NewsRuntime:
     def _submit(self, account, row):
         if row['id'] in self.jobs or len(self.jobs) >= 2 or self.closed.is_set(): return
         cancelled = threading.Event()
+        in_flight = {}
+        for pending in self.store.pending(account):
+            for delivery in pending.get('deliveries', []):
+                for part in delivery.get('parts', []):
+                    if (part.get('state') in ('queued', 'dispatching') and part.get('url')
+                            and (part.get('taskId') or part.get('requestId'))):
+                        in_flight.setdefault(delivery['scope'], set()).add(part['url'])
+        histories = [self.store.seen_urls(account, target['scope']) | self.store.uncertain_urls(account, target['scope'])
+                     | in_flight.get(target['scope'], set()) for target in row['snapshot'].get('targets', [])]
+        exclude_urls = set.intersection(*histories) if histories else set()
         def collect():
             research = self.research_factory()
             try:
                 return research.collect(row['snapshot'], row['createdAt'],
-                                        cancelled=lambda: cancelled.is_set() or self.closed.is_set())
+                                        cancelled=lambda: cancelled.is_set() or self.closed.is_set(),
+                                        exclude_urls=exclude_urls)
             finally:
                 close = getattr(research, 'close', None)
                 if close: close()
@@ -169,21 +180,41 @@ class NewsRuntime:
                     self.store.update_edition(account, row['id'], state='missed', reason='这份预览已过期，请重新生成最新资讯')
 
     def _schedule(self, account, now):
-        local = datetime.fromtimestamp(now, BEIJING)
+        from .news_schedule import due_schedule
+        pending = self.store.pending(account)
         for config in self.store.list_subscriptions(account):
             if not config.get('enabled'): continue
-            hour, minute = map(int, config['time'].split(':'))
-            for day in (local - timedelta(days=1), local):
-                if day.weekday() not in config.get('weekdays', []): continue
-                due = day.replace(hour=hour, minute=minute, second=0, microsecond=0).timestamp()
-                if now < due or day.date() != local.date() and now > due + WINDOW: continue
-                row = self.store.create_edition(account, config['id'], config, 'scheduled', day.date().isoformat(), now)
-                if row is None: continue
-                if now > due + WINDOW:
-                    self.store.update_edition(account, row['id'], state='missed', reason='已错过今天的推送时间，等待下次计划')
-                    continue
-                row = self.store.update_edition(account, row['id'], publishRequested=True, deadline=due + WINDOW)
-                self._submit(account, row)
+            plan = due_schedule(config, now, window=WINDOW)
+            if plan is None: continue
+            # Keep the latest edition, rather than releasing every missed
+            # interval on wake/resume. Native transactions still get audited.
+            for older in pending:
+                if (older['subscriptionId'] == config['id'] and older['trigger'] == 'scheduled'
+                        and older['state'] in ('collecting', 'ready', 'waiting', 'publishing')
+                        and self._scheduled_at(older) < plan['due']):
+                    self._cancel(older, account, '下一轮推送计划已到，已停止旧资讯的后续内容')
+            if self.store.get_slot(account, config['id'], plan['slot']): continue
+            legacy = self.store.get_slot(account, config['id'], plan['legacyDay'])
+            if (legacy and legacy.get('trigger') == 'scheduled'
+                    and legacy['snapshot'].get('time', '09:00') == plan['time']):
+                continue  # v0.3.16's daily record is already this occurrence.
+            row = self.store.create_edition(account, config['id'], config, 'scheduled', plan['slot'], now)
+            if row is None: continue
+            if now >= plan['deadline']:
+                self.store.update_edition(account, row['id'], state='missed', scheduledAt=plan['due'],
+                                         reason='已错过本轮推送时间，等待下次计划')
+                continue
+            row = self.store.update_edition(account, row['id'], publishRequested=True,
+                                           scheduledAt=plan['due'], deadline=plan['deadline'])
+            self._submit(account, row)
+
+    @staticmethod
+    def _scheduled_at(row):
+        if type(row.get('scheduledAt')) in (int, float): return row['scheduledAt']
+        slot = row.get('slot', '')
+        if 'T' not in slot: slot += 'T' + row['snapshot'].get('time', '09:00')
+        try: return datetime.fromisoformat(slot).replace(tzinfo=BEIJING).timestamp()
+        except (TypeError, ValueError): return row['createdAt']
 
     def _prepare_deliveries(self, account, row, now):
         from .news_research import format_parts
@@ -194,7 +225,7 @@ class NewsRuntime:
             parts = format_parts(row['snapshot'], articles, row['createdAt'])
             if len(parts) != len(articles): raise ValueError('资讯分段与来源不匹配')
             deliveries.append({**target, 'state': 'waiting' if parts else 'verified',
-                'reason': '' if parts else '没有新的未推送资讯',
+                'reason': '' if parts else '本轮来源均已向此目标确认，无新增内容',
                 'parts': [dict(text=text, url=article['url'], requestId='', taskId='', state='waiting', reason='', attempt=0)
                           for text, article in zip(parts, articles)]})
         return self.store.update_edition(account, row['id'], deliveries=deliveries)
@@ -261,7 +292,7 @@ class NewsRuntime:
         if not row.get('deliveries'):
             row = self._prepare_deliveries(account, row, now)
         self._reconcile(row, account)
-        expired = now > row.get('deadline', row['createdAt'] + WINDOW)
+        expired = now >= row.get('deadline', row['createdAt'] + WINDOW)
         for delivery in row['deliveries']:
             parts = delivery['parts']
             if all(p['state'] == 'verified' for p in parts):

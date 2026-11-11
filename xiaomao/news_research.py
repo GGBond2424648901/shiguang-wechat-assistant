@@ -114,6 +114,51 @@ def _same_title(one, two):
     return min(len(one), len(two)) >= 10 and SequenceMatcher(None, one, two, autojunk=False).ratio() >= .9
 
 
+def _topic_key(value):
+    value = unicodedata.normalize('NFKC', value).casefold()
+    return ' '.join(''.join(char if unicodedata.category(char)[0] in ('L', 'N') or char in '+#_'
+                            else ' ' for char in value).split())
+
+
+def _has_topic(term, source):
+    # Keep the source's word boundaries. Only split the requested CamelCase
+    # name so DeltaForce and Delta Force match without matching MegaDeltaForce.
+    term = unicodedata.normalize('NFKC', term)
+    term = re.sub(r'(?<=[a-z0-9])(?=[A-Z])|(?<=[A-Z])(?=[A-Z][a-z])', ' ', term)
+    term = _topic_key(term)
+    if not term:
+        return False
+    pattern = r'\s*'.join(re.escape(piece) for piece in term.split())
+    if re.match(r'[a-z0-9_+#]', term[0]):
+        pattern = r'(?<![a-z0-9_+#])' + pattern
+    if re.match(r'[a-z0-9_+#]', term[-1]):
+        pattern += r'(?![a-z0-9_+#])'
+    return re.search(pattern, source) is not None
+
+
+def _matches_topic(topic, evidence):
+    """Match source evidence, including reordered motorcycle/name compounds."""
+    target, source = _topic_key(topic), _topic_key(evidence)
+    if _has_topic(topic, source):
+        return True
+    # These vehicle terms commonly name the same news subject. Require every
+    # remaining part as well, so a generic motorcycle headline cannot qualify.
+    target = target.replace('摩托车', '摩托').replace('机车', '摩托')
+    source = source.replace('摩托车', '摩托').replace('机车', '摩托')
+    if '摩托' in target:
+        parts = [part for part in target.split('摩托') if part]
+        if _has_topic('摩托', source) and all(_has_topic(part, source) for part in parts):
+            return True
+    terms = [_topic_key(term) for term in re.split(r'[^\w+#]+', unicodedata.normalize('NFKC', topic))]
+    terms = [term for term in terms if term]
+    return len(terms) > 1 and all(_has_topic(term, source) for term in terms)
+
+
+def _unit_name(category, topic):
+    label = _LABELS.get(category, '自定义关键词')
+    return label + ' · ' + topic if topic else label
+
+
 def _complete_quote(quote, text):
     """An exact substring cannot silently discard a sentence's negation."""
     if not isinstance(text, str):
@@ -167,14 +212,21 @@ def format_parts(subscription, articles, now):
         url = article.get('url', '') if subscription.get('includeLinks', True) else ''
         url = url if _public_url(url) else ''
         header = f'每日资讯 · {day}（北京时间）\n' if index == 1 else f'资讯 · {day}\n'
+        topic = _plain(article.get('topic'), 60)
+        tag = '方向：' + _unit_name(_plain(article.get('category'), 30), topic) + '\n' if topic else ''
         ending = '\n来源：' + source + ' · ' + label + ('\n' + url if url else '')
-        prefix = header + str(index) + '. '
+        prefix = header + tag + str(index) + '. '
         budget = 1000 - len(prefix) - len(ending)
         # search_public bounds URLs at 800. Retain its full URL; shorten only
         # presentation text. Even a long hostname gets enough room for a title.
         if budget < 24:
             source = source[:20]
             ending = '\n来源：' + source + ' · ' + label + ('\n' + url if url else '')
+            budget = 1000 - len(prefix) - len(ending)
+        if budget < 24 and tag:
+            tag_budget = max(0, 1000 - len(header + str(index) + '. ') - len(ending) - 24)
+            tag = tag[:max(0, tag_budget - 1)].rstrip() + '\n' if tag_budget > 1 else ''
+            prefix = header + tag + str(index) + '. '
             budget = 1000 - len(prefix) - len(ending)
         title_budget = min(len(title), max(1, budget if not summary else min(120, budget // 2)))
         title = title[:title_budget]
@@ -202,32 +254,53 @@ class NewsResearch:
         start = datetime.fromtimestamp(now - config['lookbackHours'] * 3600, LOCAL).strftime('%Y-%m-%d')
         keywords = config['keywords']
         pieces = [keywords[i:i + 60] for i in range(0, len(keywords), 60)] or ['']
-        bases = [(key, _CATEGORY_QUERIES[key]) for key in config['categories']]
+        bases = []
+        for category in config['categories']:
+            topics = config['categoryTopics'].get(category, [])
+            if topics:
+                bases.extend((category, topic, _LABELS[category] + ' ' + topic + ' 资讯') for topic in topics)
+            else:
+                bases.append((category, '', _CATEGORY_QUERIES[category]))
         if not bases:
-            bases = [('custom', '')]
+            bases = [('custom', '', '')]
         hosts = config['sourceDomains'].split(',') if config['sourceDomains'] else []
         queries = []
-        for index, (key, base) in enumerate(bases):
-            theme = ' '.join(filter(None, (base, pieces[0])))
+        for index, (category, topic, base) in enumerate(bases):
+            # Retain the complete custom topic even when global keywords would
+            # push the query beyond the public transport's 120-character bound.
+            span = f'{start} 至 {end}'
+            allowance = max(0, 120 - len(base) - len(span) - 2)
+            theme = ' '.join(filter(None, (base, pieces[0][:allowance])))
             host = hosts[index % len(hosts)] if hosts else ''
-            text = f'{theme} {start} 至 {end}'
+            text = f'{theme} {span}'
             if host and len(text + ' site:' + host) <= 120:
                 text += ' site:' + host
             query = public_query(text)
             if query:
-                queries.append((key, query))
-        for piece in pieces[1:]:
-            query = public_query(f'{piece} 新闻 {start} 至 {end}')
+                queries.append((category, topic, query))
+        for index, piece in enumerate(pieces[1:]):
+            category, topic, base = bases[index % len(bases)]
+            span = f'{start} 至 {end}'
+            allowance = max(0, 120 - len(base) - len(span) - 2)
+            theme = ' '.join(filter(None, (base, piece[:allowance])))
+            query = public_query(f'{theme} {span}')
             if query:
-                queries.append(('custom', query))
+                queries.append((category, topic, query))
         # When a single direction has several constrained sources, query each
         # extra host as well. The full host allowlist still filters every hit.
         for host in hosts[len(bases):]:
-            theme = keywords[:40] or bases[0][1]
-            query = public_query(f'{theme} {end} site:{host}')
+            category, topic, base = bases[0]
+            theme = base if topic else keywords[:40] or base
+            text = f'{theme} {end}'
+            if len(text + ' site:' + host) <= 120:
+                text += ' site:' + host
+            query = public_query(text)
             if query:
-                queries.append((bases[0][0], query))
-        return list(dict.fromkeys(queries))[:24]
+                queries.append((category, topic, query))
+        # Validation bounds this to at most 24 topic units, the remaining
+        # category units, two keyword continuations and four extra host queries.
+        # Every selected topic keeps its own query; no tail slicing is needed.
+        return list(dict.fromkeys(queries))
 
     def _search(self, key, query, cancelled):
         # Resident jobs may use separate research instances as model settings
@@ -243,7 +316,7 @@ class NewsResearch:
         finally:
             _SEARCH_GATE.release()
 
-    def collect(self, subscription, now, cancelled=lambda: False):
+    def collect(self, subscription, now, cancelled=lambda: False, *, exclude_urls=()):
         warnings = []
 
         def stopped():
@@ -258,6 +331,7 @@ class NewsResearch:
             config = validate_subscription(subscription)
         except ValueError as error:
             return empty(str(error))
+        excluded_urls = {_citation_identity(url) for url in exclude_urls if _public_url(url)}
         try:
             keys = self.model.credentials.get_keys()
             if not keys:
@@ -270,44 +344,46 @@ class NewsResearch:
             return empty('公开检索词无效，未发起查询')
         deadline = monotonic() + 75
         pending, results = {}, {}
-        for index, (category, query) in enumerate(queries):
+        for index, (category, topic, query) in enumerate(queries):
             if stopped():
                 break
             try:
                 future = self._pool.submit(self._search, key, query, stopped)
             except RuntimeError:
                 return empty('资讯采集已取消')
-            pending[future] = (index, category)
+            pending[future] = (index, category, topic)
         while pending:
             if stopped() or monotonic() >= deadline:
                 for future in pending:
                     future.cancel()
                 if stopped():
                     return empty('资讯采集已取消')
-                warnings.append('部分方向检索超时，未完成的结果未采用')
+                names = [_unit_name(category, topic) for _, category, topic in pending.values()]
+                warnings.append('部分方向或主题检索超时，未完成的结果未采用：' + '、'.join(dict.fromkeys(names)))
                 break
             completed, _ = wait(pending, timeout=.05, return_when=FIRST_COMPLETED)
             for future in completed:
-                index, category = pending.pop(future)
+                index, category, topic = pending.pop(future)
                 try:
                     rows = future.result()
                 except Exception:
                     rows = None
-                results[index] = (category, rows)
+                results[index] = (category, topic, rows)
         if stopped():
             return empty('资讯采集已取消')
         hosts = config['sourceDomains'].split(',') if config['sourceDomains'] else []
         exclusions = [word.strip().casefold() for word in re.split(r'[,，]', config['excludeKeywords']) if word.strip()]
         sources, known_urls, known_titles = [], set(), []
-        rejected = 0
+        rejected, excluded = 0, set()
+        failed_units, empty_units = [], []
         for index in sorted(results):
-            category, rows = results[index]
-            name = _LABELS.get(category, '自定义关键词')
+            category, topic, rows = results[index]
+            name = _unit_name(category, topic)
             if rows is None:
-                warnings.append(name + '检索失败，服务暂不可用')
+                failed_units.append(name)
                 continue
             if not rows:
-                warnings.append(name + '未找到可用公开来源')
+                empty_units.append(name)
                 continue
             for row in rows[:4]:
                 if not isinstance(row, dict):
@@ -319,11 +395,15 @@ class NewsResearch:
                     rejected += 1
                     continue
                 url = _citation_identity(url)
+                if url in excluded_urls:
+                    excluded.add(url)
+                    continue
                 host = urlsplit(url).hostname.lower().rstrip('.')
                 published, label, day_only = _publication(row)
                 invalid = (hosts and not any(host == h or host.endswith('.' + h) for h in hosts))
                 invalid = (invalid or any(word in evidence.casefold() for word in exclusions)
                            or _INJECTION.search(evidence) or has_unverified_link(title, [url])
+                           or (topic and not _matches_topic(topic, evidence))
                            or _title_is_old(title, now, config['lookbackHours']))
                 if published:
                     invalid = invalid or published + (86400 if day_only else 0) < now - config['lookbackHours'] * 3600
@@ -337,19 +417,37 @@ class NewsResearch:
                 known_urls.add(url)
                 known_titles.append(title_key)
                 sources.append({'id': hashlib.sha256(url.encode()).hexdigest()[:24], 'title': title,
-                                'summary': _fallback(row), 'url': url, 'source': host, 'category': category,
+                                'summary': _fallback(row), 'url': url, 'source': host,
+                                'category': category, 'topic': topic,
                                 'publishedAt': published, 'timeLabel': label, '_evidence': row})
+        if failed_units:
+            warnings.append('公开检索失败，服务暂不可用：' + '、'.join(dict.fromkeys(failed_units)))
+        if empty_units:
+            warnings.append('未找到可用公开来源：' + '、'.join(dict.fromkeys(empty_units)))
         if rejected:
-            warnings.append(f'已跳过 {rejected} 条过期、未来、排除或不可信来源')
+            warnings.append(f'已跳过 {rejected} 条过期、未来、排除、主题不符或不可信来源')
+        if excluded:
+            warnings.append(f'已跳过 {len(excluded)} 条已推送或待回执核对的来源')
         buckets = {}
         for row in sources:
-            buckets.setdefault(row['category'], []).append(row)
-        sources = [rows[index] for index in range(4) for rows in buckets.values() if index < len(rows)][:config['itemCount']]
+            buckets.setdefault((row['category'], row['topic']), []).append(row)
+        depth = max((len(rows) for rows in buckets.values()), default=0)
+        sources = [rows[index] for index in range(depth) for rows in buckets.values()
+                   if index < len(rows)][:config['itemCount']]
         included = {row['category'] for row in sources}
         missing = [key for key in config['categories'] if key not in included]
         if missing and sources:
             warnings.append('本次未包含方向：' + '、'.join(_LABELS[key] for key in missing)
                             + '（条数限制、来源不足或去重）')
+        included_topics = {(row['category'], row['topic']) for row in sources}
+        missing_topics = [_unit_name(category, topic) for category in config['categories']
+                          for topic in config['categoryTopics'].get(category, [])
+                          if (category, topic) not in included_topics]
+        if missing_topics:
+            warnings.append('本次未包含细分主题：' + '、'.join(missing_topics)
+                            + '（条数限制、来源不足、主题不符或去重）')
+        if sources and len(sources) < config['itemCount']:
+            warnings.append(f'本次仅找到 {len(sources)}/{config["itemCount"]} 条可用资讯（来源不足、过滤或去重）')
         if not sources:
             if not warnings:
                 warnings.append('未找到符合时间与来源条件的资讯')

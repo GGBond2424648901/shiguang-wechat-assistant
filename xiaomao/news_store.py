@@ -177,6 +177,14 @@ class NewsStore:
                                            (account, id)).fetchone()
         return json.loads(row[0]) if row else None
 
+    def get_slot(self, account, subscription_id, slot):
+        account = _account(account)
+        with self._lock:
+            row = self._connection.execute('''SELECT data FROM news_editions
+                WHERE account=? AND subscription=? AND slot=?''',
+                (account, subscription_id, slot)).fetchone()
+        return json.loads(row[0]) if row else None
+
     def update_edition(self, account, id, **changes):
         account = _account(account)
         if {'id', 'subscriptionId', 'snapshot', 'trigger', 'slot', 'createdAt'} & changes.keys():

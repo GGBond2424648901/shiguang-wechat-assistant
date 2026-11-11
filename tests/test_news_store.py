@@ -1,4 +1,5 @@
 from concurrent.futures import ThreadPoolExecutor
+import json
 import os
 
 import pytest
@@ -245,4 +246,58 @@ def test_terminal_editions_with_inflight_receipts_remain_pending_until_audited(t
                          deliveries=[{'scope': 's', 'parts': [{'taskId': 'task', 'state': 'verified'}]}])
     assert store.pending('account') == []
     assert store.get_edition('account', edition['id'])['state'] == state
+    store.close()
+
+
+def test_exact_slot_lookup_is_account_subscription_scoped_and_not_capped_by_history(tmp_path):
+    store = NewsStore(tmp_path)
+    config = store.save_subscription('account', default_subscription())
+    other = store.save_subscription('account', default_subscription())
+    store.save_subscription('other-account', config)
+    slot = '2026-11-11T09:00'
+    first = store.create_edition('account', config['id'], config, 'scheduled', slot, 1)
+    store.create_edition('account', other['id'], other, 'scheduled', slot, 2)
+    store.create_edition('other-account', config['id'], config, 'scheduled', slot, 3)
+    for index in range(129):
+        store.create_edition('account', config['id'], config, 'preview', '', index + 4)
+    assert first['id'] not in {row['id'] for row in store.history('account', limit=128)}
+    assert store.get_slot('account', config['id'], slot)['id'] == first['id']
+    assert store.get_slot('account', config['id'], '2026-11-11') is None
+    assert store.get_slot('account', 'missing-subscription', slot) is None
+    assert store.get_slot('missing-account', config['id'], slot) is None
+    assert store.get_slot('account', config['id'], '') is None
+    store.close()
+
+
+def test_multiple_actual_slots_on_one_day_remain_independently_unique(tmp_path):
+    store = NewsStore(tmp_path)
+    config = store.save_subscription('account', default_subscription())
+    ids = []
+    for clock in ('09:00', '12:00', '18:00'):
+        slot = f'2026-11-11T{clock}'
+        row = store.create_edition('account', config['id'], config, 'scheduled', slot, 1)
+        ids.append(row['id'])
+        assert store.get_slot('account', config['id'], slot)['id'] == row['id']
+        assert store.create_edition('account', config['id'], config, 'scheduled', slot, 2) is None
+    assert len(set(ids)) == 3
+    store.close()
+
+
+def test_reading_legacy_subscription_does_not_rewrite_config_or_increment_revision(tmp_path):
+    store = NewsStore(tmp_path)
+    legacy = default_subscription()
+    legacy.pop('times', None)
+    legacy.pop('timeRanges', None)
+    legacy.update(time='17:30', revision=7, targets=[])
+    serialized = json.dumps(legacy, ensure_ascii=False)
+    with store._connection:
+        store._connection.execute('INSERT INTO news_subscriptions VALUES(?,?,?,?)',
+                                  ('account', legacy['id'], 7, serialized))
+    assert store.list_subscriptions('account') == [legacy]
+    assert store.get_subscription('account', legacy['id']) == legacy
+    stored = store._connection.execute('SELECT revision,data FROM news_subscriptions').fetchone()
+    assert stored == (7, serialized)
+    saved = store.save_subscription('account', legacy, expected_revision=7)
+    assert saved.get('times') == ['17:30'] and saved.get('timeRanges') == []
+    assert saved['revision'] == 8
     store.close()

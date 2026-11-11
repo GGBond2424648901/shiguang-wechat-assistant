@@ -9,7 +9,7 @@ import { errorMessage, type Session, type Status } from "./api";
 import { Button, Empty, IconButton, PanelTitle, Select, Switch, useDraftGuard } from "./components";
 import {
   commandNews, deleteNews, editableSubscription, readNews, readNewsState, safeNewsUrl, saveNews, subscriptionSignature,
-  type NewsCategory, type NewsDelivery, type NewsDraft, type NewsEdition, type NewsRead, type NewsState, type NewsSubscription,
+  type NewsCategory, type NewsDelivery, type NewsDraft, type NewsEdition, type NewsRead, type NewsState, type NewsSubscription, type NewsTimeRange,
 } from "./news-api";
 import "./news.css";
 
@@ -27,8 +27,8 @@ const initialCategories: NewsCategory[] = [
   ["travel", "旅游"], ["life", "生活"], ["education", "教育"], ["science", "科学"], ["auto", "汽车"], ["health", "健康"],
 ].map(([id, label]) => ({ id, label }));
 const emptyDraft: NewsDraft = {
-  name: "我的每日早报", enabled: false, selectionMode: "multiple", categories: ["technology"], keywords: "",
-  excludeKeywords: "", sourceDomains: "", time: "09:00", weekdays: [0, 1, 2, 3, 4, 5, 6], itemCount: 5,
+  name: "我的每日早报", enabled: false, selectionMode: "multiple", categories: ["technology"], categoryTopics: {}, keywords: "",
+  excludeKeywords: "", sourceDomains: "", time: "09:00", times: ["09:00"], timeRanges: [], weekdays: [0, 1, 2, 3, 4, 5, 6], itemCount: 5,
   lookbackHours: 24, style: "brief", includeLinks: true, recipients: [],
 };
 const collectingStates = new Set(["collecting", "generating", "researching"]);
@@ -49,10 +49,56 @@ const dayText = (value: number) => value > 0 ? new Intl.DateTimeFormat("zh-CN", 
   timeZone: "Asia/Shanghai", month: "long", day: "numeric",
 }).format(value * 1000) : "简报预览";
 
+const validTime = (value: string) => /^([01]\d|2[0-3]):[0-5]\d$/.test(value);
+const validTopic = (value: string) => value.trim().length > 0 && Array.from(value.trim()).length <= 60;
+
+function topicValidationError(draft: NewsDraft) {
+  const groups = Object.entries(draft.categoryTopics ?? {});
+  if (groups.reduce((count, [, topics]) => count + topics.length, 0) > 24) return "细分主题总计最多设置 24 个（含未选方向保留的主题）";
+  for (const [category, topics] of groups) {
+    const label = initialCategories.find(value => value.id === category)?.label || category;
+    if (topics.length > 8) return `${label}最多设置 8 个细分主题`;
+    const invalid = topics.findIndex(topic => !validTopic(topic));
+    if (invalid >= 0) return `${label}主题 ${invalid + 1} 应为 1 至 60 字，请填写或删除${draft.categories.includes(category) ? "" : "（请重新选择该方向）"}`;
+  }
+  return "";
+}
+
+function scheduleValidationError(draft: NewsDraft) {
+  const times = draft.times ?? [draft.time];
+  const ranges = draft.timeRanges ?? [];
+  if (!times.length && !ranges.length) return "请至少保留一个固定时间或时间段";
+  if (times.length > 48) return "固定时间最多可设置 48 个";
+  const invalidTime = times.findIndex(time => !validTime(time));
+  if (invalidTime >= 0) return `请填写固定时间 ${invalidTime + 1}（HH:MM）`;
+  if (ranges.length > 8) return "时间段最多可设置 8 个";
+  for (const [index, range] of ranges.entries()) {
+    if (!validTime(range.start) || !validTime(range.end)) return `请填写时间段 ${index + 1} 的开始和结束时间`;
+    if (range.start === range.end) return `时间段 ${index + 1} 的开始和结束时间不能相同`;
+    if (!Number.isInteger(range.intervalMinutes) || range.intervalMinutes < 1 || range.intervalMinutes > 1440) {
+      return `时间段 ${index + 1} 的间隔应为 1 至 1440 分钟`;
+    }
+  }
+  return "";
+}
+
+function scheduleSummary(draft: NewsDraft) {
+  const times = [...new Set((draft.times ?? [draft.time]).filter(validTime))].sort();
+  const rangeCount = draft.timeRanges?.length ?? 0;
+  const dayLabel = draft.weekdays.length === 7 ? "每天" : draft.weekdays.length
+    ? [...draft.weekdays].sort((a, b) => a - b).map(day => `周${weekdays[day]}`).join("、") : "尚未选择星期";
+  const fixed = times.length > 3 ? `${times.slice(0, 2).join("、")} 等 ${times.length} 个固定时间`
+    : times.length ? `${times.join("、")} · ${times.length} 个固定时间` : "";
+  return `${dayLabel} · ${[fixed, rangeCount ? `${rangeCount} 个时间段` : ""].filter(Boolean).join(" · ") || "请设置推送时间"}`;
+}
+
 function validationError(draft: NewsDraft) {
   if (!draft.name.trim()) return "请填写订阅名称";
   if (!draft.categories.length && !draft.keywords.trim()) return "请至少选择一个资讯方向，或填写公开关键词";
-  if (!/^([01]\d|2[0-3]):[0-5]\d$/.test(draft.time)) return "请设置有效的推送时间";
+  const topicError = topicValidationError(draft);
+  if (topicError) return topicError;
+  const scheduleError = scheduleValidationError(draft);
+  if (scheduleError) return scheduleError;
   if (!draft.weekdays.length) return "请至少选择一个推送星期";
   if (!Number.isInteger(draft.itemCount) || draft.itemCount < 1 || draft.itemCount > 12) return "资讯条数应为 1 至 12 条";
   if (draft.enabled && !draft.recipients.length) return "启用定时推送前，请选择已确认身份的目标会话";
@@ -99,6 +145,8 @@ export function NewsPage({ active, status, notify, manageSessions }: {
   const confirmId = useId();
   const advancedId = useId();
   const targetsId = useId();
+  const topicsId = useId();
+  const scheduleId = useId();
   const dirty = subscriptionSignature(draft) !== baseline;
   const accountKey = status?.accountScope || (status?.sessions.map(session => session.id).sort().join("|") ?? "");
   const accountChanged = loadedAccount.current !== undefined && loadedAccount.current !== accountKey;
@@ -121,6 +169,12 @@ export function NewsPage({ active, status, notify, manageSessions }: {
   const collecting = !!edition && collectingStates.has(edition.state);
   const sending = !!edition && sendingStates.has(edition.state);
   const formError = validationError(draft);
+  const times = draft.times ?? [draft.time];
+  const timeRanges = draft.timeRanges ?? [];
+  const scheduleError = scheduleValidationError(draft);
+  const categoryTopics = draft.categoryTopics ?? {};
+  const topicCount = Object.values(categoryTopics).reduce((count, topics) => count + topics.length, 0);
+  const topicError = topicValidationError(draft);
   useDraftGuard("news", dirty);
 
   function accept(value: NewsSubscription | NewsDraft, saved = true) {
@@ -205,6 +259,63 @@ export function NewsPage({ active, status, notify, manageSessions }: {
 
   function field<K extends keyof NewsDraft>(key: K, value: NewsDraft[K]) {
     setDraft(before => ({ ...before, [key]: value }));
+  }
+
+  function addCategoryTopic(category: string) {
+    setDraft(before => {
+      const groups = before.categoryTopics ?? {};
+      const current = groups[category] ?? [];
+      if (current.length >= 8 || Object.values(groups).reduce((count, topics) => count + topics.length, 0) >= 24) return before;
+      return { ...before, categoryTopics: { ...groups, [category]: [...current, ""] } };
+    });
+  }
+
+  function updateCategoryTopic(category: string, index: number, value: string) {
+    setDraft(before => ({ ...before, categoryTopics: { ...before.categoryTopics,
+      [category]: (before.categoryTopics?.[category] ?? []).map((topic, at) => at === index ? value : topic) } }));
+  }
+
+  function removeCategoryTopic(category: string, index: number) {
+    setDraft(before => ({ ...before, categoryTopics: { ...before.categoryTopics,
+      [category]: (before.categoryTopics?.[category] ?? []).filter((_, at) => at !== index) } }));
+  }
+
+  function updateTime(index: number, value: string) {
+    setDraft(before => ({ ...before, times: (before.times ?? [before.time]).map((time, at) => at === index ? value : time) }));
+  }
+
+  function addTime() {
+    setDraft(before => {
+      const current = before.times ?? [before.time];
+      if (current.length >= 48) return before;
+      // Start each new row empty so the chosen time is always explicit.
+      return { ...before, times: [...current, ""] };
+    });
+  }
+
+  function removeTime(index: number) {
+    setDraft(before => {
+      const current = before.times ?? [before.time];
+      if (current.length + (before.timeRanges?.length ?? 0) <= 1) return before;
+      return { ...before, times: current.filter((_, at) => at !== index) };
+    });
+  }
+
+  function updateRange(index: number, changes: Partial<NewsTimeRange>) {
+    setDraft(before => ({ ...before, timeRanges: (before.timeRanges ?? []).map((range, at) => at === index ? { ...range, ...changes } : range) }));
+  }
+
+  function addRange() {
+    setDraft(before => (before.timeRanges?.length ?? 0) >= 8 ? before
+      : { ...before, timeRanges: [...(before.timeRanges ?? []), { start: "09:00", end: "18:00", intervalMinutes: 60 }] });
+  }
+
+  function removeRange(index: number) {
+    setDraft(before => {
+      const current = before.timeRanges ?? [];
+      if ((before.times ?? [before.time]).length + current.length <= 1) return before;
+      return { ...before, timeRanges: current.filter((_, at) => at !== index) };
+    });
   }
 
   function chooseCategory(id: string) {
@@ -332,7 +443,7 @@ export function NewsPage({ active, status, notify, manageSessions }: {
     : targets.every(target => !!sessionBlock(target)) ? "所选目标尚未具备发送条件，请核对校准与会话状态"
     : "");
   const blockedTargets = targets.filter(target => !!sessionBlock(target)).length;
-  const schedule = draft.enabled ? `${draft.weekdays.length === 7 ? "每天" : draft.weekdays.map(day => `周${weekdays[day]}`).join("、")} ${draft.time}` : "定时推送未启用";
+  const schedule = draft.enabled ? scheduleSummary(draft) : "定时推送未启用";
   const selectorOptions = [
     ...(!draft.id ? [{ value: "", label: `${draft.name.trim() || "新订阅"}（未保存）` }] : []),
     ...(data?.subscriptions.map(row => ({ value: row.id, label: row.name })) ?? []),
@@ -391,25 +502,82 @@ export function NewsPage({ active, status, notify, manageSessions }: {
               </Button>;
             })}</div>
             <p className="news-topic-count muted">已选 {draft.categories.length} 个方向{draft.selectionMode === "single" ? " · 点击其他方向替换" : " · 可再次点击取消"}</p>
+            {draft.categories.length > 0 && <section className="news-category-topic-settings" aria-label="按方向细化关注内容">
+              <div className="news-topic-settings-heading"><h4>细化关注内容</h4>
+                <span role="status" aria-label="细分主题数量">{topicCount} / 24 个主题</span></div>
+              <div className="news-category-topic-groups">{draft.categories.map(category => {
+                const label = categoryNames.get(category) || category;
+                const topics = categoryTopics[category] ?? [];
+                const Icon = categoryIcons[category] ?? Tag;
+                const placeholder = category === "game" ? "如：三角洲" : category === "sports" ? "如：张雪摩托" : "填写公开作品、事件或人物";
+                return <div className="news-category-topics" key={category} role="group" aria-label={`${label}细分内容`}>
+                  <div className="news-category-topic-heading"><span><Icon size={14} />{label}<small>{topics.length} / 8</small></span>
+                    <Button variant="ghost" className="news-add-rule" icon={<Plus size={14} />} disabled={!mutable || topics.length >= 8 || topicCount >= 24}
+                      onClick={() => addCategoryTopic(category)}>添加{label}主题</Button></div>
+                  {topics.length > 0 && <div className="news-category-topic-values">{topics.map((topic, index) =>
+                    <div className="news-category-topic-row" key={index}><label className="field"><input aria-label={`${label}细分主题 ${index + 1}`}
+                      value={topic} placeholder={placeholder} maxLength={120} disabled={!mutable} aria-invalid={!validTopic(topic)}
+                      aria-describedby={`${topicsId}-hint${topicError ? ` ${topicsId}-error` : ""}`}
+                      onChange={event => updateCategoryTopic(category, index, event.target.value)} /></label>
+                      <IconButton label={`删除${label}主题 ${index + 1}`} icon={<X size={14} />} disabled={!mutable}
+                        onClick={() => removeCategoryTopic(category, index)} /></div>)}</div>}
+                </div>;
+              })}</div>
+              <p id={`${topicsId}-hint`} className="news-category-topic-hint muted">每个主题 1 至 60 字；未填写时按整个方向检索。主题只用于对应方向，总数包含未选方向保留的主题。</p>
+              {topicError && <p className="news-schedule-error" id={`${topicsId}-error`} role="alert"><CircleAlert size={14} />{topicError}</p>}
+            </section>}
           </section>
 
           <label className="field news-keywords"><span><Tag size={20} />关注关键词</span><input aria-label="关注关键词" value={draft.keywords}
-            placeholder="可补充游戏名、作品名或主题" maxLength={180} disabled={!mutable}
+            placeholder="对所有方向生效，可选" maxLength={180} disabled={!mutable}
             onChange={event => field("keywords", event.target.value)} /></label>
 
           <section className="news-schedule" aria-label="推送计划">
-            <div className="news-section-heading"><h3><CalendarDays size={22} />推送计划</h3></div>
-            <div className="news-schedule-time"><label className="field"><span>时间</span><input type="time" aria-label="每天推送时间"
-              value={draft.time} disabled={!mutable} onChange={event => field("time", event.target.value)} /></label>
-              <span className="muted news-timezone">北京时间</span>
+            <div className="news-section-heading"><h3><CalendarDays size={22} />推送计划</h3>
+              <div className="news-schedule-options"><span className="muted news-timezone">北京时间</span>
               <div className="field news-count"><Select label="资讯条数" value={String(draft.itemCount)} disabled={!mutable}
                 options={Array.from({ length: 12 }, (_, index) => ({ value: String(index + 1), label: `${index + 1} 条` }))}
                 onChange={value => field("itemCount", Number(value))} /></div>
+              </div>
             </div>
+            <div className="news-rule-heading"><span>固定时间 <small>{times.length} / 48</small></span>
+              <Button className="news-add-rule" variant="ghost" icon={<Plus size={15} />} disabled={!mutable || times.length >= 48}
+                onClick={addTime}>添加固定时间</Button></div>
+            {times.length > 0 && <div className="news-fixed-times" role="group" aria-label="固定推送时间">{times.map((time, index) =>
+              <div className="news-fixed-time-row" key={index}>
+                <label className="field"><span>时间 {index + 1}</span><input type="time" aria-label={`固定时间 ${index + 1}`}
+                  value={time} disabled={!mutable} aria-invalid={!validTime(time)} aria-describedby={scheduleError ? `${scheduleId}-error` : undefined}
+                  onChange={event => updateTime(index, event.target.value)} /></label>
+                <IconButton label={`删除固定时间 ${index + 1}`} icon={<X size={15} />} disabled={!mutable || times.length + timeRanges.length <= 1}
+                  onClick={() => removeTime(index)} />
+              </div>)}</div>}
+            <div className="news-rule-heading news-ranges-heading"><span>时间段 <small>{timeRanges.length} / 8</small></span>
+              <Button className="news-add-rule" variant="ghost" icon={<Plus size={15} />} disabled={!mutable || timeRanges.length >= 8}
+                onClick={addRange}>添加时间段</Button></div>
+            {timeRanges.length > 0 && <div className="news-time-ranges" role="group" aria-label="按间隔推送的时间段">{timeRanges.map((range, index) =>
+              <div className="news-time-range-row" key={index} role="group" aria-label={`时间段 ${index + 1}`}>
+                <label className="field"><span>开始</span><input type="time" aria-label={`时间段 ${index + 1} 开始时间`} value={range.start}
+                  disabled={!mutable} aria-invalid={!validTime(range.start) || range.start === range.end}
+                  aria-describedby={`${scheduleId}-hint`} onChange={event => updateRange(index, { start: event.target.value })} /></label>
+                <label className="field"><span>结束{validTime(range.end) && validTime(range.start) && range.end < range.start ? " · 次日" : ""}</span>
+                  <input type="time" aria-label={`时间段 ${index + 1} 结束时间`} value={range.end} disabled={!mutable}
+                    aria-invalid={!validTime(range.end) || range.start === range.end} aria-describedby={`${scheduleId}-hint`}
+                    onChange={event => updateRange(index, { end: event.target.value })} /></label>
+                <label className="field news-range-interval"><span>每隔（分钟）</span><input type="number" min={1} max={1440} step={1}
+                  aria-label={`时间段 ${index + 1} 间隔分钟`} value={Number.isNaN(range.intervalMinutes) ? "" : range.intervalMinutes}
+                  disabled={!mutable} aria-invalid={!Number.isInteger(range.intervalMinutes) || range.intervalMinutes < 1 || range.intervalMinutes > 1440}
+                  onChange={event => updateRange(index, { intervalMinutes: event.target.valueAsNumber })} /></label>
+                <IconButton label={`删除时间段 ${index + 1}`} icon={<X size={15} />} disabled={!mutable || times.length + timeRanges.length <= 1}
+                  onClick={() => removeRange(index)} />
+              </div>)}</div>}
+            <p className="news-schedule-hint muted" id={`${scheduleId}-hint`}>固定时间与时间段可组合，同一分钟只推送一期。跨午夜时，星期按开始日计算。</p>
+            <p className="news-schedule-hint muted">定时推送恢复时只补最近一期；新一期开始后，停止上一期未发送的内容。</p>
             <div className="news-weekdays" role="group" aria-label="推送星期">{weekdays.map((label, day) =>
               <Button key={day} className={draft.weekdays.includes(day) ? "selected" : ""} aria-label={`星期${label}`}
                 aria-pressed={draft.weekdays.includes(day)} disabled={!mutable} onClick={() => field("weekdays",
                   draft.weekdays.includes(day) ? draft.weekdays.filter(value => value !== day) : [...draft.weekdays, day].sort((a, b) => a - b))}>{label}</Button>)}</div>
+            <p className="news-schedule-summary" role="status" aria-label="推送计划摘要">{scheduleSummary(draft)}</p>
+            {scheduleError && <p className="news-schedule-error" id={`${scheduleId}-error`} role="alert"><CircleAlert size={14} />{scheduleError}</p>}
             <div className="news-target-heading"><span><Send size={18} />发送到</span>
               <Button variant="ghost" className="news-manage" onClick={manageSessions}>管理会话 <ArrowUpRight size={13} /></Button></div>
             <div className="news-targets" role="group" aria-label="已选推送目标">
@@ -484,7 +652,7 @@ export function NewsPage({ active, status, notify, manageSessions }: {
                 const Icon = categoryIcons[article.category] ?? Newspaper;
                 return <li className="news-article" key={article.id || `${article.url}-${index}`}>
                   <span className="news-article-index" aria-hidden="true">{index + 1}</span>
-                  <div className="news-article-main"><span className="news-article-category"><Icon size={15} />{categoryNames.get(article.category) || "资讯"}</span>
+                  <div className="news-article-main"><span className="news-article-category"><Icon size={15} /><span>{categoryNames.get(article.category) || "资讯"}{article.topic ? ` · ${article.topic}` : ""}</span></span>
                     <h3>{article.title}</h3><p>{article.summary}</p>
                     <div className="news-article-source">{url ? <a href={url} target="_blank" rel="noopener noreferrer"><ArrowUpRight size={16} />来源：{article.source || new URL(url).hostname}</a>
                       : <span>来源链接不可用</span>}
@@ -510,7 +678,7 @@ export function NewsPage({ active, status, notify, manageSessions }: {
               <p><Info size={15} />预览只采集公开资讯，不会向微信发送消息</p></div>}
           </> : <div className="news-history">
             {live?.history.length ? live.history.map(row => <details className="news-history-item" key={row.id}>
-              <summary><span className={`news-history-state state-${row.state}`}>{labelFor(row.state)}</span><span>{dateTime(row.createdAt)}</span>
+              <summary><span className={`news-history-state state-${row.state}`}>{labelFor(row.state)}</span><span>{dateTime(row.scheduledAt || row.createdAt)}</span>
                 <small>{row.trigger === "schedule" || row.trigger === "scheduled" ? "定时推送" : row.trigger === "preview" ? "手动预览 / 推送" : "手动推送"} · {row.articles.length} 条</small><ChevronRight size={16} /></summary>
               {row.reason && <p className="news-history-reason">{row.reason}</p>}
               {row.deliveries.length ? <DeliveryReceipts deliveries={row.deliveries} /> : <p className="news-history-reason muted">本次尚无实际发送回执</p>}
@@ -522,7 +690,7 @@ export function NewsPage({ active, status, notify, manageSessions }: {
     </div>
 
     <footer className="news-footer glass">
-      <div className="news-footer-status"><Clock3 size={23} /><div><span>{draft.enabled ? "下次计划" : "推送计划"} <strong>{schedule}</strong></span>
+      <div className="news-footer-status"><Clock3 size={23} /><div><span>推送计划 <strong>{schedule}</strong></span>
         <small>{dirty ? "有未保存的修改" : base ? "订阅已保存" : "新订阅未保存"} · 北京时间{draft.recipients.length
           ? ` · ${draft.recipients.length} 个目标 / ${contentMatches && edition?.articles.length ? edition.articles.length : `最多 ${draft.itemCount}`} 条资讯`
           : " · 尚未选择目标"}</small></div></div>

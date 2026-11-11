@@ -4,6 +4,7 @@ import re
 import unicodedata
 import uuid
 
+from .news_schedule import normalize_schedule
 from .web_search import _public_url, public_query
 
 
@@ -26,8 +27,9 @@ _IDS = {row['id'] for row in CATEGORIES}
 
 def default_subscription():
     return dict(id=uuid.uuid4().hex, name='每日资讯', enabled=False, selectionMode='multiple',
-                categories=['technology'], keywords='', excludeKeywords='', sourceDomains='',
-                time='09:00', weekdays=list(range(7)), itemCount=5, lookbackHours=24,
+                categories=['technology'], categoryTopics={}, keywords='', excludeKeywords='', sourceDomains='',
+                time='09:00', times=['09:00'], timeRanges=[],
+                weekdays=list(range(7)), itemCount=5, lookbackHours=24,
                 style='brief', includeLinks=True, recipients=[])
 
 
@@ -71,6 +73,26 @@ def validate_subscription(value):
     clean['categories'] = list(dict.fromkeys(categories))
     if clean['selectionMode'] == 'single' and len(clean['categories']) > 1:
         raise ValueError('单选模式只能选择一个方向')
+    topics = clean['categoryTopics']
+    if not isinstance(topics, dict):
+        raise ValueError('分类细分主题必须为对象')
+    clean_topics = {}
+    for category, items in topics.items():
+        if not isinstance(category, str) or category not in _IDS:
+            raise ValueError('细分主题的资讯方向无效')
+        if not isinstance(items, list) or len(items) > 8:
+            raise ValueError('每个方向最多设置八个细分主题')
+        normalized = []
+        for item in items:
+            topic = _public_terms(item, '细分主题', 60)
+            if not topic:
+                raise ValueError('请填写细分主题')
+            if topic not in normalized:
+                normalized.append(topic)
+        clean_topics[category] = normalized
+    if sum(len(items) for items in clean_topics.values()) > 24:
+        raise ValueError('细分主题总计最多二十四个')
+    clean['categoryTopics'] = clean_topics
     clean['keywords'] = _public_terms(clean['keywords'], '关键词', 180)
     clean['excludeKeywords'] = _public_terms(clean['excludeKeywords'], '排除词', 120)
     if not clean['categories'] and not clean['keywords']:
@@ -89,8 +111,7 @@ def validate_subscription(value):
     if len(hosts) > 5:
         raise ValueError('来源域名最多五个')
     clean['sourceDomains'] = ','.join(hosts)
-    if not isinstance(clean['time'], str) or not re.fullmatch(r'(?:[01]\d|2[0-3]):[0-5]\d', clean['time']):
-        raise ValueError('推送时间应为有效的 HH:MM 北京时间')
+    clean.update(normalize_schedule(value))
     weekdays = clean['weekdays']
     if (not isinstance(weekdays, list) or not 1 <= len(weekdays) <= 7
             or any(type(day) is not int or not 0 <= day <= 6 for day in weekdays)):

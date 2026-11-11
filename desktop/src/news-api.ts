@@ -1,16 +1,21 @@
 import { request } from "./api";
 
 export interface NewsCategory { id: string; label: string; query?: string }
+export interface NewsTimeRange { start: string; end: string; intervalMinutes: number }
 export interface NewsDraft {
   id?: string;
   name: string;
   enabled: boolean;
   selectionMode: "single" | "multiple";
   categories: string[];
+  categoryTopics?: Record<string, string[]>;
   keywords: string;
   excludeKeywords: string;
   sourceDomains: string;
   time: string;
+  // Optional on reads so pre-upgrade subscriptions and preview snapshots remain valid.
+  times?: string[];
+  timeRanges?: NewsTimeRange[];
   weekdays: number[];
   itemCount: number;
   lookbackHours: number;
@@ -25,6 +30,7 @@ export interface NewsSubscription extends NewsDraft {
 }
 export interface NewsArticle {
   id: string; title: string; summary: string; url: string; source: string; category: string;
+  topic?: string;
   publishedAt: number; timeLabel: string;
 }
 export interface NewsDelivery {
@@ -34,6 +40,7 @@ export interface NewsDelivery {
 export interface NewsEdition {
   id: string; subscriptionId: string; snapshot: NewsDraft; trigger: string; slot: string;
   createdAt: number; updatedAt: number; state: string; reason: string;
+  scheduledAt?: number;
   articles: NewsArticle[]; parts: string[]; warnings: string[]; deliveries: NewsDelivery[];
 }
 export interface NewsRead {
@@ -51,16 +58,29 @@ export interface NewsState {
 
 // Keep private target identity snapshots and revisions out of renderer writes.
 export function editableSubscription(value: NewsDraft, existing = true): NewsDraft {
+  const times = [...new Set(value.times === undefined ? [value.time] : value.times)].sort();
+  const ranges = new Map((value.timeRanges ?? []).map(range => [
+    JSON.stringify([range.start, range.end, range.intervalMinutes]),
+    { start: range.start, end: range.end, intervalMinutes: range.intervalMinutes },
+  ]));
+  const timeRanges = [...ranges.values()].sort((a, b) => a.start.localeCompare(b.start)
+    || a.end.localeCompare(b.end) || a.intervalMinutes - b.intervalMinutes);
+  const categoryTopics = Object.fromEntries(Object.entries(value.categoryTopics ?? {})
+    .filter(([, topics]) => topics.length > 0).sort(([a], [b]) => a.localeCompare(b))
+    .map(([category, topics]) => [category, [...new Set(topics.map(topic => topic.trim()))].sort()]));
   return {
     ...(existing && value.id ? { id: value.id } : {}),
     name: value.name,
     enabled: value.enabled,
     selectionMode: value.selectionMode,
     categories: [...value.categories],
+    categoryTopics,
     keywords: value.keywords,
     excludeKeywords: value.excludeKeywords,
     sourceDomains: value.sourceDomains,
-    time: value.time,
+    time: times[0] ?? timeRanges[0]?.start ?? "",
+    times,
+    timeRanges,
     weekdays: [...value.weekdays],
     itemCount: value.itemCount,
     lookbackHours: value.lookbackHours,

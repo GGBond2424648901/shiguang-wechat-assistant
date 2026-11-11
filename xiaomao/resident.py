@@ -121,7 +121,7 @@ class Resident:
                     # its engine lock and only reads the independent journal.
                     return bool(current and current['revision'] == snapshot_revision and edition
                         and edition['state'] not in ('cancelled','failed','missed')
-                        and self.clock() <= deadline and engine.settings.memory_scope == target['scope']
+                        and self.clock() < deadline and engine.settings.memory_scope == target['scope']
                         and configured_account(self.settings) == account)
                 if not guard(): raise ValueError('资讯设置或目标已变化')
                 now = self.clock()
