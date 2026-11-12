@@ -132,7 +132,7 @@ export function PersonaTrial({ active, readOnly, accountRevision, expected, titl
     <PanelTitle icon={<MessageCircle size={18} />} end={<Button icon={<RotateCcw size={15} />} disabled={readOnly}
       onClick={() => { trial.clear(); pendingText.current = undefined; setTurns([]); setConversation(""); }}>清空试聊</Button>}>人格试聊</PanelTitle>
     <p className="muted fine-print">使用当前启用草稿 · 独立试聊记忆 · 不会发送微信或写入正式记忆</p>
-    <div className="studio-module-overview" aria-label="试聊启用模块">{enabled.map(row => <span className="tag" key={row.id}>{row.title}</span>)}</div>
+    <div className="studio-module-overview" aria-label="试聊启用模块">{enabled.map(row => <span className="tag" title={row.title} key={row.id}>{row.title}</span>)}</div>
     <div className="studio-chat-log" role="log" aria-label="人格试聊记录" aria-live="polite">
       {!turns.length && <Empty title="试试现在的人格" detail="草稿调整后会开启新的试聊；上下文最多保留 24 条消息。" />}
       {turns.map((turn, index) => <div className={`studio-bubble ${turn.role}`} key={index}>

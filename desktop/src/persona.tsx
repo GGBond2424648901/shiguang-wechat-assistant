@@ -1,5 +1,5 @@
 import {
-  ArrowDown, ArrowLeft, ArrowUp, BookOpen, Box, Check, Download, Eye, FilePlus, Pencil, Save, Search, Undo2, Upload,
+  ArrowDown, ArrowLeft, ArrowUp, BookOpen, Box, Check, Download, Eye, FilePlus, MessageCircle, Pencil, Save, Search, Undo2, Upload,
 } from "lucide-react";
 import { useDeferredValue, useEffect, useMemo, useRef, useState } from "react";
 import { Button, Confirm, Empty, IconButton, PanelTitle, Select, Switch, useDraftGuard } from "./components";
@@ -186,8 +186,13 @@ export function PersonaPage({ active, readOnly, accountRevision = "", notify }: 
   const activeSupplement = base.modules.find(item => item.id !== "main" && item.enabled);
   return <div className={`persona-page${trial ? " studio-open" : ""}`}>
     <div className="glass persona-toolbar">
-      <div className="flex">
-        <Button aria-pressed={trial} onClick={() => setTrial(value => !value)}>{trial ? "返回人格编辑" : "人格试聊"}</Button>
+      <div className="segments persona-workspace-tabs" role="group" aria-label="人格工作区">
+        <Button variant={trial ? "ghost" : "primary"} icon={<Pencil size={18} />} aria-pressed={!trial}
+          onClick={() => setTrial(false)}>人格编辑</Button>
+        <Button variant={trial ? "primary" : "ghost"} icon={<MessageCircle size={18} />} aria-pressed={trial}
+          onClick={() => setTrial(true)}>人格试聊</Button>
+      </div>
+      <div className="flex persona-file-actions">
         <Button icon={<Download size={16} />} busy={busy === "import"} disabled={!mutable} onClick={() => void importFiles()}>
           {modules ? "导入模块" : "导入文档"}
         </Button>
@@ -198,7 +203,7 @@ export function PersonaPage({ active, readOnly, accountRevision = "", notify }: 
           {preview ? "返回编辑" : "预览生效稿"}
         </Button>
       </div>
-      <div className="flex">
+      <div className="flex persona-save-actions">
         {dirty && <Button icon={<Undo2 size={15} />} disabled={!!busy} onClick={() => setDiscard(true)}>撤销修改</Button>}
         <Button variant="primary" icon={<Save size={16} />} busy={busy === "save"} disabled={!mutable || !dirty || (!modules && !changed)}
           onClick={() => void save()}>保存并应用</Button>
@@ -217,7 +222,7 @@ export function PersonaPage({ active, readOnly, accountRevision = "", notify }: 
               setSelected(item.id); setPreview(undefined);
             }}>
               <span className="persona-index">{draft.indexOf(item) + 1}</span>
-              <span><b>{item.title}</b><small>{item.origin}</small></span>
+              <span><b title={item.title}>{item.title}</b><small>{item.origin}</small></span>
             </button>
             {modules && <Switch checked={item.enabled} disabled={!mutable}
               onChange={enabled => edit(item.id, { enabled })}>{item.title}启用</Switch>}

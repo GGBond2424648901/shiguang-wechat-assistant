@@ -49,7 +49,7 @@ await page.getByLabel('试聊消息').fill('取消后输入');
 await send('延迟拒绝重置');await page.getByRole('button',{name:'清空试聊',exact:true}).click();await page.getByLabel('试聊消息').fill('重置后输入');await page.evaluate(()=>window.qaReject());
 assert.equal(await page.locator('.studio-bubble').count(),0);assert.equal(await page.getByLabel('试聊消息').inputValue(),'重置后输入');
 // Editing the persona unmounts/fences the old request, retaining the persona draft itself.
-await send('延迟拒绝草稿');await page.getByRole('button',{name:'返回人格编辑',exact:true}).click();
+await send('延迟拒绝草稿');await page.getByRole('button',{name:'人格编辑',exact:true}).click();
 await page.getByLabel('人格提示词').fill('新的完整人格草稿');await page.getByRole('button',{name:'人格试聊',exact:true}).click();
 await page.getByLabel('试聊消息').fill('新草稿输入');await page.evaluate(()=>window.qaReject());
 assert.equal(await page.locator('.studio-bubble').count(),0);assert.equal(await page.getByLabel('试聊消息').inputValue(),'新草稿输入');

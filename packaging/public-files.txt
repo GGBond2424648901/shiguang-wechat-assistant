@@ -355,3 +355,5 @@ docs/superpowers/specs/2026-11-11-assistant-workspace-design.md
 docs/workspace-guide.md
 docs/screenshots/desktop-tasks.png
 docs/superpowers/plans/2026-11-11-assistant-workspace-verification.md
+desktop/scripts/check-persona-entry.cjs
+docs/superpowers/plans/2026-11-12-persona-entry-verification.md
