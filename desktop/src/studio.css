@@ -3,6 +3,8 @@
 .studio-trial > .panel-title, .studio-summary .panel-title { flex-shrink: 0; }
 .studio-trial > .panel-title { flex-wrap: wrap; }
 .studio-trial > p { margin: 0; }
+.studio-scope-line { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.studio-scope-line > .tag { color: var(--mint); }
 .studio-module-overview { display: flex; gap: 7px; flex-wrap: wrap; min-height: 24px; max-height: 72px; overflow: auto; }
 .studio-module-overview > .tag { display: block; min-width: 0; max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .studio-chat-log { flex: 1 0 170px; min-height: 170px; min-width: 0; overflow-y: auto; display: flex; flex-direction: column; gap: 13px; padding: 5px 8px; }
@@ -32,6 +34,12 @@
 .persona-page .persona-item > button > span:last-child { flex: 1; min-width: 0; }
 .persona-page .persona-item b { display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2;
   max-height: 2.7em; line-height: 1.35; overflow: hidden; }
+.persona-composition-note { margin: 8px 0 0; line-height: 1.6; }
+.persona-composition-copy { display: flex; align-items: center; gap: 9px; min-width: 0; padding: 9px; }
+.persona-composition-copy > span:last-child { flex: 1; min-width: 0; }
+.persona-composition-symbol { display: grid; place-items: center; flex: none; width: 26px; height: 26px; border-radius: 50%;
+  color: var(--faint); background: rgb(204 184 238 / .12); }
+.persona-composition-symbol.enabled { color: var(--mint); background: rgb(103 167 115 / .18); }
 @media (max-width: 1200px) {
   .persona-toolbar > .persona-file-actions { order: 3; flex-basis: 100%; }
 }

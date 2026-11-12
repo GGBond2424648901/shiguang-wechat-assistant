@@ -130,11 +130,13 @@ export function PersonaTrial({ active, readOnly, accountRevision, expected, titl
   }
   return <section className="glass panel studio-trial">
     <PanelTitle icon={<MessageCircle size={18} />} end={<Button icon={<RotateCcw size={15} />} disabled={readOnly}
-      onClick={() => { trial.clear(); pendingText.current = undefined; setTurns([]); setConversation(""); }}>清空试聊</Button>}>人格试聊</PanelTitle>
-    <p className="muted fine-print">使用当前启用草稿 · 独立试聊记忆 · 不会发送微信或写入正式记忆</p>
+      onClick={() => { trial.clear(); pendingText.current = undefined; setTurns([]); setConversation(""); }}>清空试聊</Button>}>整套人格试聊</PanelTitle>
+    <p className="studio-scope-line muted fine-print"><span className="tag">已启用{enabled.length}个模块</span><span>全部启用模块共同参与 · 使用当前草稿</span></p>
+    <p className="muted fine-print">独立试聊记忆 · 不会发送微信或写入正式记忆</p>
     <div className="studio-module-overview" aria-label="试聊启用模块">{enabled.map(row => <span className="tag" title={row.title} key={row.id}>{row.title}</span>)}</div>
     <div className="studio-chat-log" role="log" aria-label="人格试聊记录" aria-live="polite">
-      {!turns.length && <Empty title="试试现在的人格" detail="草稿调整后会开启新的试聊；上下文最多保留 24 条消息。" />}
+      {!turns.length && <Empty title={enabled.length ? "和整套人格聊聊" : "请先启用至少一个模块"}
+        detail="草稿调整后会开启新的试聊；上下文最多保留 24 条消息。" />}
       {turns.map((turn, index) => <div className={`studio-bubble ${turn.role}`} key={index}>
         <small>{turn.role === "user" ? "我" : "拾光"}</small><p>{turn.text}</p></div>)}<div ref={end} />
     </div>

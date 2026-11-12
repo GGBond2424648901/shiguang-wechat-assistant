@@ -190,7 +190,7 @@ export function PersonaPage({ active, readOnly, accountRevision = "", notify }: 
         <Button variant={trial ? "ghost" : "primary"} icon={<Pencil size={18} />} aria-pressed={!trial}
           onClick={() => setTrial(false)}>人格编辑</Button>
         <Button variant={trial ? "primary" : "ghost"} icon={<MessageCircle size={18} />} aria-pressed={trial}
-          onClick={() => setTrial(true)}>人格试聊</Button>
+          onClick={() => { setPreview(undefined); setTrial(true); }}>人格试聊</Button>
       </div>
       <div className="flex persona-file-actions">
         <Button icon={<Download size={16} />} busy={busy === "import"} disabled={!mutable} onClick={() => void importFiles()}>
@@ -210,28 +210,37 @@ export function PersonaPage({ active, readOnly, accountRevision = "", notify }: 
       </div>
     </div>
     <div className="persona-layout">
-      <section className="glass panel persona-list">
+      <section className={`glass panel persona-list${trial ? " persona-composition" : ""}`}>
         <PanelTitle icon={<Box size={18} />} end={<span className="muted fine-print">{enabledCount} / {draft.length}</span>}>
-          {modules ? "人格模块" : "人格文档"}
+          {trial ? "人格组成" : modules ? "人格模块" : "人格文档"}
         </PanelTitle>
         <label className="persona-search"><Search size={15} /><input aria-label="搜索模块" placeholder="搜索名称" value={query}
           onChange={event => setQuery(event.target.value)} /></label>
-        <div className="persona-module-list" aria-label="人格模块列表">
-          {shown.map(item => <div key={item.id} className={item.id === selected ? "persona-item active" : "persona-item"}>
-            <button type="button" aria-current={item.id === selected ? "true" : undefined} onClick={() => {
+        {trial && <p className="persona-composition-note muted fine-print">搜索仅筛选列表，试聊使用全部启用模块。</p>}
+        <div className="persona-module-list" role={trial ? "list" : undefined} aria-label={trial ? "整套人格组成" : "人格模块列表"}>
+          {shown.map(item => <div key={item.id} role={trial ? "listitem" : undefined}
+            className={!trial && item.id === selected ? "persona-item active" : "persona-item"}>
+            {trial ? <div className="persona-composition-copy">
+              <span className={`persona-composition-symbol${item.enabled ? " enabled" : ""}`} aria-hidden="true">
+                {item.enabled ? <Check size={16} /> : <Box size={16} />}
+              </span>
+              <span><b title={item.title}>{item.title}</b><small>{item.enabled ? "已启用" : "已停用"}</small></span>
+            </div> : <button type="button" aria-current={item.id === selected ? "true" : undefined} onClick={() => {
               setSelected(item.id); setPreview(undefined);
             }}>
               <span className="persona-index">{draft.indexOf(item) + 1}</span>
               <span><b title={item.title}>{item.title}</b><small>{item.origin}</small></span>
-            </button>
+            </button>}
             {modules && <Switch checked={item.enabled} disabled={!mutable}
               onChange={enabled => edit(item.id, { enabled })}>{item.title}启用</Switch>}
           </div>)}
         </div>
-        {modules && <div className="persona-list-footer flex">
-          <IconButton label="模块上移" icon={<ArrowUp size={16} />} disabled={!mutable || index <= 0} onClick={() => order(-1)} />
-          <IconButton label="模块下移" icon={<ArrowDown size={16} />} disabled={!mutable || index >= draft.length - 1} onClick={() => order(1)} />
-          <span className="muted fine-print">按列表顺序生效</span>
+        {(modules || trial) && <div className="persona-list-footer flex">
+          {modules && !trial && <>
+            <IconButton label="模块上移" icon={<ArrowUp size={16} />} disabled={!mutable || index <= 0} onClick={() => order(-1)} />
+            <IconButton label="模块下移" icon={<ArrowDown size={16} />} disabled={!mutable || index >= draft.length - 1} onClick={() => order(1)} />
+          </>}
+          <span className="muted fine-print">全部启用模块共同生效，排列仅用于整理</span>
         </div>}
       </section>
       {trial ? <PersonaTrial active={active && trial} readOnly={readOnly} accountRevision={accountRevision} expected={base.revision} title={base.title} modules={draft} />

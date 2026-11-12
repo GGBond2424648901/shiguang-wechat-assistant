@@ -62,9 +62,27 @@ const server = http.createServer((req, res) => {
       assert.equal(await workspaces.getByRole('button', { name: '人格编辑', exact: true }).getAttribute('aria-pressed'), 'true');
     }
     await page.getByRole('button', { name: '人格试聊', exact: true }).click();
+    const enabledCount = longModules ? 48 : 15;
+    if (!contrastOnly) {
+      assert.equal(await page.getByRole('heading', { name: '整套人格试聊', exact: true }).count(), 1, 'Trial must clearly identify the whole persona');
+      const composition = page.locator('.persona-composition');
+      assert.equal(await composition.count(), 1);
+      assert.equal(await composition.locator('.persona-item.active, [aria-current], .persona-index').count(), 0, 'Composition must not imply a single selected or ranked module');
+      assert.equal(await composition.getByRole('button').count(), 0, 'Trial composition is a list, not an editor selection');
+      assert.equal(await page.getByRole('button', { name: '模块上移', exact: true }).count(), 0);
+      await page.locator('.studio-trial').getByText('已启用' + enabledCount + '个模块', { exact: true }).waitFor();
+      await page.getByLabel('搜索模块', { exact: true }).fill('基础人格');
+      assert.equal(await composition.locator('.persona-item').count(), 1);
+    }
     await page.getByLabel('试聊消息').fill('试聊入口测试');
     await page.getByRole('button', { name: '发送试聊', exact: true }).click();
     await page.locator('.studio-bubble.assistant').waitFor();
+    if (!contrastOnly) {
+      const submitted = await page.evaluate(() => window.personaEntryCalls.find(call => call.method === 'studio.chat').params.modules);
+      assert.equal(submitted.length, longModules ? 48 : 16, 'Search must not narrow the submitted persona');
+      assert.equal(submitted.filter(row => row.enabled).length, enabledCount);
+      await page.getByLabel('搜索模块', { exact: true }).fill('');
+    }
     const contrast = await page.locator('.studio-bubble.assistant').evaluate(element => {
       const style = getComputedStyle(element);
       const rgba = value => (value.match(/[\d.]+/g) || []).map(Number);
@@ -104,10 +122,21 @@ const server = http.createServer((req, res) => {
         geometry.push({ percent, bounds, inner });
         if (output) { fs.mkdirSync(output, { recursive: true }); await page.screenshot({ path: path.join(output, 'trial-' + percent + '.png') }); }
       }
+      await page.getByRole('switch', { name: '基础人格启用', exact: true }).click();
+      await page.locator('.studio-trial').getByText('已启用' + (enabledCount - 1) + '个模块', { exact: true }).waitFor();
+      assert.equal(await page.locator('.studio-bubble').count(), 0, 'Changing composition starts a fresh trial');
       await page.getByRole('button', { name: '人格编辑', exact: true }).click();
+      assert.equal(await page.locator('.persona-item.active').count(), 1, 'Only editing has a selected module');
       assert.equal(await page.getByLabel('人格提示词').inputValue(), '尚未保存的完整人格草稿');
       assert.equal(await page.evaluate(() => window.personaEntryCalls.filter(call => call.method === 'studio.chat')[0].params.modules[0].text), '尚未保存的完整人格草稿');
       assert.equal(await page.evaluate(() => window.personaEntryCalls.filter(call => /persona.save|queue_outbound|sendSummary/.test(call.method)).length), 0);
+      // A non-first editor selection is retained but never presented as a trial selection.
+      await page.locator('.persona-item > button').nth(1).click();
+      const selectedName = await page.locator('.persona-item.active b').innerText();
+      await page.getByRole('button', { name: '人格试聊', exact: true }).click();
+      assert.equal(await page.locator('.persona-composition .active, .persona-composition [aria-current]').count(), 0);
+      await page.getByRole('button', { name: '人格编辑', exact: true }).click();
+      assert.equal(await page.locator('.persona-item.active b').innerText(), selectedName);
       if (output) fs.writeFileSync(path.join(output, 'result.json'), JSON.stringify({ passed: !layoutFailures.length, url, contrast, geometry, layoutFailures, longModules, errors }, null, 2));
       assert.deepEqual(layoutFailures, [], 'Enabled overview and controls/names must remain inside their actual panels');
     }

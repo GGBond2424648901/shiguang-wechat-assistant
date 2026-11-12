@@ -74,6 +74,42 @@ def test_draft_compiles_complete_and_multiturn_isolated(env):
     assert not client.calls
 
 
+@pytest.mark.parametrize('reverse', [False, True])
+def test_whole_persona_uses_every_enabled_module_without_order_priority(env, reverse):
+    from xiaomao.model import ChatModel
+    from xiaomao.persona_modules import PersonaModule, save_modules
+    root, cfg, client = env
+    sources = [PersonaModule('identity', '身份', '身份原文：一只喜欢蓝色相机的小鱼。'),
+               PersonaModule('voice', '语气', '语气原文：开心时会俏皮地接话。'),
+               PersonaModule('companion', '陪伴', '陪伴原文：难过时先听对方说完。')]
+    if reverse:
+        sources.reverse()
+    sources.append(PersonaModule('disabled', '停用设定', '停用原文：不应进入本轮人格。', enabled=False))
+    save_modules(root, sources, title='完整人格', expected_revision=None)
+    persona = DesktopPersona(root).read()
+    formal = ChatModel(cfg)._compiled_persona().text
+    seen = []
+    before = (root / 'config/persona_modules.json').read_bytes()
+
+    def reply(model, messages):
+        seen.append(model._compiled_persona().text)
+        return '整套人格试聊回答'
+
+    with patch('xiaomao.model.ChatModel.reply', reply):
+        studio = studio_class()(root, client)
+        state = finish(studio, studio.chat(persona['revision'], persona['modules'], text='来聊聊今天。'))
+    assert state['status'] == 'completed'
+    assert state['result']['enabledModules'] == [row.title for row in sources if row.enabled]
+    assert formal == seen[0]
+    for prompt in (formal, seen[0]):
+        assert '排列仅用于整理，不表示权重或优先级' in prompt
+        assert all(row.text in prompt for row in sources if row.enabled)
+        assert sources[-1].text not in prompt
+        assert [prompt.index(row.text) for row in sources if row.enabled] == sorted(prompt.index(row.text) for row in sources if row.enabled)
+    assert (root / 'config/persona_modules.json').read_bytes() == before
+    assert not client.calls
+
+
 def test_cancel_and_new_draft_fence_late_reply(env):
     root, cfg, client = env
     p = DesktopPersona(root).read()
