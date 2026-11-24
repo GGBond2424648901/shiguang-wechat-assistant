@@ -156,8 +156,8 @@ export function NoticeToast({ message, error, leaving, close }: {
   </div>;
 }
 
-export function Confirm({ title, detail, confirm, cancel, destructive = false }: {
-  title: string; detail: string; confirm: () => void; cancel: () => void; destructive?: boolean;
+export function Confirm({ title, detail, confirm, cancel, destructive = false, confirmLabel }: {
+  title: string; detail: string; confirm: () => void; cancel: () => void; destructive?: boolean; confirmLabel?: string;
 }) {
   const dialog = useRef<HTMLDialogElement>(null);
   const timer = useRef<number | undefined>(undefined);
@@ -186,7 +186,7 @@ export function Confirm({ title, detail, confirm, cancel, destructive = false }:
       <IconButton label="关闭确认" icon={<X size={16} />} onClick={() => finish(cancel)} /></div>
     <p>{detail}</p>
     <div className="confirm-actions"><Button autoFocus onClick={() => finish(cancel)}>取消</Button>
-      <Button variant={destructive ? "danger" : "primary"} onClick={() => finish(confirm)}>{destructive ? "移除" : "确认"}</Button></div>
+      <Button variant={destructive ? "danger" : "primary"} onClick={() => finish(confirm)}>{confirmLabel ?? (destructive ? "移除" : "确认")}</Button></div>
   </dialog>;
 }
 

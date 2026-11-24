@@ -26,6 +26,7 @@ class Capture:
     draft: Calibration | None = None
     busy: bool = False
     image: object = None
+    voice_supported: bool = False
 
 
 class DesktopCalibration:
@@ -124,6 +125,7 @@ class DesktopCalibration:
         draft = capture.draft
         return {'token': capture.id, 'target': draft.target_group, 'kind': draft.target_kind,
                 'width': draft.width, 'height': draft.height, 'regions': draft.regions,
+                'voiceSupported': capture.voice_supported or 'voice' in draft.regions,
                 'image': self._picture(image), 'observed': observed, 'note': note, 'identified': identified}
 
     def capture(self, window, session='', deferIdentify=False):
@@ -153,7 +155,9 @@ class DesktopCalibration:
                                                     (choice['kind'], choice['title']))
                 if capture.cancelled.is_set():
                     raise ValueError('校准已取消')
-                image, capture.draft = selection.preview_window(cfg, choice, name)
+                from .windows_wechat_voice import supports_voice_client
+                capture.voice_supported = supports_voice_client(windows._wechat_client_version(choice['pid']))
+                image, capture.draft = selection.preview_window(cfg, choice, name, propose_voice=capture.voice_supported)
                 if deferIdentify:
                     return self._projection(capture, image, note='截图已就绪，正在核对会话身份…')
                 try:
@@ -170,7 +174,8 @@ class DesktopCalibration:
             raise
 
     def _edit(self, capture, regions):
-        if (not isinstance(regions, dict) or set(regions) != {'header', 'messages', 'input', 'send'}
+        required = {'header', 'messages', 'input', 'send'}
+        if (not isinstance(regions, dict) or set(regions) not in (required, required | {'voice'})
                 or any(not isinstance(box, list) or len(box) != 4 or
                        any(type(point) not in (int, float) for point in box) for box in regions.values())):
             raise ValueError('请填写完整的四个区域')

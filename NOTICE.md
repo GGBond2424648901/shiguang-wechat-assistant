@@ -15,3 +15,9 @@ ChatLuna 仅作为 YAML 字段格式的参考。公开包仅保留本项目自�
 
 安装器简体中文翻译取自 [Inno Setup 6.7.1](https://github.com/jrsoftware/issrc/blob/is-6_7_1/Files/Languages/Unofficial/ChineseSimplified.isl)，保留 [原作者 MIT 许可](licenses/inno-chinese-MIT.txt)。
 
+可选音频路由组件 [VB-CABLE](https://vb-audio.com/Cable/) 由 VB-Audio Software 的 Vincent Burel 和 JS-Loezic 开发。它采用 Donationware 模式，欢迎在 [VB-Audio 官网](https://shop.vb-audio.com/en/win-apps/11-vb-cable.html) 支持作者。拾光按需从官网获取原版安装包，包内作者声明和许可随原包保留。Windows 驱动由 VB-Audio 的原版安装程序安装及维护。详见 [VB-Audio 许可与分发说明](https://vb-audio.com/Services/licensing.htm)。
+
+## 语音合成与社区音色
+
+拾光的语音合成和社区音色功能使用由**图灵镜（Turing Mirror）**开发和维护的 [GPT-SoVITS Fabric 1.0.1](https://github.com/Turing-Mirror/GPT-SoVITS-Fabric/releases/tag/v1.0.1) 及其 [本机接口协议](https://github.com/Turing-Mirror/trm-app-protocol)。Fabric 基于 [GPT-SoVITS](https://github.com/RVC-Boss/GPT-SoVITS)。拾光按需获取原版引擎，在后台调用本机接口，软件内的音色管理和微信语音发送由拾光实现。Fabric 所附的 [MIT 许可与版权声明](https://github.com/Turing-Mirror/GPT-SoVITS-Fabric/blob/v1.0.1/app/src-tauri/engine-payload/LICENSE) 随原版引擎保留。社区角色包与模型权重沿用各发布者的署名、来源及许可。
+

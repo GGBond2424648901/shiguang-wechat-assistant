@@ -78,7 +78,7 @@ class ConversationMemory:
     def _decode_message(cls, data):
         if (not isinstance(data, dict) or not isinstance(data.get('text'), str)
                 or not isinstance(data.get('message_id'), str)
-                or data.get('direction') not in ('in', 'out') or data.get('kind') not in ('text', 'image', 'emoji')
+                or data.get('direction') not in ('in', 'out') or data.get('kind') not in ('text', 'image', 'emoji', 'voice')
                 or not isinstance(data.get('created_at'), (int, float)) or not isinstance(data.get('image_data'), str)):
             raise ValueError()
         image = base64.b64decode(data['image_data'], validate=True)
@@ -147,7 +147,7 @@ class ConversationMemory:
             raise MemoryPersistenceError('群记忆未保存，原有加密历史仍保留') from None
 
     def remember(self, message: Message) -> bool:
-        if (message.kind not in ('text', 'image', 'emoji') or message.direction not in ('in', 'out')
+        if (message.kind not in ('text', 'image', 'emoji', 'voice') or message.direction not in ('in', 'out')
                 or message.quoted or message.quality < .92):
             return False
         name = trusted_display_name(message)
@@ -166,7 +166,8 @@ class ConversationMemory:
                         return False
                     sticker_description=(old.direction=='out' and old.kind=='emoji' and message.direction=='out'
                         and message.kind=='emoji' and old.text in ('[表情]','[表情静态帧]') and message.text.startswith('[已发送表情：'))
-                    candidate[index]=replace(old,text=message.text if sticker_description else old.text,image_data=old.image_data or message.image_data,
+                    voice_transcript = old.kind == message.kind == 'voice' and old.direction == 'out' and old.text == '[语音]'
+                    candidate[index]=replace(old,text=message.text if sticker_description or voice_transcript else old.text,image_data=old.image_data or message.image_data,
                                      speaker_id=old.speaker_id or message.speaker_id,
                                      reply_to_id=old.reply_to_id or message.reply_to_id,
                                      reply_to_speaker=old.reply_to_speaker or message.reply_to_speaker)

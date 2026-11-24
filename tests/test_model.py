@@ -97,6 +97,27 @@ def test_model_only_gets_text_context_and_no_tools(tmp_path):
     assert system.index('你叫小玲') < system.index('固定运行边界')
 
 
+def test_bound_voice_request_generates_spoken_body_and_repairs_a_false_capability_denial(tmp_path):
+    from xiaomao.domain import Message, ReplyTask
+
+    captured = []
+    replies = iter(['我这边只有文字这条通道，语音条我发不出来。', '今晚做一碗番茄鸡蛋面吧。', '晚饭吃过了。'])
+
+    def endpoint(request):
+        captured.append(json.loads(request.content)['messages'])
+        return httpx.Response(200, json={'choices': [{'message': {'content': next(replies)}}]})
+
+    model = local_model(tmp_path, endpoint)
+    question = Message('用语音回复我，晚饭吃什么？')
+    model.bind_reply_task(ReplyTask('voice-1', 0, 0, '', voice_request='voice'), lambda: True)
+    assert model.reply([question]) == '今晚做一碗番茄鸡蛋面吧。'
+    assert model.reply([Message('晚饭怎么样？')]) == '晚饭吃过了。'
+    for turns in captured[:2]:
+        assert any(item['role'] == 'system' and '合成微信语音' in item['content'] for item in turns)
+        assert turns[-1]['role'] == 'user'
+    assert not any('合成微信语音' in item['content'] for item in captured[2])
+
+
 def test_reply_extracts_body_and_malformed_envelope_is_retryable(tmp_path):
     from xiaomao.domain import Message
     from xiaomao.model import ModelError

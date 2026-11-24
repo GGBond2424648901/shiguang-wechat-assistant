@@ -37,7 +37,7 @@ class ControlClient:
             raise ControlUnavailable("助手尚未运行，或本机控制信息无效") from None
 
     def request(self, operation: str, payload=None) -> dict:
-        if operation not in ("status", "pending", "observe", "enable", "pause", "stop", "reply_latest", "companion_preview", "companion_once","reload_windows","stop_if_idle","queue_text","queue_outbound","companion_configure","enable_selected","pause_selected","configure_reply_rules","configure_reply_defaults","news_command","news_invalidate","rest_selected","cancel_rest_selected"):
+        if operation not in ("status", "pending", "observe", "enable", "pause", "stop", "reply_latest", "companion_preview", "companion_once","reload_windows","stop_if_idle","queue_text","queue_outbound","queue_voice_test","companion_configure","enable_selected","pause_selected","configure_reply_rules","configure_reply_defaults","news_command","news_invalidate","rest_selected","cancel_rest_selected"):
             raise ControlUnavailable("不支持这个控制操作")
         url, token = self._endpoint()
         try:

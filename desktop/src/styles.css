@@ -755,7 +755,7 @@ h1, h2, h3, p { margin: 0; }
 .calibration-controls .select { flex: 1; min-width: 140px; }
 .calibration-placeholder { display: grid; place-items: center; flex: 1; min-height: 175px;
   border: 1px dashed var(--line); border-radius: 13px; background: var(--shade); }
-.calibration-preview { padding: 8px; min-height: 210px; display: grid; place-items: center;
+.calibration-preview { padding: 8px; min-height: 210px; flex-shrink: 0; display: grid; place-items: center;
   background: #171827; border: 1px solid var(--line); border-radius: 13px; }
 .calibration-surface { position: relative; touch-action: none; cursor: crosshair; overflow: hidden; user-select: none; }
 .calibration-surface img { width: 100%; height: 100%; object-fit: fill; position: absolute; inset: 0; pointer-events: none; }
@@ -763,11 +763,14 @@ h1, h2, h3, p { margin: 0; }
 .region-messages { --region: #b6f3a6; }
 .region-input { --region: #ffcb9d; }
 .region-send { --region: #d5acf8; }
+.region-voice { --region: #f6df88; }
 .region { position: absolute; pointer-events: none; border: 1px dashed var(--region); border-radius: 3px; background: color-mix(in srgb, var(--region), transparent 87%); }
 .region.active { border-width: 2px; border-style: solid; }
 .region span, .region-choice span { border-radius: 5px; background: var(--region); color: #242334; min-width: 17px; text-align: center; font-size: 11px; }
 .region span { position: absolute; left: 1px; top: 1px; }
+.region.region-voice span { left: 50%; top: auto; bottom: calc(100% + 3px); transform: translateX(-50%); }
 .calibration-regions, .calibration-numeric { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 6px; }
+.calibration-regions.has-voice { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .region-choice { display: grid; grid-template-columns: auto minmax(0, 1fr); text-align: left; align-items: center; gap: 3px 6px;
   border: 1px solid var(--soft-line); background: rgb(255 255 255 / .04); border-radius: 9px; padding: 5px 7px; font-size: 12px; }
 .region-choice[aria-pressed="true"] { border-color: var(--region); }

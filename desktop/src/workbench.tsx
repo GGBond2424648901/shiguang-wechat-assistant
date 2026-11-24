@@ -37,7 +37,8 @@ function ReceiptTime({ at, detail = false }: { at: number; detail?: boolean }) {
 
 function ReplyDetail({ session, receipt, task }: { session?: Session; receipt?: Receipt; task?: Task }) {
   const source = receipt?.trigger || task?.text;
-  const media = receipt?.kind === "emoji" ? "已发送表情包" : receipt?.kind === "image" ? "已发送图片" : "";
+  const media = receipt?.kind === "emoji" ? "已发送表情包" : receipt?.kind === "image" ? "已发送图片"
+    : receipt?.kind === "voice" ? "已发送语音" : "";
   const body = receipt?.text || task?.reply;
   return <>
     <div className="reply-meta">
@@ -82,6 +83,7 @@ export function Workbench({ active, status, notify, navigate, calibrate }: {
   const [view, setView] = useState<QueueView>();
   const [picked, setPicked] = useState("");
   const scope = status?.sessions.some(item => item.id === selected) ? selected : "";
+  const scopedSession = status?.sessions.find(item => item.id === scope);
   const primary = status?.sessions.find(item => item.id === status.primary);
   const stats = status?.stats;
   const revision = status?.revision;
@@ -215,7 +217,8 @@ export function Workbench({ active, status, notify, navigate, calibrate }: {
           <span className="queue-body"><b>{item.group}</b><span>{item.text}</span></span>
           <ReceiptTime at={item.at} />
         </button>)}
-        {queueEmpty && <Empty icon={<Send size={24} />} title={emptyTitle} detail={data?.note || status?.reason} />}
+        {queueEmpty && <Empty icon={<Send size={24} />} title={emptyTitle}
+          detail={data?.note || scopedSession?.reason || status?.reason} />}
         {!queueEmpty && data?.note && <p className="queue-note muted">{data.note}</p>}
       </div>
       <div className="queue-foot">
@@ -243,8 +246,10 @@ export function Workbench({ active, status, notify, navigate, calibrate }: {
       <div className="watch-list">
         {status?.sessions.map(session => <div key={session.id} className={`watch-row ${scope === session.id ? "chosen" : ""}`}>
           <button className="watch-target" type="button" aria-pressed={scope === session.id}
-            title={session.name} onClick={() => updateScope(session.id)}>
-            <SessionIcon session={session} /><span><b>{session.name}</b><small>{sessionRule(session)}</small></span>
+            title={session.mode === "paused" ? session.reason || session.name : session.name}
+            onClick={() => updateScope(session.id)}>
+            <SessionIcon session={session} /><span><b>{session.name}</b>
+              <small>{session.mode === "paused" ? session.reason || sessionRule(session) : sessionRule(session)}</small></span>
           </button>
           <StatusPill mode={session.mode} compact />
           <SessionRestControl session={session} active={active} disabled={controlsDisabled || !session.bound} notify={notify} compact />

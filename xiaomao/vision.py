@@ -87,7 +87,7 @@ def read_header(ocr, image, binding=None):
 DETACHED_SEND_UNVERIFIED = "独立聊天窗口的发送按钮未核实。请确认右下角按钮完整可见，位置变动时重新框选按钮"
 
 
-def _detached_send_candidates(image, binding):
+def _send_button_candidates(image, binding):
     """Find complete button shapes in the footer below the bound editor."""
     width, height = image.size
     left = max(0, width - 540)
@@ -106,7 +106,7 @@ def _detached_send_candidates(image, binding):
     _, _, stats, _ = cv2.connectedComponentsWithStats(paint.astype(np.uint8), 8)
     for component in stats[1:]:
         x, y, w, h, area = map(int, component)
-        if (not 18 <= h <= 112 or not 2.1*h <= w <= 5*h
+        if (not 18 <= h <= 112 or not 1.65*h <= w <= 5*h
                 or area < .85*w*h or x < 1 or y < 1
                 or x+w >= footer.shape[1] or y+h >= footer.shape[0]):
             continue
@@ -137,7 +137,7 @@ def _send_label_matches(ocr, sample):
     return x1-pad <= sample.width/2 <= x2+pad and y1-pad <= sample.height/2 <= y2+pad
 
 
-def _detached_button_matches(ocr, button):
+def _send_button_matches(ocr, button):
     from PIL import ImageOps
     if _send_label_matches(ocr, button):
         return True
@@ -155,6 +155,15 @@ def calibration_send_matches(ocr, image, binding):
     """Prove that the reviewed click point still lands on Send."""
     from PIL import ImageOps
     rect = binding.rect('send')
+    buttons = tuple(_send_button_candidates(image, binding))
+    if buttons:
+        x1, y1, x2, y2 = rect
+        click_x, click_y = (x1+x2)//2, (y1+y2)//2
+        for left, top, right, bottom in buttons:
+            margin = max(2, round((bottom-top)*.12))
+            if left+margin <= click_x < right-margin and top+margin <= click_y < bottom-margin:
+                return _send_button_matches(ocr, image.crop((left, top, right, bottom)))
+        return False
     crop = image.crop(rect)
     if crop.width < 4 or crop.height < 4:
         return False
@@ -162,25 +171,15 @@ def calibration_send_matches(ocr, image, binding):
         return True
     # Resample the complete crop when the disabled label is pale.
     enlarged = ImageOps.autocontrast(crop.convert('L')).convert('RGB').resize((crop.width*3, crop.height*3))
-    if _send_label_matches(ocr, enlarged):
-        return True
-    if binding.window_kind != 'detached':
-        return False
-    x1, y1, x2, y2 = rect
-    click_x, click_y = (x1+x2)//2, (y1+y2)//2
-    for left, top, right, bottom in _detached_send_candidates(image, binding):
-        margin = max(2, round((bottom-top)*.12))
-        if left+margin <= click_x < right-margin and top+margin <= click_y < bottom-margin:
-            return _detached_button_matches(ocr, image.crop((left, top, right, bottom)))
-    return False
+    return _send_label_matches(ocr, enlarged)
 
 
-def recover_detached_send_region(ocr, image, binding):
+def recover_send_region(ocr, image, binding):
     """Resolve a new click point only for one fully visible and labeled Send."""
-    if binding.window_kind != 'detached' or image.size != (binding.width, binding.height):
+    if image.size != (binding.width, binding.height):
         return None
-    matches = [rect for rect in _detached_send_candidates(image, binding)
-               if _detached_button_matches(ocr, image.crop(rect))]
+    matches = [rect for rect in _send_button_candidates(image, binding)
+               if _send_button_matches(ocr, image.crop(rect))]
     if len(matches) != 1:
         return None
     left, top, right, bottom = matches[0]
@@ -463,7 +462,7 @@ class Vision:
         # the complete known caption AND gray neutral ink in its OCR bounds;
         # typed black text, a missed dot, images or extra marks still block.
         hint=re.sub(r'[\s+＋·,，]','',draft).casefold()
-        if (hint=='按住ctrlwin使用语音输入文字' and draft_lines
+        if (hint in ('按住ctrlwin使用语音输入文字', '长按鼠标语音输入') and draft_lines
                 and all(line.score>=.90 for line in draft_lines) and remaining_ink.any()):
             hint_bounds=np.zeros_like(ink)
             for line in draft_lines:

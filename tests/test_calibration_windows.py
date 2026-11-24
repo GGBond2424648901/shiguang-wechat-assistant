@@ -309,6 +309,40 @@ def test_detached_send_crop_can_cut_label_only_if_click_still_hits_proven_button
     assert vision.calibration_send_matches(recognize, image, original) is accepted
 
 
+@pytest.mark.parametrize(('window_kind', 'fill', 'label'), [
+    ('detached', (0, 195, 117), '发送'),
+    ('main', (224, 224, 224), '发送(S)'),
+])
+def test_send_rechecks_the_active_button_with_an_old_calibration(monkeypatch, window_kind, fill, label):
+    original = binding()
+    original.window_kind = window_kind
+    original.regions['input'] = [.02, .80, .98, .89]
+    original.regions['send'] = [650/800, 541/600, 790/800, 583/600]
+    image = Image.new('RGB', (800, 600), (250, 250, 250))
+    ImageDraw.Draw(image).rounded_rectangle((718, 547, 777, 579), radius=5, fill=fill)
+
+    def recognize(crop):
+        if crop.size == (60, 33):
+            return [vision.TextLine(label, (14, 7, 46, 26), .99)]
+        if crop.size == (140, 42):
+            return [vision.TextLine(label, (76, 11, 110, 31), .99)]
+        return []
+
+    recovered = vision.recover_send_region(recognize, image, original)
+    assert recovered and recovered.rect('send') == (718, 547, 778, 580)
+    assert not vision.calibration_send_matches(recognize, image, original)
+    desktop = windows.WindowsDesktop(original)
+    captures = []
+    monkeypatch.setattr(desktop, 'capture', lambda: captures.append(image) or image)
+    monkeypatch.setattr(desktop, 'assert_input_focus', lambda: None)
+
+    desktop.verify_send_control(recognize)
+
+    assert len(captures) == 2
+    assert desktop.calibration.rect('send') == recovered.rect('send')
+    assert original.rect('send') == (650, 541, 790, 583)
+
+
 def test_detached_click_is_blocked_when_an_overlay_covers_the_exact_click_point(monkeypatch):
     original=binding();original.window_kind='detached'
     desktop=windows.WindowsDesktop(original)

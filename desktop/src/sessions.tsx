@@ -1,9 +1,10 @@
 import {
-  ArrowLeft, ChevronRight, CircleHelp, Crosshair, Globe, Info, Layers2, MessageCircle, Monitor, PauseCircle,
+  ArrowLeft, AudioLines, ChevronRight, CircleHelp, Crosshair, Globe, Info, Layers2, MessageCircle, Monitor, PauseCircle,
   Plus, RefreshCcw, Save, Search, ShieldCheck, Smile, Star, Trash2, UserRound, UsersRound, X,
 } from "lucide-react";
 import { useEffect, useEffectEvent, useRef, useState, type ReactNode } from "react";
 import { errorMessage, frequencies, request, ruleLabels, type Status } from "./api";
+import { fabricRoleLabel, type FabricRole } from "./fabric-labels";
 import { SessionRestControl } from "./session-rest";
 import { Button, Confirm, Empty, IconButton, PanelTitle, Select, StatusPill, Switch, useDraftGuard } from "./components";
 import { reducesMotion } from "./motion";
@@ -25,6 +26,7 @@ const webSearchOptions = [
   { value: "true", label: "允许联网" },
   { value: "false", label: "关闭联网" },
 ];
+const voiceFrequencyChoices = [0, 5, 10, 20, 35, 50, 75, 100];
 
 function Avatar({ kind }: { kind: Conversation["kind"] }) {
   const Icon = kind === "group" ? UsersRound : kind === "private" ? UserRound : MessageCircle;
@@ -39,6 +41,46 @@ function SessionBlock({ icon, title, hint, controls, children }: {
       <div><h3>{title}</h3><p>{hint}</p></div>{controls && <div className="session-block-controls">{controls}</div>}
     </div>{children}
   </section>;
+}
+
+function VoiceReplyControls({ active, disabled, rule, savedFrequency, editRule }: {
+  active: boolean; disabled: boolean; rule: DraftRule; savedFrequency: number | null;
+  editRule: (fields: Partial<DraftRule>) => void;
+}) {
+  const [library, setLibrary] = useState<{ roles: FabricRole[]; roleId: string } | null>();
+  useEffect(() => {
+    if (!active) return;
+    let current = true;
+    request<NonNullable<typeof library>>("fabric.roles").then(next => {
+      if (current) setLibrary(next);
+    }).catch(() => { if (current) setLibrary(null); });
+    return () => { current = false; };
+  }, [active]);
+
+  const frequency = rule.voiceFrequency ?? 0;
+  const frequencyValues = voiceFrequencyChoices.includes(frequency)
+    ? voiceFrequencyChoices : [...voiceFrequencyChoices, frequency].sort((a, b) => a - b);
+  const roles = library?.roles ?? [];
+  const defaultRole = roles.find(role => role.id === library?.roleId);
+  const roleOptions = [
+    { value: "", label: defaultRole ? `默认音色 · ${fabricRoleLabel(defaultRole)}` : "使用默认音色" },
+    ...roles.map(role => ({ value: role.id, label: fabricRoleLabel(role) })),
+  ];
+  if (rule.voiceRoleId && !roles.some(role => role.id === rule.voiceRoleId)) {
+    roleOptions.push({ value: rule.voiceRoleId, label: library === undefined ? "已保存的会话音色"
+      : defaultRole ? "原音色暂不可用 · 将使用默认音色" : "已保存的音色暂不可用" });
+  }
+  return <dl className="session-binding">
+    <dt>自动语音频率</dt><dd><Select label="自动语音频率" value={String(frequency)}
+      options={frequencyValues.map(value => ({ value: String(value), label: value ? `${value}%` : "0% · 仅按请求" }))}
+      onChange={value => editRule({ voiceFrequency: Number(value) || (savedFrequency === null ? null : 0) })}
+      disabled={disabled} /></dd>
+    <dt>会话音色</dt><dd><Select label="会话音色" value={rule.voiceRoleId ?? ""}
+      options={roleOptions} onChange={value => editRule({ voiceRoleId: value || null })}
+      disabled={disabled || (!rule.voiceRoleId && !roles.length)} />
+      {library === null && <small className="muted">暂时无法读取 Fabric 本地音色</small>}
+      {library && !roles.length && <small className="muted">先在 Fabric 音色库安装本地音色</small>}</dd>
+  </dl>;
 }
 
 export function SessionsPage({ active, status, notify, calibrate, directory, setDirectory }: {
@@ -104,6 +146,8 @@ export function SessionsPage({ active, status, notify, calibrate, directory, set
 
   const updateFromWorker = useEffectEvent((next: SavedSessions) => {
     if (next.revision !== base?.revision) accept(next, true);
+    else if (next.voiceSendReady !== base?.voiceSendReady
+      || next.items.some((item, index) => item.voiceSendReady !== base?.items[index]?.voiceSendReady)) setBase(next);
     setError("");
   });
 
@@ -149,7 +193,8 @@ export function SessionsPage({ active, status, notify, calibrate, directory, set
     const savedRule = rulesOf(originalRow);
     const next = await request<SavedSessions>("sessions.rules", {
       expected: base.revision, session: row.id, ...rule,
-      before: { reply_mode: savedRule.replyMode, sticker_frequency: savedRule.stickerFrequency, web_search: savedRule.webSearch },
+      before: { reply_mode: savedRule.replyMode, sticker_frequency: savedRule.stickerFrequency, web_search: savedRule.webSearch,
+        voice_enabled: savedRule.voiceEnabled, voice_frequency: savedRule.voiceFrequency, voice_role_id: savedRule.voiceRoleId },
     });
     accept(next, true, { rule: row.id });
     notify(`“${row.name}”的独立回复规则已保存`);
@@ -193,6 +238,12 @@ export function SessionsPage({ active, status, notify, calibrate, directory, set
     }} />;
   const pending = !originalRow;
   const paused = Boolean(row?.paused || (status?.mode !== "paused" && running?.mode === "paused"));
+  const savedVoiceEnabled = originalRow?.voiceEnabled ?? null;
+  const newVoiceRole = !!rule?.voiceRoleId && rule.voiceRoleId !== originalRow?.voiceRoleId;
+  const voiceHint = !originalRow?.calibrated ? "先校准需要发送语音的微信窗口"
+    : newVoiceRole ? "保存后检查会话音色和语音设备"
+    : originalRow.voiceSendReady ? "明确的语音请求不受自动频率限制"
+    : "请在运行设置保存通过测试的音频回路，并检查会话音色";
   const askToRemove = (item: Conversation) => setRemoveTarget({ item, accountKey: base.accountKey });
   const filtered = order.filter(item => !query || item.name.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
   return <div className="sessions-page">
@@ -259,6 +310,13 @@ export function SessionsPage({ active, status, notify, calibrate, directory, set
             options={[{ value: "", label: `继承默认 · ${frequencies.find(option => option.value === base.defaultStickerFrequency)?.label ?? ""}` }, ...frequencies]}
             onChange={stickerFrequency => editRule({ stickerFrequency: stickerFrequency || null })}
             disabled={!mutable || pending || !row.bound} />} />
+        <SessionBlock icon={<AudioLines size={21} />} title="语音回复" hint={voiceHint}
+          controls={<Switch checked={rule.voiceEnabled ?? false} disabled={!mutable || pending || !row.bound}
+            onChange={enabled => editRule({ voiceEnabled: enabled || (savedVoiceEnabled === null ? null : false) })}>
+            允许语音回复</Switch>}>
+          {rule.voiceEnabled && <VoiceReplyControls active={active} disabled={!mutable || pending || !row.bound}
+            rule={rule} savedFrequency={originalRow?.voiceFrequency ?? null} editRule={editRule} />}
+        </SessionBlock>
         <SessionBlock icon={<Globe size={21} />} title="联网回复" hint={base.webSearchEnabled
           ? "继承默认时允许联网" : "全局开关已关闭，开启后应用此设置"}
           controls={<Select label="联网回复" value={rule.webSearch === null ? "" : String(rule.webSearch)}

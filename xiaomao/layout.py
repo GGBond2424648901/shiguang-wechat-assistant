@@ -7,6 +7,9 @@ from dataclasses import replace
 import numpy as np
 
 
+EDITOR_FOOTER_HEIGHT = 62
+
+
 def idle_caption_point(image,scale=1.0):
     """Blank center of Qt's custom caption, excluding pin/window buttons."""
     if not hasattr(image,'size') or not .75<=scale<=3:return None
@@ -79,10 +82,12 @@ def adapt_calibration(image, binding, scale=1.0):
         'header':(divider+12*scale,18*scale,min(width-180*scale,width*.85),
                   min(header-5*scale,(96 if detached else 64)*scale)),
         'messages':(divider+2,header+2,width-10*scale,toolbar-3*scale),
-        'input':(divider+12*scale,toolbar+50*scale,width-25*scale,height-62*scale),
+        'input':(divider+12*scale,toolbar+50*scale,width-25*scale,height-EDITOR_FOOTER_HEIGHT*scale),
         'send':(width-120*scale,height-57*scale,width-25*scale,height-24*scale),
     }
     regions={name:[x1/width,y1/height,x2/width,y2/height] for name,(x1,y1,x2,y2) in rectangles.items()}
+    if 'voice' in binding.regions:
+        regions['voice'] = binding.regions['voice'].copy()
     result=replace(binding,regions=regions)
     try:result.validate()
     except ValueError:return binding

@@ -21,7 +21,7 @@ const title = "拾光微信聊天助手";
 
 app.setAppUserModelId("local.shiguang.assistant");
 app.setPath("userData", path.join(app.getPath("appData"), "ShiguangDesktop", browserProfile));
-protocol.registerSchemesAsPrivileged([{ scheme: "sg-media", privileges: { standard: true, secure: true } }]);
+protocol.registerSchemesAsPrivileged([{ scheme: "sg-media", privileges: { standard: true, secure: true, stream: true } }]);
 
 let main, prompt, broker, timer, status, signature, stopping = false, quitting = false, released = false;
 let statusBusy = false, writes = 0, painted = false, retryBridge;
@@ -47,10 +47,24 @@ const allowed = new Set([
   "tasks.overview", "tasks.history", "tasks.usage", "tasks.savePrices", "diagnostics.run",
   "sessions.rest", "sessions.cancelRest",
   "studio.chat", "studio.summary", "studio.state", "studio.cancel", "studio.sendSummary",
+  "voice.devices", "voice.status", "voice.probe", "voice.installCable", "voice.cancel",
+  "voice.saveRoute", "voice.sendTest",
+  "fabric.setup", "fabric.engine", "fabric.catalog", "fabric.roles", "fabric.status", "fabric.references",
+  "fabric.selectInstallation", "fabric.start", "fabric.download", "fabric.install",
+  "fabric.stop", "fabric.installEngine", "fabric.modelDirectory",
+  "fabric.reveal", "fabric.cancel", "fabric.provision", "fabric.assets", "fabric.selectRole", "fabric.preview",
+  "fabric.saveReference", "fabric.saveBackend", "fabric.uninstall", "fabric.playReference",
+  "fabric.extraAssets",
 ]);
 const mutatingMethods = new Set([
   "tasks.savePrices", "sessions.rest", "sessions.cancelRest", "news.feedback", "news.clearFeedback", "news.delete",
   "studio.chat", "studio.summary", "studio.cancel", "studio.sendSummary",
+  "voice.probe", "voice.installCable", "voice.cancel", "voice.saveRoute", "voice.sendTest",
+  "fabric.selectInstallation", "fabric.start", "fabric.download", "fabric.install",
+  "fabric.stop", "fabric.installEngine", "fabric.modelDirectory",
+  "fabric.reveal", "fabric.cancel", "fabric.provision", "fabric.assets", "fabric.selectRole", "fabric.preview",
+  "fabric.saveReference", "fabric.saveBackend", "fabric.uninstall",
+  "fabric.extraAssets",
 ]);
 
 function secureWindow(options) {
@@ -178,7 +192,8 @@ function registerIpc() {
       throw new Error("不支持此界面操作");
     }
     if (JSON.stringify(params).length > 1_500_000) throw new Error("请求内容过大");
-    const long = method === "settings.testModel" || method.startsWith("sessions.") || method === "run.start";
+    const long = method === "settings.testModel" || method.startsWith("sessions.") || method === "run.start"
+      || ["fabric.engine", "fabric.catalog", "fabric.start", "fabric.stop"].includes(method);
     const changing = mutatingMethods.has(method) || /\.(?:start|mode|selected|recover|save|saveDocument|pacing|credentials|remove|removeKey|preferences|saveDetail|frequency|importText|commit|rules|command)$/.test(method);
     if (changing) writes++;
     if (method === "run.start" && broker.closed) {
@@ -377,12 +392,54 @@ function registerIpc() {
     return selection.canceled ? null
       : broker.call("imports.pick", { paths: selection.filePaths, folder }, 120_000);
   });
+  ipcMain.handle("shiguang:model-directory", async (event) => {
+    identify(event);
+    if (readOnly || stopping) throw new Error("当前不能更改模型目录");
+    const selection = await dialog.showOpenDialog(main, { title: "选择 Fabric 模型文件夹", properties: ["openDirectory", "createDirectory"] });
+    return selection.canceled ? null : selection.filePaths[0];
+  });
+  ipcMain.handle("shiguang:voice-song", async (event) => {
+    identify(event);
+    if (readOnly || stopping) throw new Error("当前不能选择歌声片段");
+    const selection = await dialog.showOpenDialog(main, { title: "选择歌声片段", properties: ["openFile"],
+      filters: [{ name: "WAV 音频", extensions: ["wav"] }] });
+    return selection.canceled ? null : broker.call("voice.setSong", { path: selection.filePaths[0] });
+  });
+  ipcMain.handle("shiguang:audio-settings", async (event) => {
+    identify(event);
+    if (stopping || process.platform !== "win32") throw new Error("当前系统无法打开 Windows 音量混合器");
+    await shell.openExternal("ms-settings:apps-volume");
+  });
 }
 
 function registerMedia() {
   protocol.handle("sg-media", async (request) => {
     if (request.method !== "GET") return new Response(null, { status: 405 });
     const url = new URL(request.url);
+    if (url.host === "voice" && /^\/[a-f0-9]{32}$/.test(url.pathname)) {
+      try {
+        const audio = await broker.call("fabric.previewMedia", { id: url.pathname.slice(1) });
+        const mime = audio.mime ?? "audio/wav";
+        if (!["audio/wav", "audio/ogg", "audio/mpeg", "audio/flac", "audio/mp4"].includes(mime)) {
+          return new Response(null, { status: 415 });
+        }
+        const bytes = Buffer.from(audio.data, "base64");
+        const headers = { "Content-Type": mime, "Cache-Control": "no-store", "Accept-Ranges": "bytes" };
+        const range = request.headers.get("range");
+        if (!range) return new Response(bytes, { headers: { ...headers, "Content-Length": String(bytes.length) } });
+        const match = /^bytes=(\d+)-(\d*)$/.exec(range);
+        const start = Number(match?.[1]);
+        const end = match?.[2] ? Math.min(Number(match[2]), bytes.length - 1) : bytes.length - 1;
+        if (!Number.isSafeInteger(start) || !Number.isSafeInteger(end) || start > end) {
+          return new Response(null, { status: 416, headers: { "Content-Range": `bytes */${bytes.length}` } });
+        }
+        return new Response(bytes.subarray(start, end + 1), { status: 206, headers: {
+          ...headers, "Content-Range": `bytes ${start}-${end}/${bytes.length}`, "Content-Length": String(end - start + 1),
+        } });
+      } catch {
+        return new Response(null, { status: 404 });
+      }
+    }
     if (url.host === "wallpaper" && url.pathname === "/selected") {
       try {
         const info = await fs.stat(wallpaper);

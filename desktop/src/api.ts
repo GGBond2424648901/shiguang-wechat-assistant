@@ -1,4 +1,4 @@
-export type PageKey = "workbench" | "sessions" | "persona" | "companion" | "news" | "tasks" | "stickers" | "settings";
+export type PageKey = "workbench" | "sessions" | "persona" | "companion" | "news" | "tasks" | "stickers" | "settings" | "fabric";
 export type RunMode = "auto" | "observe" | "paused" | "starting" | "stopped" | "disconnected";
 
 export interface Session {
@@ -36,7 +36,7 @@ export interface Queue {
   receiptTotal: number;
   note: string;
   tasks: { id: string; group: string; sender: string; text: string; reply: string; state: string; progress: string }[];
-  receipts: { id: string; at: number; group: string; text: string; kind: "text" | "emoji" | "image"; trigger: string; linked: boolean }[];
+  receipts: { id: string; at: number; group: string; text: string; kind: "text" | "emoji" | "image" | "voice"; trigger: string; linked: boolean }[];
 }
 
 export interface Sticker {
@@ -93,6 +93,9 @@ export interface ImportSnapshot {
 declare global {
   interface Window {
     shiguang: {
+      pickModelDirectory(): Promise<string | null>;
+      pickVoiceSong(): Promise<{ song: boolean } | null>;
+      openAudioSettings(): Promise<void>;
       draft: (page: string, dirty: boolean) => Promise<void>;
       request: (method: string, params?: Record<string, unknown>) => Promise<unknown>;
       watch: (listener: (value: Status) => void) => () => void;

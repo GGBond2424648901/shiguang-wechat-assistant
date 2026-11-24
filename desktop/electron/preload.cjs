@@ -22,6 +22,9 @@ contextBridge.exposeInMainWorld("shiguang", {
   calibration: (method, params = {}) => ipcRenderer.invoke("shiguang:calibration", method, params),
   personaFile: (mode, params) => ipcRenderer.invoke("shiguang:persona-file", mode, params),
   pickStickers: (folder) => ipcRenderer.invoke("shiguang:stickers-pick", folder),
+  pickModelDirectory: () => ipcRenderer.invoke("shiguang:model-directory"),
+  pickVoiceSong: () => ipcRenderer.invoke("shiguang:voice-song"),
+  openAudioSettings: () => ipcRenderer.invoke("shiguang:audio-settings"),
   watchImports: (listener) => {
     const handle = (_, value) => listener(value);
     ipcRenderer.on("shiguang:imports", handle);

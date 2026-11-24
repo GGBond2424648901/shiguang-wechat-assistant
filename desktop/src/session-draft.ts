@@ -3,12 +3,18 @@ export interface Conversation {
   bound: boolean; paused: boolean; calibrated: boolean; placeholder?: boolean;
   windowKind?: string | null; windowSize?: [number, number] | null;
   replyMode?: string | null; stickerFrequency?: string | null; webSearch?: boolean | null;
+  voiceEnabled?: boolean | null; voiceFrequency?: number | null; voiceRoleId?: string | null;
+  voiceSendReady?: boolean;
 }
 export interface SavedSessions {
   items: Conversation[]; monitorAll: boolean; stickersEnabled: boolean; webSearchEnabled: boolean;
   defaultReplyMode: string; defaultStickerFrequency: string; accountLabel: string; accountKey: string; revision: string;
+  voiceSendReady?: boolean;
 }
-export type DraftRule = { replyMode: string | null; stickerFrequency: string | null; webSearch: boolean | null };
+export type DraftRule = {
+  replyMode: string | null; stickerFrequency: string | null; webSearch: boolean | null;
+  voiceEnabled: boolean | null; voiceFrequency: number | null; voiceRoleId: string | null;
+};
 export interface SessionDraft {
   order: Conversation[]; monitor: boolean; stickers: boolean; defaultMode: string;
   rules: Record<string, DraftRule>;
@@ -16,8 +22,9 @@ export interface SessionDraft {
 }
 export const rulesOf = (row: Conversation): DraftRule => ({
   replyMode: row.replyMode ?? null, stickerFrequency: row.stickerFrequency ?? null, webSearch: row.webSearch ?? null,
+  voiceEnabled: row.voiceEnabled ?? null, voiceFrequency: row.voiceFrequency ?? null, voiceRoleId: row.voiceRoleId ?? null,
 });
-const ruleFields = ["replyMode", "stickerFrequency", "webSearch"] as const;
+const ruleFields = ["replyMode", "stickerFrequency", "webSearch", "voiceEnabled", "voiceFrequency", "voiceRoleId"] as const;
 export const sameRules = (a: DraftRule, b: DraftRule) => ruleFields.every(key => a[key] === b[key]);
 export const sameOrder = (a: Conversation[], b: Conversation[]) =>
   a.length === b.length && a.every((row, index) => row.id === b[index].id);

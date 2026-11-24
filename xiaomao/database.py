@@ -146,6 +146,7 @@ class MessageBatch:
     history:list
     new:list
     initial:bool=False
+    pending_voice_ids:tuple[str,...]=()
 
 
 class DatabaseFeed:
@@ -166,6 +167,7 @@ class DatabaseFeed:
             self.watermarks.clear();self.seen.clear();self.uploading.clear();initial=True
         uploading={key:at for key,at in self.uploading.items() if -5<=now-at<=120}
         rows=[];watermarks=dict(self.watermarks)
+        pending_voice_ids = set()
         for source in self.sources():
             conn=source.connection()
             if not conn.execute('SELECT 1 FROM sqlite_master WHERE name=?',(self.table,)).fetchone():
@@ -185,17 +187,21 @@ class DatabaseFeed:
             for record in result:
                 d=dict(zip(names,record));local=int(d['local_id']);at=int(d['create_time'] or 0)
                 kind=int(d['local_type'])&0xffffffff
-                if kind not in (1,3,47,49):continue
+                if kind not in (1,3,34,47,49):continue
                 sender=ids.get(d['real_sender_id'],'')
                 if not isinstance(sender,str) or not sender:continue
+                if kind==34 and sender!=self.self_id:continue
                 if not group and sender not in (self.self_id,self.group_id):continue
                 sid=int(d['server_id'] or 0)
+                local_id = f'{self.group_id}/{source.path.name}/{local}'
+                if kind==34 and sid<=0:
+                    pending_voice_ids.add(local_id)
                 fresh=(not initial and previous is not None and maximum>=previous and local>previous
                        and at>=int(self.started) and -5<=now-at<=120)
                 upload_key=(str(source.path),local)
                 # An outgoing GIF can first appear as an incomplete appmsg 8;
                 # upload completion updates that SAME local row, not a new ID.
-                if fresh and sender==self.self_id and (kind==47 or int(d['local_type'])>>32==8):
+                if fresh and sender==self.self_id and (kind in (34,47) or int(d['local_type'])>>32==8):
                     if len(uploading)<256:uploading[upload_key]=at
                 raw=d['message_content']
                 if isinstance(raw,bytes):
@@ -207,6 +213,11 @@ class DatabaseFeed:
                 # A group body may repeat the sender already proved by the
                 # DB row. A private message has no such removable prefix.
                 if group:raw=raw.removeprefix(sender+':\n')
+                voice_ms=0
+                if kind==34:
+                    voice=re.search(r'<voicemsg\b[^>]*\bvoicelength=["\']([0-9]{1,6})["\']',raw,re.I)
+                    if not voice or not 0 < int(voice[1]) <= 65_000 or sid<=0:continue
+                    voice_ms=int(voice[1])
                 if kind==49:
                     from .stickers import media_md5
                     if media_md5(raw):kind=47
@@ -218,23 +229,26 @@ class DatabaseFeed:
                 if was_uploading and (sender!=self.self_id or at!=uploading[upload_key] or not -5<=now-at<=120):
                     del uploading[upload_key];was_uploading=False
                 if was_uploading:
-                    from .stickers import media_md5
-                    if sid<=0 or not media_md5(raw):continue
+                    if kind!=34:
+                        from .stickers import media_md5
+                        if sid<=0 or not media_md5(raw):continue
                     del uploading[upload_key]
-                identity=f'{self.group_id}/s/{sid}' if sid>0 else f'{self.group_id}/{source.path.name}/{local}'
+                identity=f'{self.group_id}/s/{sid}' if sid>0 else local_id
                 cache_key=''
                 if kind==3:
                     from .media import extract_cache_key
                     cache_key=extract_cache_key(d.get('packed_info_data',b''))
                 display=members.get(sender) if sender!=self.self_id else None
-                message=Message(raw if kind==1 else '[图片]' if kind==3 else '[表情静态帧]',
-                    display.name if display else '','out' if sender==self.self_id else 'in','text' if kind==1 else 'image' if kind==3 else 'emoji',
-                    message_id=identity,created_at=at,media_raw=raw if kind!=1 else '',media_key=cache_key,
+                medium={1:('text',raw),3:('image','[图片]'),34:('voice','[语音]'),47:('emoji','[表情静态帧]')}
+                category, body=medium[kind]
+                message=Message(body,display.name if display else '','out' if sender==self.self_id else 'in',category,
+                    message_id=identity,created_at=at,media_raw=raw if kind in (3,47) else '',media_key=cache_key,
                     sender_source=display.source if display else '',
                     sender_observed_at=now if display else 0,
                     speaker_id='self' if sender==self.self_id else self._speaker_token(sender),
                     mentioned_self=wechat_mention(d.get('source'),self.self_id)
-                    if group and kind==1 and sender!=self.self_id else None)
+                    if group and kind==1 and sender!=self.self_id else None,voice_ms=voice_ms,
+                    voice_local_id=local_id if kind==34 else '')
                 # Server timestamps can lead the local fractional second. Do
                 # not consume that fresh ID as history and lose its receipt.
                 is_new=(fresh or was_uploading) and identity not in self.seen
@@ -250,7 +264,8 @@ class DatabaseFeed:
         if initial:self.started=now
         self.seen.update(unique)
         if len(self.seen)>4096:self.seen=set(unique)
-        return MessageBatch([m for m,new in unique.values()][-(96 if initial else 24):],[m for m,new in unique.values() if new],initial)
+        return MessageBatch([m for m,new in unique.values()][-(96 if initial else 24):],[m for m,new in unique.values() if new],
+                            initial,tuple(sorted(pending_voice_ids)))
 
     def _speaker_token(self,sender):
         token=self._speaker_tokens.get(sender)

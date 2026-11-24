@@ -101,6 +101,136 @@ def process(system):
     engine.observe_once()
 
 
+@pytest.mark.parametrize(('texts', 'medium'), [
+    (('拾光，用语音回我', '说说今天适合看什么书'), 'voice'),
+    (('拾光，用语音回我', '还是打字吧', '说说今天适合看什么书'), 'text'),
+    (('用文字回我', '拾光，唱一小段给我听', '挑一首你喜欢的'), 'sing'),
+])
+def test_merged_turn_keeps_latest_explicit_voice_request(system, texts, medium):
+    from types import SimpleNamespace
+
+    from xiaomao.domain import Message
+    from xiaomao.voice_policy import VoicePreferences
+
+    engine, *_ = system
+    engine.settings.assistant_name = '拾光'
+    engine.message_source = object()
+    engine.voice_runtime = SimpleNamespace(preferences=lambda settings: VoicePreferences(enabled=True))
+    turn = SimpleNamespace(messages=tuple(Message(text, '同一位朋友') for text in texts))
+    assert engine._explicit_voice_request(turn) == medium
+
+
+def test_explicit_voice_synthesizes_the_full_generated_reply_at_zero_percent(system):
+    from types import SimpleNamespace
+
+    from xiaomao.domain import Message, ReplyTask
+    from xiaomao.voice_audio import make_voice_probe
+    from xiaomao.voice_policy import VoicePreferences
+    from xiaomao.voice_runtime import PreparedVoice
+
+    engine, screen, model, clock, store = system
+    engine.enable()
+    engine.message_source = SimpleNamespace()
+    engine.settings.split_replies = True
+    body = '如果今晚来不及煮饭，我建议做一碗番茄鸡蛋面。\n加点青菜，几分钟就能吃上。'
+    model.reply = lambda _: body
+    model.split_wechat_bubbles = lambda text, sources, *, enabled: tuple(text.splitlines()) if enabled else (text,)
+    preferences = VoicePreferences(enabled=True, frequency=0)
+    spoken = []
+
+    def prepare(kind, role, text, job_id, check_active):
+        check_active()
+        spoken.append((kind, text))
+        return PreparedVoice(make_voice_probe(), text, 'output', 'input')
+
+    engine.voice_runtime = SimpleNamespace(preferences=lambda _: preferences,
+                                           can_prepare=lambda role, kind: True, prepare=prepare)
+    clock.advance(5)
+    task = ReplyTask(store.create('reply', clock()), clock(), clock(), '好友',
+                     messages=[Message('@拾光\u2005测试，用语音回复', '好友')])
+    engine.tasks.append(task)
+    screen.background = True
+    engine._reply_and_send(task)
+    if task.voice_future:
+        task.voice_future.result(timeout=3)
+    assert spoken == [('voice', body)]
+    assert not screen.events and preferences.frequency == 0
+
+
+@pytest.mark.parametrize(('outcome','expected'), [('submit_uncertain','verified'),
+                                                 ('cancelled','skipped'),
+                                                 ('recording_left_open','skipped')])
+def test_voice_uses_durable_receipt_and_never_touches_text_editor(system, monkeypatch, outcome, expected):
+    from types import SimpleNamespace
+
+    from xiaomao.database import MessageBatch
+    from xiaomao.domain import Message, ReplyTask
+    from xiaomao.voice_audio import make_voice_probe
+    from xiaomao.voice_runtime import PreparedVoice
+    from xiaomao.windows_wechat_voice import VoiceRecordingResult
+    from xiaomao import windows_wechat_voice, windows_voice_capture
+
+    engine, screen, _, clock, store = system
+    screen.calibration = engine.settings.binding
+    engine.enable()
+    clip = PreparedVoice(make_voice_probe(), '[语音测试]', 'output', 'input')
+    task = ReplyTask(store.create('voice', clock()), clock(), clock(), '', reply=clip.text, state='generated',
+                     operator_plan=True, voice_medium='test', voice_clip=clip)
+    engine.tasks.append(task)
+    delivered = Message('[语音]', direction='out', kind='voice', message_id='peer/s/2',
+                        created_at=clock(), voice_ms=3000)
+    batches = iter([MessageBatch([], []), MessageBatch([delivered], [delivered])])
+    engine.message_source = SimpleNamespace(poll=lambda: next(batches), assert_identity=lambda: None)
+    engine.voice_runtime = SimpleNamespace(current_route=lambda _clip: True)
+    calls = []
+
+    def recorder(desktop, vision, audio, endpoint, *, capture_verified, before_submit, check_cancelled, idle_seconds):
+        check_cancelled()
+        assert audio is clip.audio and endpoint == 'output' and capture_verified()
+        if outcome == 'submit_uncertain':
+            before_submit(3000)
+            assert store.get(task.id)['state'] == 'sending'
+        calls.append(outcome)
+        return VoiceRecordingResult(outcome, '')
+
+    monkeypatch.setattr(windows_voice_capture, 'capture_verified', lambda pid, endpoint: pid == 1 and endpoint == 'input')
+    monkeypatch.setattr(windows_wechat_voice, 'record_wechat_voice', recorder)
+    engine._send_voice(task)
+    assert store.get(task.id)['state'] == expected and calls == [outcome] and not screen.events
+    assert engine.mode == ('paused' if outcome == 'recording_left_open' else 'auto')
+
+
+@pytest.mark.parametrize('outcome', ('blocked', 'cancelled'))
+def test_automatic_voice_can_continue_as_text_after_a_safe_pre_submit_failure(system, monkeypatch, outcome):
+    from types import SimpleNamespace
+
+    from xiaomao import windows_wechat_voice
+    from xiaomao.domain import Message, ReplyTask
+    from xiaomao.voice_audio import make_voice_probe
+    from xiaomao.voice_policy import VoicePreferences
+    from xiaomao.voice_runtime import PreparedVoice
+
+    engine, screen, _, clock, store = system
+    screen.calibration = engine.settings.binding
+    engine.enable()
+    preferences = VoicePreferences(enabled=True, frequency=35)
+    task = ReplyTask(store.create('reply', clock()), clock(), clock(), '', messages=[Message('你好')],
+                     reply='我在呢。', remaining_text=('晚上好。',), state='generated',
+                     voice_medium='voice', voice_preferences=preferences,
+                     voice_clip=PreparedVoice(make_voice_probe(), '我在呢。晚上好。', 'output', 'input'))
+    engine.tasks.append(task)
+    engine.message_source = SimpleNamespace()
+    engine.voice_runtime = SimpleNamespace(current_route=lambda _: True, preferences=lambda _: preferences)
+    monkeypatch.setattr(windows_wechat_voice, 'record_wechat_voice',
+                        lambda *args, **kwargs: windows_wechat_voice.VoiceRecordingResult(outcome, '录音设备暂不可用'))
+
+    engine._send_voice(task)
+
+    assert engine.mode == 'auto' and task in engine.tasks
+    assert task.voice_medium == 'text' and task.voice_clip is None
+    assert task.reply == '我在呢。' and task.remaining_text == ('晚上好。',) and not screen.events
+
+
 @pytest.mark.parametrize('state',['verified','skipped','unknown'])
 def test_only_verified_reply_releases_editor_transaction(system,state):
     from xiaomao.domain import Message
@@ -238,6 +368,46 @@ def test_database_resume_rejects_late_sync_from_pause_period(system):
     engine.message_source.batch=MessageBatch([],[Message('小猫暂停期间发的',message_id='late',created_at=110)])
     engine.observe_once()
     assert not engine.pending() and screen.events==[]
+
+
+@pytest.mark.parametrize('feed_already_open', (False, True))
+def test_database_first_poll_keeps_native_mentions_arriving_after_enable(system, tmp_path, feed_already_open):
+    import sqlite3
+
+    from test_database import database
+    from xiaomao.database import DatabaseFeed, MemoryDatabase
+
+    engine, screen, _, clock, store = system
+    engine.settle_seconds = 5
+    engine.settings.idle_wake = False
+    screen.background = True
+    path = tmp_path/'message_0.db'
+    table = 'Msg_0123456789abcdef0123456789abcdef'
+    database(path, [(1, 11, 98, 1, 2, '@示例账号\u2005启动前的点名')])
+    source = MemoryDatabase(path)
+    try:
+        with sqlite3.connect(path) as connection:
+            connection.execute(f'ALTER TABLE {table} ADD COLUMN source TEXT')
+        engine.message_source = DatabaseFeed(lambda: [source], 'demo@chatroom', 'wxid_self',
+                                             clock=clock, table=table)
+        if feed_already_open:
+            engine.observe_once()
+        engine.enable()
+        clock.advance(7)
+        with sqlite3.connect(path) as connection:
+            connection.executemany(f'INSERT INTO {table} VALUES(?,?,1,?,?,?,?,0,NULL)',
+                                   [(2, 12, 99, 2, 2, '@示例账号\u2005迟到的旧点名'),
+                                    (3, 13, 106, 3, 2, '@示例账号\u2005刚收到的新点名')])
+            connection.execute(f'UPDATE {table} SET source=?',
+                               ('<msgsource><atuserlist>wxid_self</atuserlist></msgsource>',))
+
+        engine.observe_once()
+        assert [row['messages'] for row in engine.pending()] == [['@示例账号\u2005刚收到的新点名']]
+        assert screen.events == []
+        engine.observe_once()
+        assert store.counts() == {'generated': 1}
+    finally:
+        source.close()
 
 
 def test_queued_context_adds_prior_reply_without_duplicating_question(system):

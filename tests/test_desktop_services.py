@@ -530,7 +530,10 @@ def test_desktop_calibration_cancels_lease_and_rejects_stale_save(tmp_path, monk
     monkeypatch.setattr(windows, 'CalibrationWindowLease', Lease)
     monkeypatch.setattr(windows, 'list_calibration_windows', lambda: [candidate])
     monkeypatch.setattr(windows, 'activate_calibration_window', lambda *_: None)
-    monkeypatch.setattr(selection, 'preview_window', lambda *a: (image, draft))
+    def preview(*args, propose_voice=False):
+        assert not propose_voice
+        return image, draft
+    monkeypatch.setattr(selection, 'preview_window', preview)
     monkeypatch.setattr(selection, 'identify_reviewed_window',
                         lambda *a, **kw: (image, selection.CurrentGroup(group.name, draft, group)))
     service = DesktopService(tmp_path)

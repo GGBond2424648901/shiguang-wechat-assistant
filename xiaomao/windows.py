@@ -361,6 +361,41 @@ def find_wechat_window(pid):
     return candidates[0]
 
 
+def _wechat_client_version(pid):
+    import psutil
+    import pywintypes
+    import win32api
+
+    try:
+        version = win32api.GetFileVersionInfo(psutil.Process(pid).exe(), '\\')
+        high, low = version['ProductVersionMS'], version['ProductVersionLS']
+        if high:
+            return high >> 16, high & 0xffff, low >> 16, low & 0xffff
+    except (OSError, KeyError, psutil.Error, pywintypes.error):
+        pass
+    return None
+
+
+def wechat_voice_status():
+    """Check the running chat client without activating it or reading messages."""
+    unknown = {'state': 'unverified', 'version': ''}
+    try:
+        pids = {window['pid'] for window in list_calibration_windows() if window['kind'] == 'main'}
+    except DesktopUnavailable:
+        return unknown
+    if not pids:
+        return {'state': 'open_chat', 'version': ''}
+    if len(pids) != 1:
+        return unknown
+    version = _wechat_client_version(next(iter(pids)))
+    if version is None:
+        return unknown
+    return {
+        'state': 'update' if version < (4, 1, 9, 0) else 'check_recording',
+        'version': '.'.join(map(str, version)),
+    }
+
+
 def input_desktop_available() -> bool:
     handle=U.OpenInputDesktop(0,False,1)
     if not handle:return False
@@ -428,7 +463,7 @@ class WindowsDesktop:
                         raise DesktopTemporarilyHidden("微信目标区域被其他窗口遮挡")
         return info
 
-    def capture(self):
+    def capture(self, *, adapt=True):
         self._visible_capture=None
         info=self._background_binding()
         foreground=self.is_foreground()
@@ -443,7 +478,7 @@ class WindowsDesktop:
             else:image=capture_window(self.calibration.hwnd,info['width'],info['height'])
         except (CaptureError,OSError):raise DesktopTemporarilyHidden('微信画面暂时无法读取，等待重试') from None
         self._background_binding()
-        if self._input_cookie is None or self.calibration.window_kind != 'detached':
+        if adapt and self._input_cookie is None:
             from .layout import adapt_calibration
             self.calibration=adapt_calibration(image,self.calibration,self._dpi_scale())
         if foreground:
@@ -451,11 +486,11 @@ class WindowsDesktop:
         return image
 
     def read_bound_frame(self, image, reader, ocr):
-        from .vision import DETACHED_SEND_UNVERIFIED, recover_detached_send_region
+        from .vision import DETACHED_SEND_UNVERIFIED, recover_send_region
         frame = reader(image, self.calibration)
         if ocr is None or self._input_cookie is not None or getattr(frame, 'reason', '') != DETACHED_SEND_UNVERIFIED:
             return frame
-        recovered = recover_detached_send_region(ocr, image, self.calibration)
+        recovered = recover_send_region(ocr, image, self.calibration)
         if recovered is None:
             return frame
         recovered_frame = reader(image, recovered)
@@ -551,7 +586,7 @@ class WindowsDesktop:
         # checks instead; unchanged manual geometry remains authoritative.
         candidate=replace(original,width=info['width'],height=info['height'],manual_regions=False)
         if original.manual_regions:
-            from .vision import LocalOCR,read_header,header_matches,calibration_send_matches,recover_detached_send_region
+            from .vision import LocalOCR,read_header,header_matches,calibration_send_matches,recover_send_region
             if self._sidebar_ocr is None:self._sidebar_ocr=LocalOCR()
         previous=None
         for _ in range(2):
@@ -570,7 +605,7 @@ class WindowsDesktop:
                         or not header_matches(''.join(line.text for line in lines),detected)):
                     raise DesktopTemporarilyHidden('窗口缩放后会话标题未能核实，等待清晰画面')
                 if not calibration_send_matches(self._sidebar_ocr,image,detected):
-                    detected=recover_detached_send_region(self._sidebar_ocr,image,detected)
+                    detected=recover_send_region(self._sidebar_ocr,image,detected)
                     if detected is None:
                         raise DesktopTemporarilyHidden('窗口缩放后发送按钮未能核实，等待清晰画面')
             if previous and previous.regions!=detected.regions:
@@ -1265,7 +1300,7 @@ class WindowsDesktop:
         """
         from dataclasses import replace
         from .layout import adapt_calibration
-        from .vision import LocalOCR,calibration_send_matches,recover_detached_send_region
+        from .vision import LocalOCR,calibration_send_matches,recover_send_region
         if self.idle_for()<idle_seconds:return None
         generation=self.input_generation()
         image=self.capture();scale=self._dpi_scale()
@@ -1288,7 +1323,7 @@ class WindowsDesktop:
         if target<round(detected.height*.55)+2 or target>=toolbar:return None
         if self._sidebar_ocr is None:self._sidebar_ocr=LocalOCR()
         if not calibration_send_matches(self._sidebar_ocr,image,detected):
-            detected=recover_detached_send_region(self._sidebar_ocr,image,detected)
+            detected=recover_send_region(self._sidebar_ocr,image,detected)
             if detected is None:return None
             self.calibration=detected
         self._sticker_resize_retry_at=time.monotonic()+5
@@ -1306,7 +1341,7 @@ class WindowsDesktop:
             if current is candidate:return None
             self.calibration=current;self.validate_target(image)
             if not calibration_send_matches(self._sidebar_ocr,image,current):
-                current=recover_detached_send_region(self._sidebar_ocr,image,current)
+                current=recover_send_region(self._sidebar_ocr,image,current)
                 if current is None:return None
                 self.calibration=current
             if previous and current.regions!=previous.regions:return None
@@ -1339,21 +1374,37 @@ class WindowsDesktop:
         return self.input_generation()
 
     def verify_send_control(self, ocr):
-        if self.calibration.window_kind != 'detached':
-            return
-        from .vision import calibration_send_matches
-        image = self.capture()
-        if ocr is None or not calibration_send_matches(ocr, image, self.calibration):
-            raise DesktopUnavailable('微信发送按钮已移动或无法核实，已保留草稿')
-        self.assert_input_focus()
+        from .vision import calibration_send_matches, recover_send_region
+        if ocr is not None:
+            original = self.calibration
+            previous = None
+            for attempt in range(3):
+                self.assert_input_focus()
+                image = self.capture()
+                if self.calibration is not original:
+                    break
+                if calibration_send_matches(ocr, image, original):
+                    self.assert_input_focus()
+                    return
+                recovered = recover_send_region(ocr, image, original)
+                if recovered is not None and recovered == previous:
+                    self.assert_input_focus()
+                    self.calibration = recovered
+                    return
+                previous = recovered
+                if attempt < 2 and self.cancelled.wait(.10):
+                    break
+        raise DesktopUnavailable('微信发送按钮已移动或无法核实，已保留草稿')
 
     def click_send(self) -> None:
         self._last_send_activity=None
         self.assert_input_focus()
         self._click("send", self._input_cookie[1])
-        self._sent_generation=self.input_generation()
-        if self._editor_idle_credit is not None:
-            self._last_send_activity=(self._sent_generation,self._editor_idle_credit)
+        self.remember_send_input(self.input_generation())
+
+    def remember_send_input(self,generation):
+        self._sent_generation=generation
+        self._last_send_activity=(generation,self._editor_idle_credit) if self._editor_idle_credit is not None else None
         self._editor_idle_credit=None
 
     def continue_after_receipt(self):

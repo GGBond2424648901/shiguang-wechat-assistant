@@ -32,6 +32,8 @@ class Message:
     sender_source: str = ''
     sender_observed_at: float = field(default=0, compare=False)
     mentioned_self: bool | None = None
+    voice_ms: int = 0
+    voice_local_id: str = field(default='', repr=False, compare=False)
 
     @property
     def key(self) -> tuple:
@@ -89,3 +91,10 @@ class ReplyTask:
     part_index: int = 0
     previous_part_id: str = ''
     web_search: 'SearchTurn | None' = field(default=None, repr=False)
+    voice_request: str = 'text'
+    voice_medium: str = ''
+    voice_preferences: object = field(default=None, repr=False)
+    voice_future: object = field(default=None, repr=False)
+    voice_clip: object = field(default=None, repr=False)
+    voice_ms: int = 0
+    voice_baseline: frozenset[str] = field(default_factory=frozenset, repr=False)

@@ -1,6 +1,6 @@
 import { createRoot } from "react-dom/client";
 import {
-  ArrowDownToLine, CircleHelp, Grid2X2, Heart, MessageCircle, Minus, Power, RefreshCw,
+  ArrowDownToLine, CircleHelp, Grid2X2, Heart, MessageCircle, Mic, Minus, Power, RefreshCw,
   Settings2, Smile, Square, UserRound, X, Newspaper, CalendarClock,
 } from "lucide-react";
 import { useCallback, useEffect, useLayoutEffect, useRef, useState, type ReactNode } from "react";
@@ -11,6 +11,7 @@ import { SessionsPage } from "./sessions";
 import { Workbench } from "./workbench";
 import { StickersPage } from "./stickers";
 import { SettingsPage } from "./settings";
+import { FabricPage } from "./fabric";
 import { CalibrationWindow } from "./calibration";
 import { BackupWindow, CompanionPage } from "./companion";
 import { NewsPage } from "./news";
@@ -30,6 +31,7 @@ const navigation = [
   { key: "tasks", title: "任务中心", icon: CalendarClock },
   { key: "stickers", title: "表情包", icon: Smile },
   { key: "settings", title: "运行设置", icon: Settings2 },
+  { key: "fabric", title: "语音与音色", icon: Mic },
 ] as const;
 
 type Notify = (message: string, error?: boolean) => void;
@@ -160,6 +162,7 @@ function App() {
       edit={target => { setEditTarget(target); navigate(target.page); }} />;
     if (key === "settings") return <SettingsPage active={key === page} status={status} appearance={appearance}
       setAppearance={updateAppearance} notify={notify} navigate={navigate} />;
+    if (key === "fabric") return <FabricPage active={key === page} readOnly={status?.readOnly ?? true} />;
     return <div className="glass phase-note"><Empty icon={<CircleHelp size={28} />} title="正在迁移此页面"
       detail="这份开发预览用于验证工作台和表情包页。旧版保留完整入口。" /></div>;
   }
@@ -178,7 +181,7 @@ function App() {
           aria-current={page === key ? "page" : undefined} aria-label={title} title={title} onClick={() => navigate(key)}>
           <Icon size={29} strokeWidth={1.75} /><span>{title}</span>
         </button>)}</nav>
-      <div className="rail-footer"><span>{status?.readOnly ? "只读预览" : "拾光桌面版"}</span><small>Alt + 1–8 切换页面</small></div>
+      <div className="rail-footer"><span>{status?.readOnly ? "只读预览" : "拾光桌面版"}</span><small>Alt + 1–9 切换页面</small></div>
     </aside>
     <main className="main-pane" data-page={page} data-subpage={page === "sessions" && directory ? "directory" : undefined}>
       <header className="chrome drag-region">

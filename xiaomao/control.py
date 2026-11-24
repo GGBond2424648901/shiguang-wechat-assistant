@@ -71,6 +71,7 @@ class ControlServer:
                                    "/reload_windows":lambda:engine.reload_windows(),
                                    "/queue_text":lambda:engine.queue_text(**payload),
                                    "/queue_outbound":lambda:engine.queue_outbound(**payload),
+                                   "/queue_voice_test":lambda:engine.queue_voice_test(**payload),
                                    "/configure_reply_rules":lambda:engine.configure_reply_rules(**payload),
                                    "/configure_reply_defaults":lambda:engine.configure_reply_defaults(**payload),
                                    "/enable_selected":lambda:engine.enable_selected(**payload),
@@ -112,6 +113,9 @@ class ControlServer:
                                     or not isinstance(payload['sticker_ids'],list)
                                     or not all(isinstance(s,str) for s in payload['sticker_ids'])):
                                 return self.answer(400,{'error':'需要指定会话身份、文字、素材编号和请求编号'})
+                        elif self.path=='/queue_voice_test':
+                            if not isinstance(payload,dict) or set(payload)!={'request_id'} or not isinstance(payload['request_id'],str):
+                                return self.answer(400, {'error':'需要指定语音测试请求编号'})
                         elif self.path=='/news_command':
                             if (not isinstance(payload,dict) or set(payload)!={'subscription','action','edition'}
                                     or not isinstance(payload['subscription'],str) or not 1<=len(payload['subscription'])<=64

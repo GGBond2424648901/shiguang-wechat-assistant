@@ -3,15 +3,16 @@ import { useEffect, useRef, useState, type PointerEvent } from "react";
 import { errorMessage } from "./api";
 import { Button, Empty, IconButton, Select, Switch } from "./components";
 
-const regionKeys = ["header", "messages", "input", "send"] as const;
-type Region = typeof regionKeys[number];
+const requiredRegionKeys = ["header", "messages", "input", "send"] as const;
+const allRegionKeys = [...requiredRegionKeys, "voice"] as const;
+type Region = typeof allRegionKeys[number];
 type Rectangle = [number, number, number, number];
-type Regions = Record<Region, Rectangle>;
-const labels = { header: "会话标题", messages: "消息区域", input: "输入区域", send: "发送按钮" };
+type Regions = Record<typeof requiredRegionKeys[number], Rectangle> & { voice?: Rectangle };
+const labels = { header: "会话标题", messages: "消息区域", input: "输入区域", send: "发送按钮", voice: "语音按钮" };
 type WindowList = { windows: { id: string; title: string; kind: "main" | "detached"; minimized: boolean }[];
   suggested: string; target: string };
 type Preview = { token: string; target: string; kind: string; width: number; height: number; regions: Regions;
-  image: string; observed: string; note: string; identified: boolean };
+  image: string; observed: string; note: string; identified: boolean; voiceSupported: boolean };
 type Result = { target: string; applied: boolean; paused?: boolean; note: string };
 const rpc = <T,>(method: string, params: Record<string, unknown> = {}) =>
   window.shiguang.calibration(method, params) as Promise<T>;
@@ -33,10 +34,13 @@ export function CalibrationWindow() {
   const surface = useRef<HTMLDivElement>(null);
   const start = useRef<{ x: number; y: number }>(null);
   const running = useRef(false);
+  const regionKeys = picture?.voiceSupported ? allRegionKeys : requiredRegionKeys;
+  const activeBox = regions?.[active];
 
   function update(preview: Preview) {
     setPicture(preview);
     setRegions(preview.regions);
+    if (!preview.voiceSupported) setActive(previous => previous === "voice" ? "header" : previous);
     setNote(preview.note);
     setConfirmed(false);
   }
@@ -110,10 +114,15 @@ export function CalibrationWindow() {
     setDrag(undefined);
     if (chosen && picture && regions && (chosen[2] - chosen[0]) * picture.width >= 5 &&
         (chosen[3] - chosen[1]) * picture.height >= 5) {
-      setUndo(previous => [...previous.slice(-19), regions]);
-      setRegions({ ...regions, [active]: chosen });
-      setConfirmed(false);
+      editRegions({ ...regions, [active]: chosen });
     }
+  }
+
+  function editRegions(next: Regions) {
+    if (!regions) return;
+    setUndo(previous => [...previous.slice(-19), regions]);
+    setRegions(next);
+    setConfirmed(false);
   }
 
   return <div className="calibration-shell">
@@ -126,7 +135,7 @@ export function CalibrationWindow() {
         <Empty icon={<Check size={30} />} title={`“${saved.target}”的校准已保存`}
           detail={saved.note || (saved.paused ? "可在工作台开启这个会话的回复。" : "后台已应用此次校准。")} />
       </div> : <>
-        <p className="muted">识别所选窗口，并核对消息、输入与发送区域</p>
+        <p className="muted">识别所选窗口，并核对消息、输入与发送区域{picture?.voiceSupported ? "，也可校准语音按钮" : ""}</p>
         {!picture ? <>
           <div className="calibration-controls">
             <Select label="目标窗口" value={windowId}
@@ -170,35 +179,47 @@ export function CalibrationWindow() {
               onPointerUp={finish} onPointerCancel={() => { start.current = null; setDrag(undefined); }}>
               <img alt="当前微信窗口校准截图" src={picture.image} draggable={false} />
               {regionKeys.map((key, index) => {
-                const [x1, y1, x2, y2] = key === active && drag ? drag : regions[key];
+                const box = key === active && drag ? drag : regions[key];
+                if (!box) return null;
+                const [x1, y1, x2, y2] = box;
                 return <div key={key} className={`region region-${key} ${active === key ? "active" : ""}`}
                   style={{ left: `${100 * x1}%`, top: `${100 * y1}%`,
                     width: `${100 * (x2 - x1)}%`, height: `${100 * (y2 - y1)}%` }}><span>{index + 1}</span></div>;
               })}
             </div>
           </div>
-          <div className="calibration-regions" role="group" aria-label="选择要调整的区域">
-            {regionKeys.map((key, index) => <button key={key} type="button" aria-pressed={active === key} onClick={() => setActive(key)}
-              className={`region-choice region-${key}`} disabled={!!busy}>
-              <span>{index + 1}</span><b>{labels[key]}</b>
-              <small>{Math.round(regions[key][0] * picture.width)}, {Math.round(regions[key][1] * picture.height)} ·
-                {" "}{Math.round((regions[key][2] - regions[key][0]) * picture.width)} × {Math.round((regions[key][3] - regions[key][1]) * picture.height)}</small>
-            </button>)}
+          <div className={`calibration-regions${picture.voiceSupported ? " has-voice" : ""}`} role="group" aria-label="选择要调整的区域">
+            {regionKeys.map((key, index) => {
+              const box = regions[key];
+              return <button key={key} type="button" aria-pressed={active === key} onClick={() => setActive(key)}
+                className={`region-choice region-${key}`} disabled={!!busy}>
+                <span>{index + 1}</span><b>{labels[key]}</b>
+                <small>{box ? `${Math.round(box[0] * picture.width)}, ${Math.round(box[1] * picture.height)} · ` +
+                  `${Math.round((box[2] - box[0]) * picture.width)} × ${Math.round((box[3] - box[1]) * picture.height)}`
+                  : "未框选（可选）"}</small>
+              </button>;
+            })}
           </div>
-          <div className="calibration-numeric">
+          {activeBox && <div className="calibration-numeric">
             {(["左", "上", "右", "下"] as const).map((label, i) => {
               const limit = i % 2 ? picture.height : picture.width;
               return <label className="field" key={label}>{label}<input type="number" min={0} max={limit}
-                disabled={!!busy} value={Math.round(regions[active][i] * limit)} onChange={event => {
+                disabled={!!busy} value={Math.round(activeBox[i] * limit)} onChange={event => {
                   const value = Number(event.target.value);
-                  const box = [...regions[active]] as Rectangle;
+                  const box = [...activeBox] as Rectangle;
                   box[i] = clamp(value / limit);
-                  setUndo(previous => [...previous.slice(-19), regions]);
-                  setRegions({ ...regions, [active]: box });
-                  setConfirmed(false);
+                  editRegions({ ...regions, [active]: box });
                 }} /></label>;
             })}
-          </div>
+          </div>}
+          {active === "voice" && <div className="calibration-controls">
+            <p className="fine-print muted">在截图中沿语音按钮外沿拖出矩形。</p>
+            {regions.voice && <Button disabled={!!busy} onClick={() => {
+              const next = { ...regions };
+              delete next.voice;
+              editRegions(next);
+            }}>移除语音选区</Button>}
+          </div>}
           {picture.observed && <p className="fine-print muted">窗口中识别到 {picture.observed}</p>}
           <p className="fine-print muted">{note}</p>
         </>}
@@ -212,7 +233,7 @@ export function CalibrationWindow() {
           busy={busy === "capture"} onClick={() => void capture()}>唤起并校准</Button>
       </> : <>
         <Switch checked={confirmed} onChange={setConfirmed} disabled={!!busy || !picture.identified}>
-          已核对会话、聊天底部和空白输入框
+          {regions?.voice ? "已核对会话、聊天底部、空白输入框和语音按钮" : "已核对会话、聊天底部和空白输入框"}
         </Switch>
         <Button variant="primary" icon={<Save size={16} />} busy={busy === "save"}
           disabled={!picture.identified || !confirmed || !!busy} onClick={() => void save()}>保存校准</Button>

@@ -898,6 +898,10 @@ uvicorn==0.54.0 ; sys_platform != 'emscripten' \
     --hash=sha256:505bdb0f318731d45f1f712071fc781a8981f6847a31c902c9f5e652d4f67faf \
     --hash=sha256:a2e33cbfaa0306f8e6b0c13e0cb89d7d7a2da3e62b90c66e18c33d9807b28620
     # via mcp
+websocket-client==1.9.0 \
+    --hash=sha256:9e813624b6eb619999a97dc7958469217c3176312b3a16a4bd1bc7e08a46ec98 \
+    --hash=sha256:af248a825037ef591efbf6ed20cc5faa03d3b47b9e5a2230a529eeee1c1fc3ef
+    # via xiaomao-wechat-assistant
 zstandard==0.25.0 \
     --hash=sha256:05df5136bc5a011f33cd25bc9f506e7426c0c9b3f9954f056831ce68f3b6689f \
     --hash=sha256:0be7622c37c183406f3dbf0cba104118eb16a4ea7359eeb5752f0794882fc250 \

@@ -61,6 +61,37 @@ def test_operations_reject_stale_account_and_readonly_mutations(tmp_path):
     with pytest.raises(ValueError): ops.overview(12)
 
 
+def test_task_centre_normalizes_legacy_companion_settings_on_read(tmp_path, monkeypatch):
+    from datetime import datetime
+    from xiaomao.companion import LOCAL
+    from xiaomao.companion_store import CompanionStore
+    from xiaomao.desktop_operations import DesktopOperations
+    from xiaomao.routines import routine_preset
+
+    cfg = configured(tmp_path)
+    now = datetime(2026, 11, 11, 8, 0, tzinfo=LOCAL).timestamp()
+    monkeypatch.setattr('xiaomao.desktop_operations.time.time', lambda: now)
+    legacy = CompanionStore(cfg.runtime, cfg.conversation_scope('小禾'))
+    legacy.data['preferences'].pop('routines')
+    legacy.data['preferences']['style'] = '保留原有偏好'
+    legacy.save()
+    encrypted = legacy.path.read_bytes()
+
+    scheduled = CompanionStore(cfg.runtime, cfg.conversation_scope('晨光群'))
+    routine = routine_preset('morning')
+    routine.update(enabled=True, time='09:00', weekdays=[2])
+    scheduled.data['preferences'].update(enabled=True, routines=[routine])
+    scheduled.save()
+
+    operations = DesktopOperations(tmp_path, FixtureClient(), read_only=True)
+    overview = operations.overview()
+    assert [row['title'] for row in overview['rows'] if row['kind'] == 'routine'] == [routine['intent']]
+    restored = CompanionStore(cfg.runtime, cfg.conversation_scope('小禾'), read_only=True)
+    assert restored.data['preferences']['routines'] == []
+    assert restored.data['preferences']['style'] == '保留原有偏好'
+    assert legacy.path.read_bytes() == encrypted
+
+
 def test_overview_uses_weekdays_disabled_flags_and_no_promised_proactive_time(tmp_path,monkeypatch):
     from datetime import datetime
     from dataclasses import asdict

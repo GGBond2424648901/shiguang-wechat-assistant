@@ -177,6 +177,40 @@ async function main() {
     await page.getByRole("button", { name: "运行设置", exact: true }).click();
     await page.getByRole("heading", { name: "模型与密钥", exact: true }).waitFor();
     await page.screenshot({ path: path.join(output, "settings.png"), animations: "disabled" });
+    await page.getByRole("button", { name: "语音设备", exact: true }).click({ timeout: 4_000 });
+    await page.getByRole("heading", { name: "语音设备", exact: true }).waitFor();
+    const voiceOutput = page.getByRole("combobox", { name: "拾光播放设备" });
+    const voiceInput = page.getByRole("combobox", { name: "录音输入设备" });
+    await voiceOutput.waitFor();
+    await voiceInput.waitFor();
+    const voiceDevices = await page.evaluate(() => window.shiguang.request("voice.devices"));
+    assert.equal(voiceDevices.job, null);
+    assert.equal(voiceDevices.configured, null);
+    assert.ok(await page.getByRole("button", { name: "保存语音设备", exact: true }).isDisabled());
+    const wxStatus = await page.locator(".voice-wechat-status").textContent();
+    assert.ok(wxStatus?.trim(), "WeChat voice compatibility should be reported");
+    if (voiceDevices.wechat.version) assert.ok(wxStatus.includes(voiceDevices.wechat.version));
+    if (!voiceDevices.suggested) {
+      assert.ok(await page.getByRole("button", { name: "下载 VB-CABLE 并打开安装程序", exact: true }).isEnabled());
+      assert.equal(await page.evaluate(() => window.shiguang.request("voice.status")), null);
+    }
+    if (voiceDevices.output.length && voiceDevices.input.length) {
+      for (const control of [voiceOutput, voiceInput]) {
+        await control.click();
+        await control.press("Home");
+        await control.press("Enter");
+      }
+      assert.ok(await page.getByRole("button", { name: "测试音频回路", exact: true }).isEnabled());
+      await page.getByRole("button", { name: "刷新设备", exact: true }).click();
+      await page.waitForFunction(() => {
+        const button = [...document.querySelectorAll(".voice-setup-actions .button")].find(
+          element => element.textContent === "测试音频回路");
+        return button && !button.disabled;
+      });
+      assert.equal(await page.evaluate(() => window.shiguang.request("voice.status")), null);
+    }
+    await page.screenshot({ path: path.join(output, "voice-devices.png"), animations: "disabled" });
+    await page.getByRole("button", { name: "常规", exact: true }).click();
     await page.getByRole("button", { name: "添加密钥", exact: true }).click();
     await page.getByLabel("新密钥 1", { exact: true }).fill("sk-fixture-invalid-A091");
     await page.getByRole("button", { name: "增加输入栏", exact: true }).click();

@@ -13,7 +13,19 @@ const python = process.env.SHIGUANG_PYTHON || 'python';
   const output = process.env.SG_OPERATIONS_OUTPUT || await fs.mkdtemp(path.join(os.tmpdir(), 'shiguang-operations-'));
   await fs.mkdir(output, { recursive: true });
   const profile = await fs.mkdtemp(path.join(output, 'profile-'));
-  const fixture = spawnSync(python, ['-c', 'from pathlib import Path; import sys; from scripts.qa_ui_baseline import prepare_profile; prepare_profile(Path(sys.argv[1]),count=2)', profile],
+  const fixture = spawnSync(python, ['-c', `
+from pathlib import Path
+import sys
+from scripts.qa_ui_baseline import prepare_profile
+from xiaomao.config import Settings
+from xiaomao.companion_store import CompanionStore
+root = Path(sys.argv[1])
+prepare_profile(root, count=2)
+cfg = Settings.load(root)
+notes = CompanionStore(cfg.runtime, cfg.memory_scope)
+notes.data['preferences'].pop('routines')
+notes.save()
+`, profile],
     { cwd: project, windowsHide: true, encoding: 'utf8', env: { ...process.env, PYTHONUTF8: '1' } });
   assert.equal(fixture.status, 0, fixture.stderr);
   const env = { ...process.env, SHIGUANG_PYTHON: python }; delete env.ELECTRON_RUN_AS_NODE;
@@ -31,8 +43,43 @@ const python = process.env.SHIGUANG_PYTHON || 'python';
     return page;
   }
   const dirty = (page, expected) => page.waitForFunction(async value => (await window.shiguang.appInfo()).dirty === value, expected);
+  async function checkIndependentReads(page) {
+    const runtime = path.join(profile, 'runtime');
+    const companionFile = (await fs.readdir(runtime)).find(name => /^companion-.+\.dpapi$/.test(name));
+    assert.ok(companionFile, 'the fixture must include saved companion settings');
+    const companionPath = path.join(runtime, companionFile);
+    const original = await fs.readFile(companionPath);
+    const plans = page.getByRole('button', { name: '计划总览', exact: true });
+    const usage = page.getByRole('button', { name: '用量统计', exact: true });
+    const error = page.locator('.tasks-error');
+    try {
+      await fs.writeFile(companionPath, 'unreadable QA record');
+      await plans.click();
+      await error.getByText(/陪伴记忆无法解密/).waitFor();
+      await usage.click();
+      await page.getByRole('combobox', { name: '统计范围' }).click();
+      await page.getByRole('option', { name: '最近30天', exact: true }).click();
+      await page.getByRole('table').locator('tbody tr').nth(29).waitFor({ timeout: 5000 });
+      assert.equal(await error.count(), 0);
+      await plans.click();
+      await error.getByText(/陪伴记忆无法解密/).waitFor();
+    } finally {
+      await fs.writeFile(companionPath, original);
+    }
+    await error.getByRole('button', { name: '重试', exact: true }).click();
+    await error.waitFor({ state: 'hidden' });
+    await usage.click();
+    await page.getByRole('spinbutton', { name: '每百万输入tokens单价', exact: true }).waitFor();
+    checks.push('usage loads with a failed plan source and plan retry recovers');
+  }
   try {
     let page = await open(false);
+    await checkIndependentReads(page);
+    if (process.argv.includes('--task-loading-only')) {
+      assert.deepEqual(errors, []);
+      console.log(JSON.stringify({ passed: true, checks }));
+      return;
+    }
     const input = page.getByRole('spinbutton', { name: '每百万输入tokens单价', exact: true });
     await dirty(page, false);
     await input.fill('2'); await dirty(page, true);

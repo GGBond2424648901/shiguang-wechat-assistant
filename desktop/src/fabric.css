@@ -1,0 +1,73 @@
+.fabric-page { --muted: var(--subtle); min-height: 100%; display: flex; flex-direction: column; gap: 16px; }
+.fabric-attribution { margin: 0; font-size: 13px; }
+.fabric-tabs { display: flex; flex-wrap: wrap; gap: 20px; border-bottom: 1px solid var(--line); }
+.fabric-tabs button { background: transparent; color: var(--muted); border: 0; border-bottom: 3px solid transparent;
+  padding: 8px 12px 11px; font: inherit; font-weight: 650; cursor: pointer; }
+.fabric-tabs button[aria-pressed="true"] { color: var(--peach); border-bottom-color: var(--peach); }
+.fabric-toolbar { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; }
+.fabric-search { position: relative; flex: 1 0 190px; max-width: 460px; }
+.fabric-search svg { position: absolute; top: 50%; left: 13px; transform: translateY(-50%); color: var(--muted); }
+.fabric-search input { width: 100%; min-height: var(--control-height); padding: 8px 13px 8px 39px; font: inherit;
+  color: var(--ink); border: 1px solid var(--soft-line); border-radius: 12px; background: var(--shade); }
+.fabric-search input::placeholder { color: var(--subtle); }
+.fabric-toolbar .select { min-width: 126px; }
+.fabric-filter { display: flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
+.fabric-filter input { accent-color: var(--peach); width: auto; }
+.fabric-toolbar > .icon-button { margin-left: auto; }
+.fabric-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(min(100%, 211px), 1fr)); gap: 14px; }
+.fabric-card { display: flex; flex-direction: column; min-width: 0; overflow: hidden; border: 1px solid var(--line);
+  border-radius: 14px; background: rgb(211 198 247 / .045); }
+.fabric-cover { display: grid; place-items: center; position: relative; overflow: hidden; color: var(--peach);
+  background: linear-gradient(145deg, rgb(221 199 248 / .15), rgb(245 177 154 / .06)); aspect-ratio: 4 / 3; }
+.fabric-cover img { width: 100%; height: 100%; object-fit: contain; position: absolute; inset: 0; opacity: 0; }
+.fabric-cover img.ready { opacity: 1; }
+.fabric-cover span { position: absolute; bottom: 8px; left: 9px; border-radius: 6px; padding: 4px 7px;
+  background: #202133eb; color: #f7edfd; font-size: 12px; }
+.fabric-card-body { display: flex; flex: 1; flex-direction: column; gap: 8px; padding: 12px; min-width: 0; }
+.fabric-card h3, .fabric-role h3, .fabric-engine h3 { margin: 0; font-size: 16px; }
+.fabric-card h3 { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fabric-meta { display: grid; min-width: 0; gap: 4px; margin: 0 0 5px; color: var(--muted); font-size: 12px; }
+.fabric-meta > span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.fabric-license { display: flex; flex-wrap: wrap; column-gap: 8px; }
+.fabric-card-actions { display: flex; align-items: center; gap: 6px; margin-top: auto; }
+.fabric-card-actions .button { min-width: 0; padding-inline: 9px; flex: 1; }
+.fabric-more, .fabric-setup-empty { display: flex; justify-content: center; }
+.fabric-setup-empty { flex-direction: column; align-items: center; gap: 12px; }
+.fabric-section-header { display: flex; align-items: center; justify-content: space-between; gap: 11px; flex-wrap: wrap; }
+.fabric-section-header > span, .fabric-model-path { overflow-wrap: anywhere; }
+.fabric-role-list, .fabric-engine { display: grid; gap: 12px; }
+.fabric-role, .fabric-engine-card { border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+.fabric-role { display: grid; grid-template-columns: auto minmax(0, 1fr) auto; align-items: center; gap: 12px; }
+.fabric-role-icon { width: 42px; height: 42px; border-radius: 12px; background: rgb(236 190 166 / .12);
+  color: var(--peach); display: grid; place-items: center; }
+.fabric-role h3, .fabric-role p { overflow-wrap: anywhere; }
+.fabric-role p, .fabric-engine-card p { margin: 0; }
+.fabric-role-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.fabric-role-actions .button { padding-inline: 12px; }
+.fabric-preview > .field, .fabric-preview-fields { width: 100%; }
+.fabric-preview-fields { display: grid; grid-template-columns: minmax(0, 2fr) minmax(130px, 1fr); gap: 12px; }
+.fabric-reference-row { display: flex; flex-wrap: wrap; gap: 6px; }
+.fabric-reference-row .select { flex: 1; min-width: min(100%, 162px); }
+.fabric-reference-row .button { padding-inline: 10px; }
+.fabric-preview textarea { width: 100%; resize: vertical; }
+.fabric-directory { display: grid; width: 100%; align-items: end; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.fabric-engine-card { display: grid; justify-items: start; gap: 9px; }
+.fabric-engine-card > .fabric-section-header, .fabric-engine-card > .select { width: 100%; }
+.fabric-engine-card h3 { display: flex; gap: 8px; align-items: center; }
+.fabric-resource { width: 100%; display: flex; justify-content: space-between; align-items: center; gap: 10px;
+  border-top: 1px solid var(--line); padding-top: 8px; }
+.fabric-resource > div, .fabric-job > div { display: grid; gap: 3px; }
+.fabric-resource span, .fabric-job span { font-size: 12px; }
+.fabric-job { position: sticky; bottom: 0; margin-top: auto; display: flex; align-items: center; gap: 12px;
+  background: #222236; border: 1px solid var(--line); border-radius: 12px; padding: 12px; }
+.fabric-job progress { flex: 1; min-width: 50px; height: 11px; accent-color: var(--peach); }
+.fabric-job audio { width: min(100%, 320px); height: 38px; }
+@media (max-width: 850px) {
+  .fabric-grid { grid-template-columns: repeat(auto-fill, minmax(min(100%, 176px), 1fr)); }
+  .fabric-tabs { gap: 8px; }
+  .fabric-role { grid-template-columns: auto minmax(0, 1fr); }
+  .fabric-role > .fabric-role-actions { grid-column: 2; }
+}
+@media (max-width: 620px) {
+  .fabric-preview-fields { grid-template-columns: 1fr; }
+}

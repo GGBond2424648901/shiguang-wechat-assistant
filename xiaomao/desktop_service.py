@@ -11,6 +11,7 @@ from .config import Settings
 from .desktop_calibration import DesktopCalibration
 from .desktop_catalog import DesktopCatalog
 from .desktop_companion import DesktopCompanion
+from .desktop_fabric import DesktopFabric
 from .desktop_news import DesktopNews
 from .desktop_operations import DesktopOperations
 from .desktop_studio import DesktopStudio
@@ -18,11 +19,13 @@ from .desktop_import import DesktopImportQueue
 from .desktop_persona import DesktopPersona
 from .desktop_settings import DesktopSettings, config_revision
 from .desktop_sessions import DesktopSessions
+from .desktop_voice import DesktopVoiceSetup
 from .member_names import safe_name
 from .memory import ConversationMemory
 from .receipts import receipt_page
 from .reply_preferences import persist_preferences
 from .ui_labels import member_label
+from .voice_runtime import VoiceRuntime
 
 MODES = ('auto', 'observe', 'paused', 'starting', 'stopped', 'disconnected')
 STATES = ('candidate', 'generated', 'staged', 'sending', 'awaiting_receipt', 'unknown', 'verified', 'failed', 'skipped')
@@ -42,12 +45,15 @@ class DesktopService:
         self.catalog = DesktopCatalog(self.root, read_only=read_only)
         self.settings = DesktopSettings(self.root, self.client)
         self.persona = DesktopPersona(self.root)
-        self.sessions = DesktopSessions(self.root, self.client)
+        self.voice_runtime = VoiceRuntime(self.root)
+        self.sessions = DesktopSessions(self.root, self.client, voice_send_ready=self.voice_runtime.can_prepare)
         self.calibration = DesktopCalibration(self.root, self.client)
         self.companion = DesktopCompanion(self.root, self.client, read_only)
         self.news = DesktopNews(self.root, self.client, read_only)
         self.operations = DesktopOperations(self.root, self.client, read_only)
         self.studio = DesktopStudio(self.root, self.client, read_only)
+        self.voice = DesktopVoiceSetup(self.root)
+        self.fabric = DesktopFabric(self.root)
         self._receipts = {}
         self._receipt_lock = RLock()
         self._mutations = RLock()
@@ -69,6 +75,11 @@ class DesktopService:
             'tasks.overview': self.operations.overview, 'tasks.history': self.operations.history,
             'tasks.usage': self.operations.usage, 'diagnostics.run': self.operations.diagnostics,
             'studio.state': self.studio.state,
+            'voice.devices': self.voice.devices, 'voice.status': self.voice.status,
+            'fabric.setup': self.fabric.setup, 'fabric.engine': self.fabric.engine,
+            'fabric.catalog': self.fabric.catalog, 'fabric.roles': self.fabric.roles,
+            'fabric.status': self.fabric.status, 'fabric.references': self.fabric.references,
+            'fabric.playReference': self.fabric.play_reference, 'fabric.previewMedia': self.fabric.preview_media,
         }
         self._writers = {
             'run.start': self.start, 'run.mode': self.mode, 'run.selected': self.selected,
@@ -100,6 +111,21 @@ class DesktopService:
             'sessions.rest': self.operations.rest, 'sessions.cancelRest': self.operations.cancel_rest,
             'studio.chat': self.studio.chat, 'studio.summary': self.studio.summary,
             'studio.cancel': self.studio.cancel, 'studio.sendSummary': self.studio.send_summary,
+            'voice.probe': self.voice.probe, 'voice.installCable': self.voice.install_cable,
+            'voice.cancel': self.voice.cancel,
+            'voice.saveRoute': self.voice.save_route,
+            'voice.setSong': self.voice.set_song,
+            'voice.sendTest': self.send_voice_test,
+            'fabric.selectInstallation': self.fabric.select_installation,
+            'fabric.start': self.fabric.start, 'fabric.stop': self.fabric.stop,
+            'fabric.installEngine': self.fabric.install_engine, 'fabric.modelDirectory': self.fabric.model_directory,
+            'fabric.download': self.fabric.download, 'fabric.install': self.fabric.install,
+            'fabric.uninstall': self.fabric.uninstall,
+            'fabric.reveal': self.fabric.reveal, 'fabric.cancel': self.fabric.cancel,
+            'fabric.provision': self.fabric.provision, 'fabric.assets': self.fabric.assets,
+            'fabric.extraAssets': self.fabric.extra_assets,
+            'fabric.selectRole': self.fabric.select_role, 'fabric.preview': self.fabric.preview,
+            'fabric.saveReference': self.fabric.save_reference, 'fabric.saveBackend': self.fabric.save_backend,
         }
 
     def call(self, method, params):
@@ -116,6 +142,11 @@ class DesktopService:
             raise ValueError('当前为只读预览')
         with self._mutations:
             return action(**params)
+
+    def send_voice_test(self, requestId):
+        if not isinstance(requestId, str) or not re.fullmatch(r'[a-f0-9]{32}', requestId) or not self.voice.test_target():
+            raise ValueError('当前没有可用的固定语音测试会话')
+        return self.client.request('queue_voice_test', {'request_id': requestId})
 
     def _session(self, cfg, identity):
         for name in cfg.allowed_groups:

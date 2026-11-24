@@ -34,7 +34,7 @@ test('usage pricing is a native guarded draft, with invalid keys still rejected'
   assert.equal(b.stopped(), 1);
 });
 
-for (const method of ['tasks.savePrices', 'sessions.rest', 'sessions.cancelRest', 'studio.sendSummary',
+for (const method of ['tasks.savePrices', 'sessions.rest', 'sessions.cancelRest', 'studio.sendSummary', 'fabric.uninstall',
   'news.feedback', 'news.clearFeedback', 'news.delete', 'studio.chat', 'studio.summary', 'studio.cancel']) {
   for (const rejected of [false, true]) test(`${method} protects close while pending and releases on ${rejected ? 'rejection' : 'success'}`, async () => {
     const b = boundary();
@@ -55,3 +55,36 @@ for (const method of ['tasks.savePrices', 'sessions.rest', 'sessions.cancelRest'
     assert.equal(b.stopped(), 1);
   });
 }
+
+test('reference playback does not block closing the desktop', async () => {
+  const b = boundary();
+  const pending = b.handlers['shiguang:request']({ from: b.main }, 'fabric.playReference', { roleId: 'example', reference: '0:1' });
+  assert.equal(b.context.writes, 0);
+  b.resolve({ id: 'a'.repeat(32) });
+  assert.deepEqual(await pending, { id: 'a'.repeat(32) });
+});
+
+test('the voice protocol serves original OGG bytes and rejects non-audio MIME types', async () => {
+  const source = fs.readFileSync(require.resolve('../electron/main.cjs'), 'utf8');
+  const id = 'a'.repeat(32), bytes = Buffer.from('OggS fixture');
+  const audio = { data: bytes.toString('base64'), mime: 'audio/ogg' };
+  let handler;
+  const context = vm.createContext({
+    Buffer, URL, Response,
+    protocol: { handle: (scheme, callback) => { assert.equal(scheme, 'sg-media'); handler = callback; } },
+    broker: { call: (method, params) => {
+      assert.equal(method, 'fabric.previewMedia');
+      assert.equal(params.id, id);
+      return audio;
+    } },
+  });
+  vm.runInContext(source.slice(source.indexOf('function registerMedia()'), source.indexOf('function showMain()')) +
+    '\nregisterMedia();', context);
+  const request = new Request('sg-media://voice/' + id, { headers: { range: 'bytes=0-3' } });
+  const response = await handler(request);
+  assert.equal(response.status, 206);
+  assert.equal(response.headers.get('content-type'), 'audio/ogg');
+  assert.equal(await response.text(), 'OggS');
+  audio.mime = 'text/html';
+  assert.equal((await handler(request)).status, 415);
+});

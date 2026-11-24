@@ -3,6 +3,7 @@ import { useCallback, useEffect, useState, type CSSProperties, type ReactNode } 
 import { defaultAppearance, errorMessage, request, stepZoom, type Appearance, type PageKey, type Status } from "./api";
 import { Button, Confirm, Empty, IconButton, PanelTitle, Select, Switch, useDraftGuard } from "./components";
 import { DiagnosticsPage } from "./diagnostics";
+import { VoiceSettings } from "./voice-settings";
 
 type Notify = (message: string, error?: boolean) => void;
 type General = {
@@ -141,6 +142,7 @@ export function SettingsPage({ active, status, appearance, setAppearance, notify
     <Button variant={tab === "general" ? "primary" : "ghost"} aria-pressed={tab === "general"} onClick={() => setTab("general")}>常规</Button>
     <Button variant={tab === "appearance" ? "primary" : "ghost"} aria-pressed={tab === "appearance"} onClick={() => setTab("appearance")}>界面外观</Button>
     <Button variant={tab === "diagnostics" ? "primary" : "ghost"} aria-pressed={tab === "diagnostics"} onClick={() => setTab("diagnostics")}>运行诊断</Button>
+    <Button variant={tab === "voice" ? "primary" : "ghost"} aria-pressed={tab === "voice"} onClick={() => setTab("voice")}>语音设备</Button>
   </div>;
   return <div className="settings-page page-grid" data-tab={tab}>
     <div className="settings-general" hidden={tab !== "general"}>
@@ -251,6 +253,8 @@ export function SettingsPage({ active, status, appearance, setAppearance, notify
       readOnly={readOnly} notify={notify} tabs={tabs} /></div>
     <div className="settings-diagnostics" hidden={tab !== "diagnostics"}><DiagnosticsPage active={active && tab === "diagnostics"}
       status={status} tabs={tabs} navigate={navigate} notify={notify} /></div>
+    <div className="settings-voice" hidden={tab !== "voice"}><VoiceSettings active={active && tab === "voice"} readOnly={readOnly}
+      tabs={tabs} /></div>
     {confirm && <Confirm title={confirm.title} detail={confirm.detail} cancel={() => setConfirm(undefined)}
       confirm={() => { const run = confirm.run; setConfirm(undefined); run(); }} />}
   </div>;

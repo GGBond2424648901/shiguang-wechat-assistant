@@ -26,7 +26,7 @@ class CompanionStore:
                 _,plain=win32crypt.CryptUnprotectData(self.path.read_bytes(),self.entropy,None,None,1)
                 data=json.loads(plain)
                 if data['version']!=1 or data['scope']!=scope or not isinstance(data['planner'],dict):raise ValueError()
-                CompanionPreferences(**data['preferences'])
+                data['preferences']=asdict(CompanionPreferences(**data['preferences']))
                 self.data.update(data)
             except Exception:raise ValueError('陪伴记忆无法解密或格式无效，原文件保留') from None
 

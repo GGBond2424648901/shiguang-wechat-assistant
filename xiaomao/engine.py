@@ -52,6 +52,7 @@ _SEND_WAITS = {
     'clipboard':'等待剪贴板可用，尚未输入',
     'sticker_draft':'表情草稿保留中，等待空闲后核对；继续接收新消息',
     'sticker_space':'等待表情编辑区完整展开，尚未粘贴；继续接收新消息',
+    'voice':'正在准备回复语音，微信输入框保持原状',
 }
 
 
@@ -71,6 +72,7 @@ class Engine:
         self.lock = threading.RLock()
         self.work_lock = threading.Lock()
         self.window_turn=None
+        self.voice_runtime=None
         self.cancelled = threading.Event()
         self.stop_event = threading.Event()
         if hasattr(desktop, "cancelled"):
@@ -157,6 +159,8 @@ class Engine:
             task.messages.clear()
             task.context.clear()
             task.reply = ""
+            task.voice_clip = None
+            task.voice_future = None
             task.raw_bubble=None
             task.remaining_stickers.clear()
             task.remaining_text=();task.media_first=False
@@ -418,6 +422,7 @@ class Engine:
                     'sticker_clipboard_busy':'表情到期未发：剪贴板暂不可用',
                     'expired':'未发送：等待超过时限',
                     'insufficient_input_time':'未发送：等待超过安全输入时限',
+                    'voice_blocked':'语音未发送，录音控件或音频回路未通过核对',
                     'uncertain_send':'发送结果未知，未重发'}
             labels.update(draft_expired='表情草稿未能在时限内核对，已保留且未发送',
                           proactive_expired='主动消息已失效，未发送',
@@ -574,6 +579,9 @@ class Engine:
                 if message.message_id:
                     if message.message_id in self.received_ids:continue
                     self.received_ids.add(message.message_id)
+                if message.kind=='voice' and message.direction=='out':
+                    self._remember(message)
+                    continue
                 previous_id,self.last_arrival_id=self.last_arrival_id,message.message_id
                 self._remember(message)
                 if message.message_id and message.created_at and (message.created_at<int(self.receive_cutoff)
@@ -708,7 +716,7 @@ class Engine:
         return context+target
 
     def _remember(self,message):
-        if not self.settings.context_limit or message.kind not in ('text','image','emoji') or message.quoted or message.quality<.92:return
+        if not self.settings.context_limit or message.kind not in ('text','image','emoji','voice') or message.quoted or message.quality<.92:return
         if message.message_id and message.media_raw:
             self.media_refs[message.message_id]=message
             self.media_refs.move_to_end(message.message_id)
@@ -984,12 +992,24 @@ class Engine:
             self.source_failures=0;self.last_observed=now
             self.reason='数据库后台监听中' if self.mode=='auto' else '数据库观察中'
             baseline=batch.initial or self.source_rebaseline
+            starting_auto=self.source_rebaseline and self.mode=='auto'
             self.source_rebaseline=False
             if profiles is not None:
                 try:memory.refresh_member_profiles(profiles)
                 except Exception:logging.getLogger(__name__).warning('成员名册暂未更新，聊天继续')
             if baseline:
-                self._seed_context(batch.history)
+                # The first snapshot may already include an incoming message
+                # delivered during startup settling. Keep only stable arrivals
+                # timestamped after activation, never the previous chat history.
+                arrivals = ()
+                if starting_auto:
+                    arrivals = [m for m in (batch.history if batch.initial else batch.new)
+                                if m.direction=='in' and m.message_id
+                                and self.receive_cutoff < m.created_at <= now+5
+                                and now-m.created_at <= self.settings.expiry_seconds]
+                receiving = {m.message_id for m in arrivals}
+                self._seed_context([m for m in batch.history if m.message_id not in receiving])
+                self._record(arrivals)
             else:
                 if self.memory:
                     try:self.memory.refresh_members(batch.history)
@@ -1044,7 +1064,8 @@ class Engine:
                 if epoch!=self.epoch or self.cancelled.is_set():return
                 if isinstance(error,DesktopUnavailable) and self._defer_sticker_draft(task):return
                 if task.state in ('staged','sending','awaiting_receipt','unknown'):
-                    self.pause('输入或发送状态发生变化，已保留草稿，请核对微信')
+                    detail = str(error) if isinstance(error, DesktopUnavailable) else ''
+                    self.pause(detail or '输入或发送状态发生变化，已保留草稿，请核对微信')
                 else:
                     task.retry_at=max(task.retry_at,self.clock()+3)
                     task.wait_reason='window';task.idle_deadline=0
@@ -1136,7 +1157,9 @@ class Engine:
             task.send_interval=self.settings.min_interval+(random.uniform(0,self.settings.pacing_jitter) if self.settings.natural_pacing else 0)
             task.pacing_planned=True
         from .stickers import named_catalog_order,turn_sticker_request
-        local_order=named_catalog_order(task.messages)
+        if not task.reply and not (task.operator_plan or task.proactive or task.continuation_of):
+            task.voice_request = self._explicit_voice_request(task)
+        local_order=named_catalog_order(task.messages) if task.voice_request == 'text' else None
         if not task.reply and not local_order and not self._prepare_media(task):return
         with self.lock:
             context=self._reply_context(task)
@@ -1150,11 +1173,13 @@ class Engine:
                         or sum(len(m.image_data) for m in context)>12*1024*1024):
                     context=self._compact_context(context,targets=task.messages)
                     task.context=list(context)
-                optional=self.settings.reply_mode=='natural' and not request.explicit and not any(self.policy.addressed(m) for m in task.messages)
-                task.sticker_requested=request.explicit
-                task.sticker_source_id=request.source_id if request.explicit else ''
+                voice_request = task.voice_request
+                optional=(self.settings.reply_mode=='natural' and not request.explicit and voice_request=='text'
+                          and not any(self.policy.addressed(m) for m in task.messages))
+                task.sticker_requested=request.explicit and voice_request=='text'
+                task.sticker_source_id=request.source_id if task.sticker_requested else ''
                 choices=[]
-                sticker_mode=(self.settings.stickers_enabled and self.message_source
+                sticker_mode=(voice_request=='text' and self.settings.stickers_enabled and self.message_source
                         and hasattr(self.desktop,'type_sticker') and hasattr(self.desktop,'verify_sticker_input')
                         and hasattr(self.model,'reply_plan'))
                 if isinstance(self.model, ChatModel) and not (sticker_mode and local_order):
@@ -1162,7 +1187,9 @@ class Engine:
                 ready=request.explicit or self.store.sticker_ready(self.settings.memory_scope,self.clock(),self.settings.sticker_frequency)
                 if sticker_mode and not task.sticker_failed and ready:
                     choices=self.stickers.candidates(context,request=request,excluded=self.store.recent_stickers(self.settings.memory_scope,self.clock(),all_history=request.avoid_repeats))
-                if sticker_mode and local_order:
+                if voice_request=='sing':
+                    reply='[歌声]'
+                elif sticker_mode and local_order:
                     prepared=self.stickers.prepare_order(choices,request)
                     if prepared:
                         task.sticker,*task.remaining_stickers=prepared
@@ -1248,7 +1275,7 @@ class Engine:
             if task.state=='candidate' and not task.sticker and not task.operator_plan:
                 # OCR receipts have no stable message IDs. Keep a single paste
                 # in screen mode; database deliveries can attest each bubble.
-                enabled=(self.settings.split_replies and self.message_source is not None
+                enabled=(self.settings.split_replies and self.message_source is not None and task.voice_request=='text'
                          and not (task.proactive and task.proactive.kind in ('checkin','signoff')))
                 split=getattr(self.model,'split_wechat_bubbles',None)
                 parts=split(reply,task.messages,enabled=enabled) if split else split_reply(reply,enabled=enabled)
@@ -1261,7 +1288,7 @@ class Engine:
                     reply+=''.join(task.remaining_text)
                     task.remaining_text=()
             finalize=getattr(self.model,'finalize_wechat_bubble',None)
-            if finalize and not task.sticker and not task.operator_plan:
+            if finalize and not task.sticker and not task.operator_plan and task.voice_request=='text':
                 history=self._context_snapshot()
                 while True:
                     task.raw_bubble=reply
@@ -1285,6 +1312,9 @@ class Engine:
         if task.sticker and not task.sticker_requested and not self.store.sticker_ready(self.settings.memory_scope,self.clock(),self.settings.sticker_frequency):
             self._sticker_unavailable(task,'刚刚已发表情，这条改用文字接话')
             return
+        if self._prepare_voice(task):
+            return
+        reply = task.reply
         # Deadlines are sampled once, never redrawn by polling or model retry.
         # Wait before activating WeChat, leaving the user's input untouched.
         if self.clock()<task.reply_not_before:
@@ -1385,6 +1415,9 @@ class Engine:
                     return
         task.wait_reason=''
         task.wait_detail=''
+        if task.voice_clip:
+            self._send_voice(task)
+            return
         self.desktop.click_input(prepared_generation)
         focused = self._frame()
         if self.message_source and hasattr(self.desktop,'confirm_empty_editor'):
@@ -1472,6 +1505,178 @@ class Engine:
             self.pause("输入表情未能完整核对，已保留草稿" if task.sticker else "输入内容未能完整核对，请检查微信草稿")
             return
         self._send_verified(task,reply,before)
+
+    def _voice_source(self, task):
+        texts = []
+        aliases = (self.settings.assistant_name, *self.settings.wake_aliases)
+        for message in task.messages:
+            if message.kind != 'text':
+                continue
+            source = message.text.strip()
+            alias = next((name for name in aliases if name and source.startswith(name)), '')
+            texts.append(source[len(alias):].lstrip(' ，,：:') if alias else source)
+        return texts
+
+    def _explicit_voice_request(self, task):
+        if not self.voice_runtime or not self.message_source:
+            return 'text'
+        from .voice_policy import choose_reply_medium
+
+        preferences = self.voice_runtime.preferences(self.settings)
+        return choose_reply_medium(self._voice_source(task), replace(preferences, frequency=0),
+                                   sample=1.0, sender_ready=True)
+
+    @staticmethod
+    def _same_voice_selection(task, preferences):
+        chosen = task.voice_preferences
+        return preferences.enabled and (chosen is None or (
+            chosen.role_id == preferences.role_id and (
+                task.voice_request != 'text' or chosen.frequency == preferences.frequency)))
+
+    def _prepare_voice(self, task):
+        if (not self.voice_runtime or not self.message_source or task.sticker or task.remaining_stickers or
+                task.continuation_of or task.operator_plan or task.proactive or not task.messages):
+            return False
+        preferences = self.voice_runtime.preferences(self.settings)
+        if not self._same_voice_selection(task, preferences):
+            task.voice_medium, task.voice_clip, task.voice_future = 'text', None, None
+            if task.reply == '[歌声]':
+                task.reply = task.raw_bubble = '这会儿没法发语音唱给你听。'
+            return False
+        if not task.voice_medium:
+            from .voice_policy import choose_reply_medium
+
+            sample = random.Random(task.id).random()
+            medium = choose_reply_medium(self._voice_source(task), preferences, sample=sample, sender_ready=True)
+            if medium == 'text':
+                task.voice_medium = medium
+                return False
+            try:
+                ready = self.voice_runtime.can_prepare(preferences.role_id, medium)
+            except (OSError, ValueError) as error:
+                logging.getLogger(__name__).warning('WeChat voice readiness check failed: %s', type(error).__name__)
+                ready = False
+            task.voice_medium = medium
+            task.voice_preferences = preferences
+            if not ready:
+                self._voice_to_text(task, '语音设备或音色未就绪')
+        if task.voice_medium not in ('voice', 'sing') or task.voice_clip:
+            return False
+        if task.voice_future is None:
+            # The existing generation timeout still applies; synthesis runs without
+            # reserving the shared WeChat window or blocking observation.
+            spoken = '\n'.join((task.reply, *task.remaining_text))
+            medium = task.voice_medium
+            future = task.voice_future = Future()
+
+            def check_active():
+                if (not self._active(task) or
+                        not self._same_voice_selection(task, self.voice_runtime.preferences(self.settings))):
+                    raise InterruptedError('语音回复已取消')
+
+            def prepare():
+                if not future.set_running_or_notify_cancel():
+                    return
+                try:
+                    future.set_result(self.voice_runtime.prepare(medium, preferences.role_id, spoken,
+                                                                 task.id, check_active))
+                except Exception as error:
+                    future.set_exception(error)
+
+            threading.Thread(target=prepare, name='wechat-voice-synthesis', daemon=True).start()
+        if not task.voice_future.done():
+            self._waiting(task, 'voice')
+            task.retry_at = self.clock() + 0.5
+            return True
+        try:
+            task.voice_clip = task.voice_future.result()
+        except Exception as error:
+            if self._active(task):
+                logging.getLogger(__name__).warning('WeChat reply synthesis failed: %s', type(error).__name__)
+                self._voice_to_text(task, '语音准备未完成')
+        finally:
+            task.voice_future = None
+        return False
+
+    def _voice_to_text(self, task, detail):
+        if task.voice_medium == 'sing':
+            task.reply = task.raw_bubble = '这会儿没法发语音唱给你听。'
+            task.remaining_text = ()
+        task.voice_medium = 'text'
+        task.voice_clip = None
+        self.reason = f'{detail}，本轮改用文字回复'
+        logging.getLogger(__name__).info('WeChat voice was not submitted: %s', detail)
+
+    def _send_voice(self, task):
+        from .windows_voice_capture import capture_verified
+        from .windows_wechat_voice import record_wechat_voice
+
+        clip = task.voice_clip
+        if not self.voice_runtime.current_route(clip) or self._deadline(task)-self.clock() < clip.audio.duration+3:
+            if self._active(task):
+                if task.operator_plan:
+                    self._retire(task, 'skipped', 'voice_blocked')
+                else:
+                    self._voice_to_text(task, '语音设备或本轮剩余时间不足')
+            return
+        binding = self.desktop.calibration
+        sent = False
+
+        def check_active():
+            if (not self._active(task) or (task.voice_medium != 'test' and
+                    not self._same_voice_selection(task, self.voice_runtime.preferences(self.settings)))):
+                raise InterruptedError('语音回复已取消')
+
+        def before_submit(duration_ms):
+            nonlocal sent
+            check_active()
+            if not self.voice_runtime.current_route(clip):
+                raise ValueError('语音设备已变化，录音未提交')
+            if not self._send_allowed(task, self.clock(), planned=True)[0]:
+                raise ValueError('本条语音达到发送频率限制')
+            if hasattr(self.message_source, 'assert_identity'):
+                self.message_source.assert_identity()
+            baseline = self.message_source.poll()
+            with self.lock:
+                check_active()
+                self._record(baseline.new)
+                task.sent_at = self.clock()
+                task.voice_ms = duration_ms
+                ids = (message.message_id for message in baseline.history + baseline.new)
+                task.voice_baseline = frozenset(ids) | frozenset(baseline.pending_voice_ids)
+                self.store.mark_sending(task.id, task.sent_at, [message.key for message in task.messages],
+                                        group=self.settings.memory_scope, reply=clip.text, baseline_ids=task.voice_baseline,
+                                        voice_ms=duration_ms)
+                task.state = 'sending'
+                sent = True
+
+        try:
+            result = record_wechat_voice(self.desktop, self.vision, clip.audio, clip.output_id,
+                                        capture_verified=lambda: capture_verified(binding.pid, clip.input_id),
+                                        before_submit=before_submit, check_cancelled=check_active,
+                                        idle_seconds=self.settings.idle_seconds)
+        except Exception:
+            logging.getLogger(__name__).exception('WeChat voice transaction failed')
+            if sent:
+                self._retire(task, 'unknown', 'uncertain_send')
+                self.pause('语音发送结果未知，请核对微信')
+            elif self._active(task):
+                self._retire(task, 'skipped', 'voice_blocked')
+            return
+        if result.state == 'submit_uncertain' and sent:
+            self._confirm_database_send(task, clip.text)
+            release = getattr(self.desktop, 'release_send_focus', None)
+            if release:
+                release()
+        elif self._active(task):
+            if not sent and not task.operator_plan and result.state in ('blocked', 'cancelled'):
+                self._voice_to_text(task, result.detail or '录音未提交')
+            else:
+                self._retire(task, 'skipped', 'voice_blocked')
+                if result.state == 'recording_left_open':
+                    self.pause('微信录音界面仍在，请确认后继续')
+                elif result.detail:
+                    self.reason = result.detail
 
     def _send_verified(self,task,reply,before):
         if not self._active(task):
@@ -1632,16 +1837,24 @@ class Engine:
                     or task.state not in ('sending','awaiting_receipt')):return False
             if self._expire_receipt():return True
             epoch=self.epoch
+            if task.voice_clip:
+                messages = [message for message in messages if message.kind=='voice' and message.direction=='out'
+                            and abs(message.voice_ms-task.voice_ms)<=1500 and message.message_id not in task.voice_baseline
+                            and message.voice_local_id not in task.voice_baseline]
+                if len(messages)!=1:return False
             for message in messages:
-                if not task.sticker and not bubble_matches(task,message.text):continue
+                if task.voice_clip:
+                    if message.kind!='voice':continue
+                elif not task.sticker and not bubble_matches(task,message.text):continue
                 if not self.store.confirm_receipt(task.id,self.settings.memory_scope,message):continue
                 if task.sticker:message=replace(message,text=task.sticker.description,media_raw='',media_key='')
+                if task.voice_clip:message=replace(message,text=task.voice_clip.text)
                 source=list(task.messages)
                 if source:
                     target=next((m for m in source if task.sticker_source_id and m.message_id==task.sticker_source_id),source[-1])
                     message=replace(message,reply_to_id=target.message_id,reply_to_speaker=target.speaker_id)
                 self._remember(message)
-                text=task.remaining_text
+                text=() if task.voice_clip else task.remaining_text
                 stickers=list(task.remaining_stickers)
                 position=self.tasks.index(task)
                 self._retire(task,'verified')
@@ -1649,6 +1862,10 @@ class Engine:
                     if task.proactive and (text or stickers):self._companion_call('finish',task.proactive,'partial')
                     return True
                 self.reason='回复已由微信数据库确认，继续后台监听'
+                if task.voice_clip:
+                    continue_idle = getattr(self.desktop, 'continue_after_receipt', None)
+                    if continue_idle:
+                        continue_idle()
                 if not (text or stickers):return True
                 if not task.created<=self.clock()<self._deadline(task):
                     if task.proactive:self._companion_call('finish',task.proactive,'partial')

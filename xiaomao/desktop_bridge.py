@@ -80,7 +80,7 @@ def serve(service, source, sink, lease=None):
             except (ValueError, UnicodeError):
                 write({'id': None, 'error': '无效的本机界面请求'})
                 continue
-            media = request['method'] in ('stickers.image', 'imports.preview')
+            media = request['method'] in ('stickers.image', 'imports.preview', 'fabric.playReference', 'fabric.previewMedia')
             pool, slots = (preview_pool, previews) if media else (command_pool, commands)
             if slots.acquire(blocking=False):
                 pool.submit(run, request, slots)
@@ -118,6 +118,7 @@ def run_bridge(root, *, read_only=False, managed=False):
             serve(service, sys.stdin.buffer, sys.stdout.buffer, lease)
         finally:
             service.calibration.cancel()
+            service.voice.close()
     finally:
         if lease:
             lease.close()

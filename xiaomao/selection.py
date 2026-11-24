@@ -255,9 +255,9 @@ def capture_calibration(root,target,*,desktop_factory=WindowsDesktop,recognizer=
     return image,binding
 
 
-def preview_window(cfg,candidate,expected):
+def preview_window(cfg,candidate,expected,*,propose_voice=False):
     """Open the geometry editor from fresh pixels, even if automatic detection fails."""
-    from .layout import adapt_calibration,default_calibration_regions
+    from .layout import EDITOR_FOOTER_HEIGHT,adapt_calibration,default_calibration_regions
     from .windows import capture_calibration_window
     image,info=capture_calibration_window(candidate['hwnd'],candidate['pid'])
     if (candidate['kind'],candidate['title'])!=(info['kind'],info['title']):
@@ -278,7 +278,27 @@ def preview_window(cfg,candidate,expected):
     if existing and (existing.hwnd,existing.pid,existing.width,existing.height,existing.window_kind)==(
             draft.hwnd,draft.pid,draft.width,draft.height,kind):
         draft=replace(draft,regions=existing.regions.copy(),manual_regions=existing.manual_regions)
-    draft=adapt_calibration(image,draft,info.get('scale',1))
+    scale=info.get('scale',1)
+    adapted=adapt_calibration(image,draft,scale)
+    detected_layout=adapted is not draft
+    draft=adapted
+    if propose_voice and 'voice' not in draft.regions:
+        from .windows_wechat_voice import propose_voice_region
+        voice=propose_voice_region(image,draft,scale)
+        if voice is not None:
+            regions={**draft.regions,'voice':voice}
+            if not draft.manual_regions:
+                x1,y1,x2,y2=regions['input']
+                footer_top=1-EDITOR_FOOTER_HEIGHT*scale/draft.height
+                if y1+40*scale/draft.height<=footer_top<y2:
+                    regions['input']=[x1,y1,x2,footer_top]
+                if not detected_layout:
+                    # The current main-window title row starts lower than the old fallback crop.
+                    x1,y1,x2,y2=regions['header']
+                    title_bottom=min(72*scale/draft.height,regions['messages'][1]-2*scale/draft.height)
+                    if title_bottom>y2:
+                        regions['header']=[x1,y1,x2,title_bottom]
+            draft=replace(draft,regions=regions)
     return image,draft
 
 
@@ -337,7 +357,7 @@ def rediscover_detached(cfg,names,cancelled):
     return cfg
 
 
-def _reviewed_identity(cfg,draft,cancelled,vision):
+def _reviewed_identity(cfg,draft,cancelled,vision,*,verify_voice=False):
     """Read one immutable window/recipient observation, without sending input."""
     from .vision import detached_title_matches
     from .windows import capture_calibration_window
@@ -362,6 +382,10 @@ def _reviewed_identity(cfg,draft,cancelled,vision):
                     ocr_title=visual_name_key(name) if contact else '')
     if checked.window_kind=='detached' and not detached_title_matches(info['title'],checked):
         raise ValueError('独立窗口标题与已识别聊天对象不一致')
+    if verify_voice and 'voice' in checked.regions:
+        from .windows_wechat_voice import locate_voice_entry
+        if locate_voice_entry(image,checked,info.get('scale',1)) is None:
+            raise ValueError('语音按钮选区未匹配微信录音入口，请重新框选或移除语音选区')
     if contact:checked._capture_contact=contact
     return image,CurrentGroup(name,checked,contact),rows
 
@@ -384,17 +408,22 @@ def identify_reviewed_window(cfg,draft,cancelled,*,choose_observed=False,vision=
 
 
 def verify_reviewed_window(cfg,draft,cancelled,*,vision=None):
-    """Match the user's four regions twice before persisting any window or recipient."""
-    from .vision import Vision,calibration_send_matches
+    """Check the reviewed regions twice before persisting any window or recipient."""
+    from .vision import Vision,calibration_send_matches,recover_send_region
     draft.validate()
     vision=vision or Vision()
     checked=None
     previous=None
     for _ in range(2):
-        image,current,rows=_reviewed_identity(cfg,draft,cancelled,vision)
+        image,current,rows=_reviewed_identity(cfg,draft,cancelled,vision,verify_voice=True)
         contact=current.contact
         name,kind=current.name,current.calibration.target_kind
         binding=replace(current.calibration,bottom_confirmed=True)
+        if not calibration_send_matches(vision.ocr,image,binding):
+            binding=recover_send_region(vision.ocr,image,binding)
+            if binding is None:raise ValueError('发送按钮选区未匹配“发送”，请框选按钮')
+        if checked is not None and checked.rect('send')!=binding.rect('send'):
+            raise ValueError('两次截图的发送按钮位置不同，请重新校准')
         if contact:binding._capture_contact=contact
         updated=bind_reviewed_window(cfg,binding,contact)
         if contact:resolve_contact(rows,updated,name)
@@ -405,7 +434,6 @@ def verify_reviewed_window(cfg,draft,cancelled,*,vision=None):
         frame=vision.read(image,binding)
         if not frame.safe or not frame.at_bottom:raise ValueError(frame.reason or '请确认聊天位于底部，并调整消息区域')
         if not frame.draft_empty:raise ValueError('输入区域含有草稿或图标，请调整选区')
-        if not calibration_send_matches(vision.ocr,image,binding):raise ValueError('发送按钮选区未匹配“发送”，请框选按钮')
         if cfg.receive_mode=='screen' and not frame.messages:raise ValueError('消息区域中未识别到聊天气泡')
         checked=binding
     return checked,contact

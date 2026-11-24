@@ -12,6 +12,30 @@ def database(path, rows):
         c.executemany('INSERT INTO Msg_0123456789abcdef0123456789abcdef VALUES(?,?,1,?,?,?, ?,0)', rows)
 
 
+def test_voice_feed_waits_for_server_acknowledgment_and_keeps_only_duration(tmp_path):
+    from xiaomao.database import DatabaseFeed, MemoryDatabase
+
+    path = tmp_path / 'message_0.db'
+    table = 'Msg_0123456789abcdef0123456789abcdef'
+    database(path, [])
+    source = MemoryDatabase(path)
+    feed = DatabaseFeed(lambda: [source], 'group@chatroom', 'wxid_self', table=table, clock=lambda: 101)
+    assert feed.poll().initial
+    body = '<msg><voicemsg voicelength="5800" cdnurl="private" /></msg>'
+    with sqlite3.connect(path) as db:
+        db.executemany(f'INSERT INTO {table} VALUES(?, ?, 34, 101, ?, ?, ?, 0)',
+                       [(1, 0, 1, 1, body), (2, 100, 2, 2, body)])
+    pending = feed.poll()
+    assert not pending.new and pending.pending_voice_ids == ('group@chatroom/message_0.db/1',)
+    with sqlite3.connect(path) as db:
+        db.execute(f'UPDATE {table} SET server_id=200 WHERE local_id=1')
+    message, = feed.poll().new
+    assert (message.kind, message.direction, message.voice_ms) == ('voice', 'out', 5800)
+    assert message.text == '[语音]' and not message.media_raw and message.message_id.endswith('/s/200')
+    assert message.voice_local_id == pending.pending_voice_ids[0]
+    assert not feed.poll().new
+
+
 def test_feed_tracks_ids_not_nicknames_or_duplicate_body(tmp_path):
     from xiaomao.database import DatabaseFeed, MemoryDatabase
     path=tmp_path/'message_0.db'

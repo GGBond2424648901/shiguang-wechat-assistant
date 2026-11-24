@@ -23,6 +23,34 @@ function KindIcon({ kind, size = 20 }: { kind: string; size?: number }) {
   return kind === "news" ? <Newspaper size={size} /> : kind === "routine" ? <CalendarClock size={size} /> : <MessageCircle size={size} />;
 }
 
+type TaskRead<T> = { key: string; data?: T; error?: string; pending: boolean };
+
+function useTaskRead<T>(active: boolean, scope: string, refresh: number, method: string, parameter: string, value: number) {
+  const key = `${scope}:${value}`;
+  const [result, setResult] = useState<TaskRead<T>>();
+  useEffect(() => {
+    if (!active) return;
+    let current = true;
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    async function load() {
+      setResult(before => before?.key === key ? { ...before, pending: true } : { key, pending: true });
+      try {
+        const data = await request<T>(method, { [parameter]: value });
+        if (current) setResult({ key, data, pending: false });
+      } catch (error) {
+        if (current) setResult(before => ({
+          key, data: before?.key === key ? before.data : undefined, error: errorMessage(error), pending: false,
+        }));
+      } finally {
+        if (current) timer = setTimeout(() => void load(), 10000);
+      }
+    }
+    void load();
+    return () => { current = false; clearTimeout(timer); };
+  }, [active, key, method, parameter, refresh, value]);
+  return result?.key === key ? result : { key, pending: active };
+}
+
 export function TasksPage({ active, status, notify, navigate, edit }: {
   active: boolean; status?: Status; notify: (message: string, error?: boolean) => void;
   navigate: (page: PageKey) => void; edit: (value: TaskDestination) => void;
@@ -33,45 +61,27 @@ export function TasksPage({ active, status, notify, navigate, edit }: {
   const [kind, setKind] = useState("all");
   const [session, setSession] = useState("all");
   const [version, setVersion] = useState(0);
-  const [snapshot, setSnapshot] = useState<{ key: string; overview: TaskOverview; history: TaskHistory; usage?: UsageReport }>();
-  const [error, setError] = useState("");
-  const [busy, setBusy] = useState(false);
   const scope = `${status?.accountScope ?? status?.accountLabel ?? ""}:${status?.revision ?? ""}`;
-  const key = `${scope}:${hours}:${days}`;
-  const epoch = useRef(0);
-  useEffect(() => {
-    if (!active) return;
-    const current = ++epoch.current;
-    let alive = true, timer: ReturnType<typeof setTimeout>;
-    const load = async () => {
-      setBusy(true);
-      try {
-        const [overview, history, usage] = await Promise.all([
-          request<TaskOverview>("tasks.overview", { hours: Number(hours) }),
-          request<TaskHistory>("tasks.history", { limit: 80 }),
-          tab === "usage" ? request<UsageReport>("tasks.usage", { days: Number(days) }) : Promise.resolve(undefined),
-        ]);
-        if (alive && current === epoch.current) {
-          setSnapshot(before => ({ key, overview, history, usage: usage ?? (before?.key === key ? before.usage : undefined) })); setError("");
-        }
-      } catch (e) { if (alive && current === epoch.current) setError(errorMessage(e)); }
-      finally {
-        if (alive && current === epoch.current) { setBusy(false); timer = setTimeout(() => void load(), 10000); }
-      }
-    };
-    void load();
-    return () => { alive = false; clearTimeout(timer); ++epoch.current; };
-  }, [active, key, hours, days, tab, version]);
-  const data = snapshot?.key === key ? snapshot : undefined;
-  const sessions = useMemo(() => [...new Map((data?.overview.rows ?? []).filter(row => row.session).map(row => [row.session, row.name])).entries()], [data]);
+  const plans = useTaskRead<TaskOverview>(active && tab === "plans", scope, version, "tasks.overview", "hours", Number(hours));
+  const records = useTaskRead<TaskHistory>(active && tab !== "usage", scope, version, "tasks.history", "limit", 80);
+  const usage = useTaskRead<UsageReport>(active && tab === "usage", scope, version, "tasks.usage", "days", Number(days));
+  const current = tab === "usage" ? usage : tab === "history" ? records : plans;
+  const currentName = tab === "usage" ? "用量统计" : tab === "history" ? "执行记录" : "计划总览";
+  const busy = current.pending || (tab === "plans" && records.pending);
+  const sourceRows = tab === "history" ? records.data?.rows : plans.data?.rows;
+  const sessions = useMemo(() => {
+    const names = new Map<string, string>();
+    for (const row of sourceRows ?? []) if (row.session) names.set(row.session, row.name);
+    return [...names];
+  }, [sourceRows]);
   const selectedSession = sessions.some(([id]) => id === session) ? session : "all";
-  const rows = (data?.overview.rows ?? []).filter(row => (kind === "all" || row.kind === kind) && (selectedSession === "all" || row.session === selectedSession));
+  const rows = (plans.data?.rows ?? []).filter(row => (kind === "all" || row.kind === kind) && (selectedSession === "all" || row.session === selectedSession));
   const groups = new Map<string, PlannedTask[]>();
   for (const row of rows) {
     const group = row.conditional ? "条件触发" : validStamp(row.at) ? dayLabel.format(row.at! * 1000) : "尚未安排";
     groups.set(group, [...(groups.get(group) ?? []), row]);
   }
-  const history = (data?.history.rows ?? []).filter(row => (kind === "all" || row.kind === kind) && (selectedSession === "all" || row.session === selectedSession));
+  const history = (records.data?.rows ?? []).filter(row => (kind === "all" || row.kind === kind) && (selectedSession === "all" || row.session === selectedSession));
   const refreshing = () => setVersion(v => v + 1);
   const tabControls = <div className="segments tasks-tabs" role="group" aria-label="任务中心页面">
     {[["plans", "计划总览", CalendarClock], ["history", "执行记录", History], ["usage", "用量统计", BarChart3]].map(([value, label, Icon]) => {
@@ -83,20 +93,21 @@ export function TasksPage({ active, status, notify, navigate, edit }: {
   return <div className="tasks-page">
     <div className="glass tasks-toolbar">{tabControls}<div className="tasks-toolbar-end">
       {tab === "usage" ? <Select label="统计范围" value={days} options={[{ value: "1", label: "今天" }, { value: "7", label: "最近7天" }, { value: "30", label: "最近30天" }]} onChange={setDays} />
-        : <Select label="计划范围" value={hours} options={[24, 48, 72].map(h => ({ value: String(h), label: `未来${h}小时` }))} onChange={setHours} />}
+        : tab === "plans" && <Select label="计划范围" value={hours} options={[24, 48, 72].map(h => ({ value: String(h), label: `未来${h}小时` }))} onChange={setHours} />}
       <IconButton label="刷新任务中心" icon={<RefreshCw size={21} />} busy={busy} onClick={refreshing} />
     </div></div>
-    {error && <div className="inline-error tasks-error" role="status"><span>{error}</span><Button onClick={refreshing}>重试</Button></div>}
-    <div className="tasks-usage-host" hidden={tab !== "usage"}><UsagePanel key={scope} active={active && tab === "usage"} report={data?.usage} readOnly={status?.readOnly !== false} notify={notify} refresh={refreshing} /></div>
+    {current.error && <div className="inline-error tasks-error" role="status"><span>{currentName}读取失败。{current.error}</span>
+      <Button disabled={current.pending} onClick={refreshing}>重试</Button></div>}
+    <div className="tasks-usage-host" hidden={tab !== "usage"}><UsagePanel key={scope} report={usage.data} failed={!!usage.error} readOnly={status?.readOnly !== false} notify={notify} refresh={refreshing} /></div>
     <div className={`tasks-columns ${tab === "history" ? "history-mode" : ""}`} hidden={tab === "usage"}>
         <section className="glass panel tasks-agenda">
-          <PanelTitle icon={tab === "plans" ? <CalendarClock size={23} /> : <History size={23} />} end={<span className="tag">共 {tab === "plans" ? rows.length : history.length} 项</span>}>
+          <PanelTitle icon={tab === "plans" ? <CalendarClock size={23} /> : <History size={23} />} end={current.data && <span className="tag">共 {tab === "plans" ? rows.length : history.length} 项</span>}>
             {tab === "plans" ? "未来计划" : "执行记录"}</PanelTitle>
           <div className="tasks-filters"><Select label="任务类型" value={kind} onChange={setKind} options={[{ value: "all", label: "全部类型" }, ...Object.entries(kinds).map(([value, label]) => ({ value, label }))]} />
             <Select label="任务会话" value={selectedSession} onChange={setSession} options={[{ value: "all", label: "全部会话" }, ...sessions.map(([value, label]) => ({ value, label }))]} /></div>
-          {tab === "plans" && data && !data.overview.connected && <p className="tasks-caption" role="status">{data.overview.reason || "后台尚未连接"}；当前仅显示已保存计划。</p>}
-          <div className="tasks-agenda-scroll" aria-busy={busy && !data}>
-            {!data ? <Empty title={busy ? "正在读取任务" : "任务信息暂不可用"} detail={error || "启动后台后可查看实际执行状态"} />
+          {tab === "plans" && plans.data && !plans.data.connected && <p className="tasks-caption" role="status">{plans.data.reason || "后台尚未连接"}；当前仅显示已保存计划。</p>}
+          <div className="tasks-agenda-scroll" aria-busy={current.pending && !current.data}>
+            {!current.data ? <Empty title={current.error ? `${currentName}暂不可用` : `正在读取${currentName}`} />
               : tab === "plans" ? rows.length ? [...groups].map(([day, entries]) => <section className="tasks-day" key={day}>
                 <h3><i />{day}<small>{entries.length} 项</small></h3>
                 {entries.map(row => <div className="tasks-agenda-row" key={row.id}>
@@ -111,11 +122,13 @@ export function TasksPage({ active, status, notify, navigate, edit }: {
               </section>) : <Empty icon={<CalendarClock size={32} />} title="这个范围没有计划" detail="可在每日资讯或记忆与陪伴中安排任务" />
                 : history.length ? history.map(row => <HistoryRow key={row.id} row={row} edit={edit} />) : <Empty title="还没有执行记录" detail="真实任务执行后会在这里显示结果" />}
           </div>
-          <p className="tasks-caption"><Info size={15} />计划按北京时间显示，实际执行需满足当时的发送条件。{data?.overview.truncated ? "计划较多，当前展示已达到上限。" : "主动聊天仅为条件评估窗口。"}</p>
+          {tab === "plans" && <p className="tasks-caption"><Info size={15} />计划按北京时间显示，实际执行需满足当时的发送条件。{plans.data?.truncated ? "计划较多，当前展示已达到上限。" : "主动聊天仅为条件评估窗口。"}</p>}
         </section>
         <aside className="glass panel tasks-activity"><PanelTitle icon={<Activity size={23} />}>执行动态</PanelTitle>
-          <div className="tasks-activity-scroll">{(data?.history.rows ?? []).slice(0, 6).map(row => <HistoryRow key={row.id} row={row} edit={edit} compact />)}
-            {!!data && !data.history.rows.length && <Empty title="暂时没有执行动态" detail="推送与定时关怀的结果会在这里汇总" />}</div>
+          <div className="tasks-activity-scroll">{(records.data?.rows ?? []).slice(0, 6).map(row => <HistoryRow key={row.id} row={row} edit={edit} compact />)}
+            {records.data && !records.data.rows.length && <Empty title="暂时没有执行动态" detail="推送与定时关怀的结果会在这里汇总" />}
+            {tab === "plans" && records.error && <p className="tasks-caption" role="status">执行动态读取失败。{records.error}</p>}
+            {!records.data && !records.error && <Empty title="正在读取执行动态" />}</div>
           <div className="tasks-hint"><Clock3 size={36} /><div><b>安排一目了然</b><p>点击编辑可回到原页面调整。暂停和只观察状态会继续遵守。</p>
             <Button variant="ghost" onClick={() => navigate("settings")}>查看运行设置</Button></div></div>
         </aside>
@@ -132,7 +145,7 @@ function HistoryRow({ row, edit, compact = false }: { row: TaskRecord; edit: (va
   </div>;
 }
 
-function UsagePanel({ active, report, readOnly, notify, refresh }: { active: boolean; report?: UsageReport; readOnly: boolean;
+function UsagePanel({ report, failed, readOnly, notify, refresh }: { report?: UsageReport; failed: boolean; readOnly: boolean;
   notify: (message: string, error?: boolean) => void; refresh: () => void }) {
   const [base, setBase] = useState<UsagePrices>();
   const [input, setInput] = useState("");
@@ -154,7 +167,7 @@ function UsagePanel({ active, report, readOnly, notify, refresh }: { active: boo
     try { await request("tasks.savePrices", { prices, expected: base.revision }); dirtyRef.current = false; setBase(undefined); notify("估算单价已保存"); refresh(); }
     catch (e) { notify(errorMessage(e), true); } finally { setSaving(false); }
   };
-  if (!report) return <section className="glass panel tasks-usage"><Empty title="正在读取真实用量" detail="没有历史统计时会显示为空，从本版开始累计" /></section>;
+  if (!report) return <section className="glass panel tasks-usage"><Empty title={failed ? "用量统计暂不可用" : "正在读取用量统计"} /></section>;
   const totals = report.totals;
   return <div className="tasks-usage-grid">
     <section className="glass panel tasks-usage"><PanelTitle icon={<BarChart3 size={23} />}>用量概览</PanelTitle>

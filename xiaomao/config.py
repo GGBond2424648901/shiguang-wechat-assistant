@@ -11,6 +11,7 @@ import time
 from contextlib import contextmanager
 from urllib.parse import urlsplit
 from .privacy import atomic_private_write, private_dir
+from .voice_policy import VoicePreferences
 
 TARGET_GROUP = "示例会话"
 
@@ -101,10 +102,13 @@ class Calibration:
             raise ValueError("校准窗口无效")
         if not self.header_label:
             raise ValueError("校准缺少群标题")
-        for name in ("header", "messages", "input", "send"):
+        names = ("header", "messages", "input", "send")
+        if "voice" in self.regions:
+            names = (*names, "voice")
+        for name in names:
             values = self.regions.get(name, [])
             if len(values) != 4:
-                raise ValueError("需要完整的四个校准区域")
+                raise ValueError('语音按钮校准区域无效' if name == 'voice' else '需要完整的四个校准区域')
             x1, y1, x2, y2 = values
             if not (0 <= x1 < x2 <= 1 and 0 <= y1 < y2 <= 1):
                 raise ValueError("校准区域必须位于窗口内")
@@ -391,6 +395,14 @@ class Settings:
             return False
         rules = self.conversation_rules.get(self.conversation_scope(name), {})
         return rules.get('web_search', True)
+
+    def voice_preferences(self, name: str) -> VoicePreferences:
+        if name not in self.saved_groups or name not in self.conversation_targets:
+            return VoicePreferences()
+        rules = self.conversation_rules.get(self.conversation_scope(name), {})
+        return VoicePreferences(enabled=rules.get('voice_enabled', False),
+                                frequency=rules.get('voice_frequency', 0),
+                                role_id=rules.get('voice_role_id'))
 
     def with_conversation_rules(self,name,changes,*,expected=None):
         from .reply_preferences import validate_rule_changes

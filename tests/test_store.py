@@ -67,3 +67,26 @@ def test_receipt_is_persistent_group_bound_and_rejects_old_matching_message(tmp_
     assert store.get(task)['state']=='verified'
     store.close()
     assert all('唯一的回复'.encode() not in p.read_bytes() for p in tmp_path.iterdir() if p.is_file())
+
+
+def test_voice_receipt_requires_new_server_id_and_recorded_duration(tmp_path):
+    from xiaomao.domain import Message
+    from xiaomao.store import StateStore
+
+    store = StateStore(tmp_path)
+    try:
+        task = store.create('voice-request', 100)
+        store.mark_sending(task, 100, group='会话', reply='需要读出的内容',
+                           baseline_ids=['peer/s/1', 'peer/message_0.db/7'], voice_ms=5600)
+        def voice(identity, duration, direction='out', local_id=''):
+            return Message('[语音]', kind='voice', direction=direction, voice_ms=duration,
+                           message_id=identity, created_at=101, voice_local_id=local_id)
+        assert not store.confirm_receipt(task, '会话', voice('peer/s/1', 5600))
+        assert not store.confirm_receipt(task, '会话', voice('peer/message_0.db/2', 5600))
+        assert not store.confirm_receipt(task, '会话', voice('peer/s/2', 1200))
+        assert not store.confirm_receipt(task, '会话', voice('peer/s/2', 5600, 'in'))
+        assert not store.confirm_receipt(task, '会话', voice('peer/s/3', 5600, local_id='peer/message_0.db/7'))
+        assert store.confirm_receipt(task, '会话', voice('peer/s/2', 5800))
+        assert store.get(task)['state'] == 'verified'
+    finally:
+        store.close()

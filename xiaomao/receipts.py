@@ -67,7 +67,7 @@ def _receipt_rows(path, digest, scope, peer, name, *, confirmations,salt):
     for record in messages:
         identity=record.get('message_id','')
         if (record.get('direction')!='out' or record.get('speaker_id')!='self'
-                or record.get('kind') not in ('text','emoji','image')
+                or record.get('kind') not in ('text','emoji','image','voice')
                 or not stable.fullmatch(identity)):
             continue
         at=record.get('created_at')

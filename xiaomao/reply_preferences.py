@@ -12,7 +12,7 @@ STICKER_FREQUENCIES = {
     'expressive': '爱用表情',
 }
 RULE_VALUES = {'reply_mode': REPLY_MODES, 'sticker_frequency': STICKER_FREQUENCIES}
-CONVERSATION_RULE_FIELDS = (*RULE_VALUES, 'web_search')
+CONVERSATION_RULE_FIELDS = (*RULE_VALUES, 'web_search', 'voice_enabled', 'voice_frequency', 'voice_role_id')
 DEFAULT_RULE_FIELDS = (*RULE_VALUES, 'web_search_enabled')
 
 STICKER_PACING = {'requested': (0, 0), 'occasional': (120, 3), 'natural': (60, 2), 'expressive': (20, 0)}
@@ -40,6 +40,15 @@ def validate_rule_changes(changes, *, allow_inherit=True, defaults=False):
         if key in RULE_VALUES:
             if not isinstance(value, str) or value not in RULE_VALUES[key]:
                 raise ValueError('回复方式或表情频率无效')
+        elif key == 'voice_enabled':
+            if type(value) is not bool:
+                raise ValueError('语音回复开关无效')
+        elif key == 'voice_frequency':
+            if type(value) is not int or not 0 <= value <= 100:
+                raise ValueError('自动语音频率须为 0–100 的整数')
+        elif key == 'voice_role_id':
+            if not isinstance(value, str) or not 0 < len(value) <= 240 or not value.isprintable() or value.strip() != value:
+                raise ValueError('本地音色标识无效')
         elif type(value) is not bool:
             raise ValueError('联网回复设置必须为布尔值')
     return dict(changes)

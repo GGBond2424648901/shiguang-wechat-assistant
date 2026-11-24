@@ -1,0 +1,10 @@
+.settings-voice { display: flex; flex-direction: column; min-height: 0; }
+.voice-setup { display: flex; flex-direction: column; gap: 16px; min-height: 0; }
+.voice-setup .panel-title, .voice-setup-actions { flex-wrap: wrap; }
+.voice-setup-form { gap: 15px; }
+.voice-device-fields { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 230px), 1fr)); gap: 12px; }
+.voice-driver-box { border-top: 1px solid var(--soft-line); padding-top: 12px; }
+.voice-driver-box p { margin: 0 0 9px; }
+.voice-driver-box a { color: var(--lavender); font-size: 13px; }
+.voice-download-progress { width: min(420px, 100%); accent-color: var(--lavender); }
+.voice-wechat-status, .voice-route-note { margin: 0; font-size: 13px; }

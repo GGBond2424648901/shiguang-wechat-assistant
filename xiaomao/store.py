@@ -2,6 +2,7 @@
 import hashlib
 import hmac
 from pathlib import Path
+import re
 import sqlite3
 import threading
 import uuid
@@ -41,6 +42,8 @@ class StateStore:
         columns={r[1] for r in self.db.execute('PRAGMA table_info(send_receipts)')}
         for name in ('sticker_md5','sticker_id','confirmed_digest'):
             if name not in columns:self.db.execute(f"ALTER TABLE send_receipts ADD COLUMN {name} TEXT NOT NULL DEFAULT ''")
+        if 'voice_ms' not in columns:
+            self.db.execute('ALTER TABLE send_receipts ADD COLUMN voice_ms INTEGER NOT NULL DEFAULT 0')
         # Keep only identity pairs after detailed receipts expire. Include uncertain
         # sends conservatively so an explicit novelty request cannot resend them.
         self.db.execute("INSERT OR IGNORE INTO sticker_history SELECT group_digest,sticker_id FROM send_receipts WHERE sticker_id!=''")
@@ -177,7 +180,7 @@ class StateStore:
                 return False,'minute_limit'
             return True,''
 
-    def mark_sending(self, task_id: str, now: float, message_keys=(),group='',reply='',baseline_ids=(),sticker_md5='',sticker_id='') -> None:
+    def mark_sending(self, task_id: str, now: float, message_keys=(),group='',reply='',baseline_ids=(),sticker_md5='',sticker_id='',voice_ms=0) -> None:
         with self.lock, self.db:
             for key in message_keys:
                 self.db.execute('INSERT OR IGNORE INTO latest_claims VALUES (?,?)',
@@ -185,10 +188,10 @@ class StateStore:
             self.db.execute("INSERT INTO attempts VALUES (?,?)", (task_id, now))
             self.db.execute("UPDATE tasks SET state='sending' WHERE id=?", (task_id,))
             if reply:
-                self.db.execute('INSERT OR REPLACE INTO send_receipts (task_id,group_digest,reply_digest,baseline,at,sticker_md5,sticker_id) VALUES(?,?,?,?,?,?,?)',
+                self.db.execute('INSERT OR REPLACE INTO send_receipts (task_id,group_digest,reply_digest,baseline,at,sticker_md5,sticker_id,voice_ms) VALUES(?,?,?,?,?,?,?,?)',
                     (task_id,self.fingerprint(group),self.fingerprint(normalized(reply)),
                      json.dumps([self.fingerprint(i) for i in baseline_ids if i]),now,
-                     self.fingerprint(sticker_md5) if sticker_md5 else '',sticker_id))
+                     self.fingerprint(sticker_md5) if sticker_md5 else '',sticker_id,voice_ms))
                 if sticker_id:
                     self.db.execute('INSERT OR IGNORE INTO sticker_history VALUES (?,?)',
                                     (self.fingerprint(group),sticker_id))
@@ -202,8 +205,16 @@ class StateStore:
                 from .stickers import media_md5
                 md5=media_md5(message.media_raw) if message.kind=='emoji' else ''
                 if not md5 or row['sticker_md5']!=self.fingerprint(md5):return False
+            elif row['voice_ms']:
+                if (message.kind!='voice' or not 0 < message.voice_ms <= 65_000
+                        or abs(message.voice_ms-row['voice_ms'])>1500
+                        or not re.search(r'/s/[1-9][0-9]*$',message.message_id)):
+                    return False
             elif message.kind!='text' or row['reply_digest']!=self.fingerprint(normalized(message.text)):return False
-            if self.fingerprint(message.message_id) in json.loads(row['baseline']):return False
+            baseline = set(json.loads(row['baseline']))
+            if (self.fingerprint(message.message_id) in baseline or (row['voice_ms'] and message.voice_local_id
+                    and self.fingerprint(message.voice_local_id) in baseline)):
+                return False
             if not -5<=message.created_at-row['at']<=120:return False
             cursor=self.db.execute("UPDATE tasks SET state='verified',reason='database_receipt' WHERE id=? AND state IN ('sending','unknown')",(task_id,))
             if cursor.rowcount != 1:return False

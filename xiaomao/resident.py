@@ -11,6 +11,7 @@ from .engine import Engine
 from .model import ChatModel
 from .policy import TriggerPolicy
 from .vision import Vision
+from .voice_runtime import VoiceRuntime
 from .windows import WindowsDesktop,NavigationActivity
 
 
@@ -31,6 +32,7 @@ class Resident:
         self._next_discovery=0
         self._discovering=False
         self.use_database=desktop_factory is None and settings.receive_mode=='database'
+        self.voice_runtime=VoiceRuntime(settings.root) if self.use_database else None
         from .account_detection import AccountDetector
         from .account_profiles import AccountProfiles
         from .account_switching import auto_bind_account
@@ -181,6 +183,7 @@ class Resident:
                       clock=self.clock,settle_seconds=self.settle_seconds,
                       message_source=self._source_for(settings,cfg),recovered_unknown=unknown)
         engine.window_turn=self._window_turn
+        engine.voice_runtime=self.voice_runtime
         return engine
 
     def _window_turn(self,engine,claim=False):
@@ -671,6 +674,40 @@ class Resident:
         for e in self.engines:
             if e.settings.group==group and e.settings.memory_scope==scope:return e
         raise ValueError('该会话身份或监听范围已改变，请重新选择')
+
+    def queue_voice_test(self, request_id):
+        import re
+        from .desktop_voice import read_voice_test_target
+        from .domain import ReplyTask
+
+        if not isinstance(request_id, str) or not re.fullmatch(r'[a-f0-9]{32}', request_id):
+            raise ValueError('语音测试请求无效')
+        target = read_voice_test_target(self.settings.root)
+        if not target or not self.voice_runtime:
+            raise ValueError('当前没有可用的固定语音测试会话')
+        with self.lock:
+            saved = Settings.load(self.settings.root)
+            matches = [name for name in saved.allowed_groups if name.casefold() == target.casefold()]
+            if len(matches) != 1:
+                raise ValueError('请将固定测试会话加入监听并校准')
+            name = matches[0]
+            scope = saved.conversation_scope(name)
+            engine = self._selected_engine(name, scope)
+            with engine.lock:
+                binding = engine.settings.binding
+                if (engine.mode != 'auto' or not binding or not binding.bottom_confirmed or not engine.message_source):
+                    raise ValueError('请先确认固定会话的微信绑定并开启自动发送')
+                if any(task.voice_medium == 'test' for task in engine.tasks):
+                    raise ValueError('固定会话已有语音测试在等待发送或回执')
+                clip = self.voice_runtime.prepare_test()
+                now = self.clock()
+                task_id = self.store.create_unique(self.store.fingerprint(f'local-voice-test:{scope}:{request_id}'), now)
+                if task_id is None:
+                    return {'queued': False, 'duplicate': True}
+                engine.tasks.append(ReplyTask(task_id, now, now, '', reply=clip.text, state='generated',
+                                              operator_plan=True, voice_medium='test', voice_clip=clip))
+                self.store.update(task_id, 'generated')
+                return {'queued': True, 'id': task_id}
 
     def queue_outbound(self,group,scope,text,sticker_ids,request_id):
         """Explicit local send plan, through the ordinary guarded delivery queue.

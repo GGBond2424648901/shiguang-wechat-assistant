@@ -27,20 +27,25 @@ def _account_key(cfg):
 
 
 class DesktopSessions:
-    def __init__(self, root, client):
+    def __init__(self, root, client, *, voice_send_ready=None):
         self.root = root
         self.client = client
+        self._voice_send_ready = voice_send_ready
         self._directory_lock = Lock()
         self._cache = None
 
     def read(self):
         cfg = Settings.load(self.root)
+        ready = {None: bool(self._voice_send_ready and self._voice_send_ready())}
         rows = []
         for name in (() if self.is_placeholder(cfg) else cfg.saved_groups):
             target = cfg.conversation_targets.get(name, {})
             identity = cfg.conversation_pause_key(name)
             binding = cfg.binding_for(name)
             rules = cfg.conversation_rules.get(cfg.conversation_scope(name), {})
+            role_id = rules.get('voice_role_id')
+            if role_id not in ready:
+                ready[role_id] = bool(self._voice_send_ready and self._voice_send_ready(role_id))
             rows.append({'id': identity, 'contactId': 'contact_' + identity[:32] if target else '',
                          'name': name, 'kind': target.get('kind', 'group'),
                          'bound': bool(target), 'paused': cfg.is_conversation_paused(name),
@@ -48,10 +53,14 @@ class DesktopSessions:
                          'windowKind': binding.window_kind if binding else None,
                          'windowSize': [binding.width, binding.height] if binding else None,
                          'replyMode': rules.get('reply_mode'), 'stickerFrequency': rules.get('sticker_frequency'),
-                         'webSearch': rules.get('web_search')})
+                         'webSearch': rules.get('web_search'), 'voiceEnabled': rules.get('voice_enabled'),
+                         'voiceFrequency': rules.get('voice_frequency'), 'voiceRoleId': role_id,
+                         'voiceSendReady': ready[role_id] and cfg.receive_mode == 'database'
+                                           and bool(binding and binding.bottom_confirmed)})
         return {'items': rows, 'monitorAll': cfg.monitor_all_groups, 'stickersEnabled': cfg.stickers_enabled,
                 'defaultReplyMode': cfg.reply_mode, 'defaultStickerFrequency': cfg.sticker_frequency,
                 'webSearchEnabled': cfg.web_search_enabled,
+                'voiceSendReady': ready[None],
                 'accountLabel': cfg.account_display_name,
                 'accountKey': _account_key(cfg), 'revision': config_revision(cfg)}
 
@@ -154,10 +163,12 @@ class DesktopSessions:
             raise ValueError('监听会话已变化，请重新选择')
         return self._apply(cfg, cfg.with_saved_conversations(names))
 
-    def rules(self, expected, session, replyMode, stickerFrequency, before=None, *, webSearch=_UNSET):
+    def rules(self, expected, session, replyMode, stickerFrequency, before=None, *, webSearch=_UNSET,
+              voiceEnabled=_UNSET, voiceFrequency=_UNSET, voiceRoleId=_UNSET):
         values = {'reply_mode': replyMode, 'sticker_frequency': stickerFrequency}
-        if webSearch is not _UNSET:
-            values['web_search'] = webSearch
+        optional = {'web_search': webSearch, 'voice_enabled': voiceEnabled,
+                    'voice_frequency': voiceFrequency, 'voice_role_id': voiceRoleId}
+        values.update({key: value for key, value in optional.items() if value is not _UNSET})
         validate_rule_changes(values)
         cfg = self._current(expected) if before is None else Settings.load(self.root)
         name = next((name for name in cfg.saved_groups if cfg.conversation_pause_key(name) == session), None)

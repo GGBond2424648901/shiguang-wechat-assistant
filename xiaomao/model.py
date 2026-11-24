@@ -315,6 +315,11 @@ def _decision_json(raw):
 
 _PLAIN_TEXT = object()
 _SILENCE_MARKER = re.compile(r'[\[【]\s*NO[_ -]?REPLY\s*[\]】]',re.I)
+_VOICE_CHANNEL_DENIAL = re.compile(
+    r'(?:我(?:这[边里儿])?|这[边里儿]|本会话|目前)[^。！？\n]{0,12}'
+    r'(?:只能打字|只能(?:发|用)文字|只有文字(?:这条)?通道|没有语音(?:通道|功能)|不支持发(?:送)?语音)'
+    r'|语音(?:条|消息)?(?:我(?:这[边里儿])?)?(?:发不了|发不出[来去]?)'
+)
 _INTRO_ONLY = re.compile(r'(?:请问\s*)?(?:你(?:到底)?是?谁|你叫什么(?:名字)?|请?介绍一下你自己)[呀啊呢嘛吗哇\s？！?!。]*')
 
 
@@ -775,7 +780,8 @@ class ChatModel:
                 task.web_search = search
             search = task.web_search
         kwargs=dict(profile=profile,participation=participation,stickers=stickers,sticker_state=sticker_state,
-                    request=request, search=search, is_current=is_current)
+                    request=request, search=search, is_current=is_current,
+                    spoken_reply=task is not None and task.voice_request=='voice')
         try:
             return self._respond_once(messages,**kwargs)
         except ModelError as error:
@@ -785,7 +791,8 @@ class ChatModel:
         return self._respond_once(messages,**kwargs,repair_format=True)
 
     def _respond_once(self, messages: list[Message], *, profile='', participation=False,stickers=None,
-                      sticker_state='available',request=None,repair_format=False,search=None,is_current=None):
+                      sticker_state='available',request=None,repair_format=False,search=None,is_current=None,
+                      spoken_reply=False):
         if not self.settings.model_name:
             raise ModelError("尚未选择模型")
         latest = messages[-1] if messages else None
@@ -995,6 +1002,12 @@ class ChatModel:
             index=len(conversation)-1 if turns and turns[-1]['role']=='user' else len(conversation)
             focused_voice = voice_focus(self.settings.root,messages)
             conversation.insert(index,{'role':'system','content':coordination_instruction(messages)+'\n'+focused_voice})
+        if spoken_reply:
+            index = len(conversation)-1 if turns and turns[-1]['role']=='user' else len(conversation)
+            conversation.insert(index, {'role':'system','content':
+                '宿主会把本轮生成的正文合成微信语音。直接回答对方，正文写要念出的原话。'
+                '仅指定语音而没有新话题时，按当前语境自然接话或说一句完整的问候。'
+                '无需解释发送能力、动作或格式，也不要声称已经发出。保持本轮规定的返回结构。'})
         if repair_format:
             index=len(conversation)-1 if turns and turns[-1]['role']=='user' else len(conversation)
             conversation.insert(index,{'role':'system','content':
@@ -1085,6 +1098,8 @@ class ChatModel:
                 raise ReplyFormatError('搭配表情前需要自然回应本轮文字')
             if optional_group_media and caption is None and envelope is _PLAIN_TEXT:return None
             body = reply if isinstance(reply,str) else getattr(reply,'text','')
+            if spoken_reply and _VOICE_CHANNEL_DENIAL.search(body):
+                raise ReplyFormatError('语音正文含与本轮发送方式不符的能力说明')
             if search is not None and search.evidence is not None and has_unverified_link(body, source_urls):
                 raise ReplyFormatError('联网回复包含未核实的来源链接')
             if missing_delivery and re.search(r'(?:我|肥鱼|小玲|上一条|刚才)(?:都|早就|已经|刚刚|刚才|明明|其实|就|也|有|给你|我){0,4}(?:回(?:复)?|答|发)(?:过|了|出去了)|(?:你没(?:看|瞧)见|你没看到)',body):
